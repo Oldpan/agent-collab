@@ -46,7 +46,11 @@ export type ErrorEvent = {
 export type HistoryCompleteEvent = {
     type: 'history.complete';
 };
-export type ServerEvent = ConversationStatusEvent | TurnBeginEvent | TurnEndEvent | ContentDeltaEvent | ThinkingDeltaEvent | ToolCallEvent | ToolResultEvent | ApprovalRequestEvent | ErrorEvent | HistoryCompleteEvent;
+export type HistoryUserMessageEvent = {
+    type: 'history.user_message';
+    text: string;
+};
+export type ServerEvent = ConversationStatusEvent | TurnBeginEvent | TurnEndEvent | ContentDeltaEvent | ThinkingDeltaEvent | ToolCallEvent | ToolResultEvent | ApprovalRequestEvent | ErrorEvent | HistoryCompleteEvent | HistoryUserMessageEvent;
 export type FileRef = {
     uri: string;
     mimeType?: string;

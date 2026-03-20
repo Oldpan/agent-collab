@@ -58,6 +58,12 @@ export type HistoryCompleteEvent = {
   type: 'history.complete';
 };
 
+// 历史回放：用户消息
+export type HistoryUserMessageEvent = {
+  type: 'history.user_message';
+  text: string;
+};
+
 export type ServerEvent =
   | ConversationStatusEvent
   | TurnBeginEvent
@@ -68,7 +74,8 @@ export type ServerEvent =
   | ToolResultEvent
   | ApprovalRequestEvent
   | ErrorEvent
-  | HistoryCompleteEvent;
+  | HistoryCompleteEvent
+  | HistoryUserMessageEvent;
 
 // ─── 客户端 → 服务端 事件 ───
 

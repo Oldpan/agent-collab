@@ -147,6 +147,16 @@ export function useConversationStream(
           break;
         }
 
+        case "history.user_message": {
+          // 历史回放：插入用户消息
+          const umId = createId();
+          setMessages((prev) => [
+            ...prev,
+            { id: umId, role: "user", text: (event as any).text ?? "", isStreaming: false },
+          ]);
+          break;
+        }
+
         case "history.complete": {
           // History replay done, ready for interaction
           break;

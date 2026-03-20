@@ -49,6 +49,10 @@ export class ConversationManager {
     this.toolAuth = new ToolAuth(this.db);
   }
 
+  getDb(): Db {
+    return this.db;
+  }
+
   start(): void {
     this.gcTimer = setInterval(() => {
       try {

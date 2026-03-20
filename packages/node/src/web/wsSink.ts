@@ -33,12 +33,23 @@ export class WsSink implements OutboundSink {
 
   async sendUi(event: UiEvent): Promise<void> {
     if (event.kind === 'tool') {
-      this.broadcast({
-        type: 'tool.call',
-        toolCallId: event.toolCallId ?? '',
-        name: event.title,
-        input: event.detail ?? null,
-      });
+      if (event.stage === 'complete') {
+        // 工具执行完成 → 发送 tool.result
+        this.broadcast({
+          type: 'tool.result',
+          toolCallId: event.toolCallId ?? '',
+          output: event.detail ?? event.status ?? 'done',
+          error: event.status === 'error',
+        });
+      } else {
+        // 工具开始或更新 → 发送 tool.call
+        this.broadcast({
+          type: 'tool.call',
+          toolCallId: event.toolCallId ?? '',
+          name: event.title,
+          input: event.detail ?? null,
+        });
+      }
     }
     // plan/task events → content delta for now
     if (event.kind === 'plan' || event.kind === 'task') {
