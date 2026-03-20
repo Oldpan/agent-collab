@@ -77,11 +77,15 @@ export class ConversationManager {
     agentType?: AgentType;
     workspacePath?: string;
     title?: string;
+    envVars?: Record<string, string>;
   }): ConversationInfo {
     const id = randomUUID();
     const agentType: AgentType = params.agentType ?? 'claude_acp';
     const workspacePath = params.workspacePath ?? this.config.workspaceRoot;
     const title = params.title ?? '';
+    const envVarsJson = params.envVars && Object.keys(params.envVars).length > 0
+      ? JSON.stringify(params.envVars)
+      : null;
     const now = Date.now();
 
     const sessionKey = randomUUID();
@@ -107,10 +111,10 @@ export class ConversationManager {
     // Create conversations row
     this.db
       .prepare(
-        `INSERT INTO conversations(id, title, agent_type, workspace_path, session_key, status, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, 'idle', ?, ?)`,
+        `INSERT INTO conversations(id, title, agent_type, workspace_path, session_key, status, env_vars, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, 'idle', ?, ?, ?)`,
       )
-      .run(id, title, agentType, workspacePath, sessionKey, now, now);
+      .run(id, title, agentType, workspacePath, sessionKey, envVarsJson, now, now);
 
     return { id, title, agentType, workspacePath, status: 'idle', createdAt: now, updatedAt: now };
   }
@@ -161,8 +165,8 @@ export class ConversationManager {
 
   private getOrCreateRuntime(conversationId: string): BindingRuntime {
     const row = this.db
-      .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
-      .get(conversationId) as { sessionKey: string } | undefined;
+      .prepare('SELECT session_key as sessionKey, env_vars as envVarsJson FROM conversations WHERE id = ?')
+      .get(conversationId) as { sessionKey: string; envVarsJson: string | null } | undefined;
 
     if (!row) throw new Error(`Unknown conversation: ${conversationId}`);
 
@@ -179,6 +183,7 @@ export class ConversationManager {
     if (!sess) throw new Error(`Missing session row: ${sessionKey}`);
 
     const agentArgs = parseAgentArgs(sess.agentArgsJson, this.config.acpAgentArgs);
+    const envVars = parseEnvVars(row.envVarsJson);
 
     const rt = new BindingRuntime({
       db: this.db,
@@ -189,6 +194,7 @@ export class ConversationManager {
       workspaceRoot: sess.cwd,
       agentCommand: sess.agentCommand,
       agentArgs,
+      env: envVars,
     });
 
     this.runtimesBySessionKey.set(sessionKey, {
@@ -328,6 +334,19 @@ function parseAgentArgs(raw: string, fallback: string[]): string[] {
     // ignore
   }
   return [...fallback];
+}
+
+function parseEnvVars(raw: string | null): Record<string, string> | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      return parsed as Record<string, string>;
+    }
+  } catch {
+    // ignore
+  }
+  return undefined;
 }
 
 function isAcpTransportError(error: unknown): boolean {

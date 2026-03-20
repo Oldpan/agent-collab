@@ -7,7 +7,7 @@ import {
   ResizablePanel,
   ResizableHandle,
 } from "@/components/ui/resizable";
-import type { AgentType } from "@agent-collab/wire-types";
+import type { CreateConversationRequest } from "@agent-collab/wire-types";
 
 export function App() {
   const {
@@ -25,8 +25,8 @@ export function App() {
   );
 
   const handleCreate = useCallback(
-    (agentType: AgentType) => {
-      createConversation({ agentType });
+    (req: CreateConversationRequest) => {
+      createConversation(req);
     },
     [createConversation],
   );

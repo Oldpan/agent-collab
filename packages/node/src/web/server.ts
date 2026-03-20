@@ -35,6 +35,7 @@ export async function startServer(params: {
       agentType: body.agentType,
       workspacePath: body.workspacePath,
       title: body.title,
+      envVars: body.envVars,
     });
     reply.code(201);
     return conv;

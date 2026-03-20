@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 6;
+const LATEST_VERSION = 7;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -174,6 +174,7 @@ export function migrate(db: Db): void {
         workspace_path TEXT,
         session_key TEXT REFERENCES sessions(session_key),
         status TEXT NOT NULL DEFAULT 'idle',
+        env_vars TEXT,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
       );
@@ -183,5 +184,15 @@ export function migrate(db: Db): void {
       UPDATE schema_version SET version = 6;
       `,
     );
+  }
+
+  if (current < 7) {
+    // env_vars 列已在 v6 建表中包含（新DB），仅对旧DB做 ALTER
+    const cols = db.prepare("PRAGMA table_info('conversations')").all() as Array<{ name: string }>;
+    const hasEnvVars = cols.some((c) => c.name === 'env_vars');
+    if (!hasEnvVars) {
+      db.exec(`ALTER TABLE conversations ADD COLUMN env_vars TEXT;`);
+    }
+    db.exec(`UPDATE schema_version SET version = 7;`);
   }
 }

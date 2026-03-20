@@ -7,24 +7,16 @@ import { defaultRehypePlugins, defaultRemarkPlugins } from "streamdown";
 import { CodeBlock } from "./code-block";
 
 // Safe rehype plugins (no raw HTML rendering)
+// 只使用当前 streamdown 版本实际导出的插件
 export const safeRehypePlugins: StreamdownProps["rehypePlugins"] = [
-  defaultRehypePlugins.katex,
-];
+  defaultRehypePlugins.sanitize,
+].filter(Boolean);
 
-// Remark plugins with GFM + math support
-const mathPlugin = defaultRemarkPlugins.math;
-const remarkMathWithInline = (
-  Array.isArray(mathPlugin)
-    ? [mathPlugin[0], { ...mathPlugin[1], singleDollarTextMath: true }]
-    : [mathPlugin, { singleDollarTextMath: true }]
-) as typeof mathPlugin;
-
+// Remark plugins — 只使用已有的 gfm 和 codeMeta
 export const safeRemarkPlugins: StreamdownProps["remarkPlugins"] = [
   defaultRemarkPlugins.gfm,
-  remarkMathWithInline,
-  defaultRemarkPlugins.cjkFriendly,
-  defaultRemarkPlugins.cjkFriendlyGfmStrikethrough,
-];
+  defaultRemarkPlugins.codeMeta,
+].filter(Boolean);
 
 /** Escape HTML-like tags outside code blocks to prevent XSS */
 export const escapeHtmlOutsideCodeBlocks = (text: string): string => {

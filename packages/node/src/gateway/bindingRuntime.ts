@@ -40,6 +40,7 @@ export class BindingRuntime {
   private readonly workspaceRoot: string;
   private readonly agentCommand: string;
   private readonly agentArgs: string[];
+  private readonly env?: Record<string, string>;
 
   constructor(params: {
     db: Db;
@@ -50,6 +51,7 @@ export class BindingRuntime {
     workspaceRoot: string;
     agentCommand?: string;
     agentArgs?: string[];
+    env?: Record<string, string>;
     acpRpc?: import('../acp/stdio.js').StdioProcess;
   }) {
     this.db = params.db;
@@ -60,6 +62,7 @@ export class BindingRuntime {
     this.workspaceRoot = params.workspaceRoot;
     this.agentCommand = params.agentCommand ?? this.config.acpAgentCommand;
     this.agentArgs = params.agentArgs ?? this.config.acpAgentArgs;
+    this.env = params.env;
 
     this.client = new AcpClient({
       db: this.db,
@@ -68,6 +71,7 @@ export class BindingRuntime {
       agentArgs: this.agentArgs,
       toolAuth: this.toolAuth,
       rpc: params.acpRpc,
+      env: this.env,
       events: {
         onSessionUpdate: (run, _sessionId, update, eventSeq) => {
           if (run.runId === this.currentRunId) {

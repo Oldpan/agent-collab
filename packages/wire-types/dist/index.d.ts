@@ -79,4 +79,5 @@ export type CreateConversationRequest = {
     agentType?: AgentType;
     workspacePath?: string;
     title?: string;
+    envVars?: Record<string, string>;
 };

@@ -118,6 +118,7 @@ export class AcpClient {
     toolAuth?: ToolAuth;
     events?: AcpClientEvents;
     rpc?: StdioProcess;
+    env?: Record<string, string>;
   }) {
     this.db = params.db;
     this.workspaceRoot = params.workspaceRoot;
@@ -127,7 +128,7 @@ export class AcpClient {
     this.events = params.events ?? {};
 
     this.rpc =
-      params.rpc ?? spawnAcpAgent(this.agentCommand, this.agentArgs);
+      params.rpc ?? spawnAcpAgent(this.agentCommand, this.agentArgs, params.env);
     this.rpc.onMessage((m) => this.handleMessage(m));
     this.rpc.onStderr((line) => this.events.onAgentStderr?.(line));
     this.rpc.onExit?.((info) => {
