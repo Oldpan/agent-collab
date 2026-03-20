@@ -1,0 +1,16 @@
+{
+  "name": "agent-collab",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Multi-agent collaboration platform with Web UI",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "dev": "pnpm -r --parallel run dev",
+    "dev:node": "pnpm --filter @agent-collab/node run dev",
+    "dev:web": "pnpm --filter @agent-collab/web run dev",
+    "build": "pnpm -r run build",
+    "lint": "pnpm -r run lint"
+  }
+}

@@ -1,0 +1,28 @@
+/** A message in the live chat stream */
+export type LiveMessage = {
+  id: string;
+  role: "user" | "assistant";
+  text: string;
+  thinking?: string;
+  toolCalls?: LiveToolCall[];
+  isStreaming: boolean;
+};
+
+/** A tool call within an assistant message */
+export type LiveToolCall = {
+  id: string;
+  name: string;
+  input: unknown;
+  output?: string;
+  error?: boolean;
+};
+
+/** Pending approval request from the server */
+export type PendingApproval = {
+  requestId: string;
+  toolName: string;
+  toolArgs: unknown;
+};
+
+/** Chat status state machine */
+export type ChatStatus = "idle" | "submitted" | "streaming" | "error";
