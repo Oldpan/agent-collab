@@ -63,7 +63,7 @@ agent-collab/
 | 前端 | React 19, Vite, TypeScript, Tailwind CSS 4, Zustand, Radix UI |
 | Agent 通信 | ACP (Agent Client Protocol) — JSON-RPC 2.0 over subprocess stdio |
 | Markdown 渲染 | streamdown 2.5 + shiki 代码高亮 |
-| 测试 | Vitest (32 个单元/集成测试) |
+| 测试 | Vitest (38 个单元/集成测试) |
 
 ---
 
@@ -91,7 +91,7 @@ pnpm dev:core   # 后端，默认端口 3100
 pnpm dev:web    # 前端 Vite dev server，默认端口 5173（自动代理 /api → 3100）
 ```
 
-首次启动 core 时，若 `~/.cli-gateway/config.json` 不存在，会进入交互式配置向导。
+首次启动 core 时，若 `~/.agent-collab/config.json` 不存在，会进入交互式配置向导。
 
 ### 构建
 
@@ -153,9 +153,12 @@ pnpm --filter @agent-collab/agent-node run dev
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/api/conversations` | 获取所有会话列表 |
-| `POST` | `/api/conversations` | 创建会话 (`{ agentType?, workspacePath?, title?, envVars? }`) |
+| `POST` | `/api/conversations` | 创建会话 (`{ agentType?, workspacePath?, title?, channelId?, envVars? }`) |
 | `DELETE` | `/api/conversations/:id` | 删除会话 |
 | `GET` | `/api/conversations/:id/history` | 获取会话历史（runs 列表） |
+| `GET` | `/api/channels` | 获取所有 channel 列表 |
+| `POST` | `/api/channels` | 创建 channel (`{ name, workspacePath? }`) |
+| `GET` | `/api/channels/:id/conversations` | 获取指定 channel 下的会话列表 |
 | `GET` | `/api/nodes` | 获取已连接的远端节点列表 |
 
 ### WebSocket — 前端 ↔ core
@@ -211,15 +214,16 @@ pnpm --filter @agent-collab/agent-node run dev
 
 ## 数据库
 
-SQLite，migrations 版本 **v8**。主要表：
+SQLite，migrations 版本 **v9**。主要表：
 
 | 表 | 说明 |
 |----|------|
 | `sessions` | ACP session 状态 |
-| `bindings` | platform + chatId 到 session 的映射 |
+| `bindings` | platform + chatId 到 session 的映射（key 格式：`web:{channelId}:{convId}:{agentType}`） |
 | `runs` | 每次 prompt 执行记录 |
 | `events` | ACP session/update 原始事件 |
-| `conversations` | Web 会话（含 env_vars） |
+| `channels` | 频道/工作空间（含默认 `default` 频道） |
+| `conversations` | 会话/线程（含 `channel_id`、`env_vars`） |
 | `tool_policies` | 工具授权策略 |
 | `nodes` | 已注册的远端节点记录 |
 
@@ -248,14 +252,28 @@ SQLite，migrations 版本 **v8**。主要表：
 - [x] `apps/agent-node`：新包，含 `CoreConnection`、`Executor`、`NodeSink`
 - [x] 节点事件（`run.event`/`run.end`/`permission.request`）实时转发到前端 WS
 
-### Phase 3 — 远端调度集成（待开发）
+### Phase 3 prep — Channel / Thread 多维路由（已完成，commit `0a227a4`）
 
+- [x] `packages/protocol`：新增 `ChannelInfo`、`CreateChannelRequest`，`ConversationInfo` 增加 `channelId` 字段
+- [x] `packages/runtime-acp`：migration v9（`channels` 表 + 默认 `default` 频道、`conversations.channel_id`、旧 binding key 回填）
+- [x] `apps/core`：`ConversationManager` 新增 `createChannel` / `listChannels` / `getChannel`，`listConversations(channelId?)` 支持过滤
+- [x] `apps/core`：binding key 升级为 `web:{channelId}:{conversationId}:{agentType}`，支持多 channel 多 agentType 隔离
+- [x] `apps/core`：新增 channel REST 路由（`GET/POST /api/channels`、`GET /api/channels/:id/conversations`）
+- [x] `apps/web`：Vite `allowedHosts: true`，支持 cpolar 等反向代理隧道
+- [x] 配置目录统一为 `~/.agent-collab`（旧 `~/.cli-gateway` 兼容读取）
+- [x] 测试覆盖：channel CRUD + migration v9，38 个测试全部通过
+
+> 前端 Channel / Thread UI 暂时写死为 `default` channel，待 Phase 4 前端部分完善。
+
+### Phase 4 — 前端多 Channel UI + 远端调度集成（待开发）
+
+- [ ] 前端 Channel / Thread 侧边栏 UI（创建频道、切换频道、thread 列表）
 - [ ] `RuntimeAdapter` 抽象（`LocalRuntimeAdapter` / `RemoteNodeAdapter`）
 - [ ] `ConversationManager` 按 agentType 选择本地或远端节点执行
 - [ ] 前端节点选择 UI（创建会话时选择目标节点）
 - [ ] `permission.response` 路由到对应节点的等待中的 BindingRuntime
 
-### Phase 4 — 生产就绪（待开发）
+### Phase 5 — 生产就绪（待开发）
 
 - [ ] 取消执行（cancel）支持
 - [ ] 节点断线重连 + 任务恢复
