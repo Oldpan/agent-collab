@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 7;
+const LATEST_VERSION = 8;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -194,5 +194,23 @@ export function migrate(db: Db): void {
       db.exec(`ALTER TABLE conversations ADD COLUMN env_vars TEXT;`);
     }
     db.exec(`UPDATE schema_version SET version = 7;`);
+  }
+
+  if (current < 8) {
+    db.exec(
+      `
+      CREATE TABLE IF NOT EXISTS nodes (
+        node_id TEXT PRIMARY KEY,
+        hostname TEXT NOT NULL,
+        agent_types_json TEXT NOT NULL,
+        version TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'online',
+        last_seen INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+
+      UPDATE schema_version SET version = 8;
+      `,
+    );
   }
 }

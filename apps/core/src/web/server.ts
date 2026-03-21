@@ -6,15 +6,19 @@ import type { Db } from '@agent-collab/runtime-acp';
 import { log } from '@agent-collab/runtime-acp';
 import type { CreateConversationRequest } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
-import { handleWebSocket } from './wsHandler.js';
+import { handleWebSocket, broadcast } from './wsHandler.js';
+import { handleNodeWebSocket } from './nodeWsHandler.js';
+import { NodeRegistry } from '../services/nodeRegistry.js';
 
 export async function startServer(params: {
   port: number;
   host: string;
   conversationManager: ConversationManager;
   db: Db;
+  nodeRegistry?: NodeRegistry;
 }): Promise<void> {
   const { port, host, conversationManager, db } = params;
+  const nodeRegistry = params.nodeRegistry ?? new NodeRegistry();
 
   const app = Fastify({ logger: false });
 
@@ -86,14 +90,31 @@ export async function startServer(params: {
     return runs;
   });
 
-  // ─── WebSocket route ───
+  // ─── Node REST routes ───
 
+  // List connected agent nodes
+  app.get('/api/nodes', async () => {
+    return nodeRegistry.listNodes();
+  });
+
+  // ─── WebSocket routes ───
+
+  // Frontend WebSocket stream for a conversation
   app.get<{ Params: { id: string } }>(
     '/api/conversations/:id/stream',
     { websocket: true },
     (socket, req) => {
       const conversationId = req.params.id;
       handleWebSocket(socket, conversationId, conversationManager);
+    },
+  );
+
+  // Agent-node WebSocket connection
+  app.get(
+    '/api/nodes/connect',
+    { websocket: true },
+    (socket) => {
+      handleNodeWebSocket(socket, nodeRegistry, broadcast);
     },
   );
 

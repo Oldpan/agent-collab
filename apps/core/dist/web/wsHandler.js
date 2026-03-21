@@ -1,9 +1,9 @@
+import { log } from '@agent-collab/runtime-acp';
 import { WsSink } from './wsSink.js';
-import { log } from '../logging.js';
 // Active WebSocket connections per conversation
 const connectionsByConversation = new Map();
 /** Broadcast a ServerEvent to all connected clients for a conversation */
-function broadcast(conversationId, event) {
+export function broadcast(conversationId, event) {
     const sockets = connectionsByConversation.get(conversationId);
     if (!sockets)
         return;
@@ -42,6 +42,8 @@ export function handleWebSocket(socket, conversationId, manager) {
         status: conv.status,
     };
     socket.send(JSON.stringify(statusEvent));
+    // 回放历史消息
+    replayHistory(socket, conversationId, manager);
     // Signal history replay complete (client can now expect live events)
     const historyDone = { type: 'history.complete' };
     socket.send(JSON.stringify(historyDone));
@@ -68,6 +70,88 @@ export function handleWebSocket(socket, conversationId, manager) {
             connectionsByConversation.delete(conversationId);
         }
     });
+}
+/** 从 DB 读取历史 runs/events，回放为 ServerEvent 发送给客户端 */
+function replayHistory(socket, conversationId, manager) {
+    const db = manager.getDb();
+    const row = db
+        .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+        .get(conversationId);
+    if (!row)
+        return;
+    // 获取所有 runs，按时间正序
+    const runs = db
+        .prepare(`SELECT run_id as runId, prompt_text as promptText, stop_reason as stopReason
+       FROM runs WHERE session_key = ? ORDER BY started_at ASC`)
+        .all(row.sessionKey);
+    const send = (event) => {
+        if (socket.readyState === socket.OPEN) {
+            socket.send(JSON.stringify(event));
+        }
+    };
+    for (const run of runs) {
+        // 发送用户消息
+        send({ type: 'history.user_message', text: run.promptText });
+        // 发送 turn
+        const turnId = `replay-${run.runId}`;
+        send({ type: 'turn.begin', turnId });
+        // 读取该 run 的所有 session/update 事件
+        const events = db
+            .prepare(`SELECT payload_json as payloadJson FROM events
+         WHERE run_id = ? AND method = 'session/update'
+         ORDER BY seq ASC`)
+            .all(run.runId);
+        // 合并 agent text、提取 tool calls
+        let agentText = '';
+        const toolCalls = new Map();
+        for (const evt of events) {
+            try {
+                const payload = JSON.parse(evt.payloadJson);
+                const update = payload?.update;
+                if (!update)
+                    continue;
+                if (update.sessionUpdate === 'agent_message_chunk') {
+                    agentText += update.content?.text ?? '';
+                }
+                if (update.sessionUpdate === 'tool_call') {
+                    const toolCallId = extractToolCallIdFromUpdate(update) ?? '';
+                    const name = String(update.title ?? toolCallId ?? 'tool');
+                    toolCalls.set(toolCallId, { name });
+                }
+                if (update.sessionUpdate === 'tool_call_update') {
+                    const toolCallId = extractToolCallIdFromUpdate(update) ?? '';
+                    const existing = toolCalls.get(toolCallId);
+                    // 检查是否完成
+                    const status = `${update.status ?? update.state ?? update.outcome ?? ''}`.toLowerCase();
+                    if (status.includes('done') || status.includes('complete') || status.includes('success') || status.includes('error') || status.includes('fail')) {
+                        if (existing) {
+                            existing.output = update.output ?? status;
+                            existing.error = status.includes('error') || status.includes('fail');
+                        }
+                    }
+                }
+            }
+            catch {
+                // 跳过解析失败的事件
+            }
+        }
+        // 发送合并后的 content
+        if (agentText) {
+            send({ type: 'content.delta', text: agentText });
+        }
+        // 发送 tool calls
+        for (const [toolCallId, tc] of toolCalls) {
+            send({ type: 'tool.call', toolCallId, name: tc.name, input: null });
+            if (tc.output !== undefined) {
+                send({ type: 'tool.result', toolCallId, output: tc.output, error: tc.error });
+            }
+        }
+        send({ type: 'turn.end', turnId, stopReason: run.stopReason ?? 'end_turn' });
+    }
+}
+/** 从 update 中提取 toolCallId */
+function extractToolCallIdFromUpdate(update) {
+    return update?.toolCallId ?? update?.tool_call_id ?? update?.callId ?? update?.call_id ?? null;
 }
 async function handleClientEvent(conversationId, event, manager) {
     switch (event.type) {

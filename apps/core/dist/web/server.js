@@ -1,10 +1,13 @@
 import Fastify from 'fastify';
 import fastifyCors from '@fastify/cors';
 import fastifyWebSocket from '@fastify/websocket';
-import { log } from '../logging.js';
-import { handleWebSocket } from './wsHandler.js';
+import { log } from '@agent-collab/runtime-acp';
+import { handleWebSocket, broadcast } from './wsHandler.js';
+import { handleNodeWebSocket } from './nodeWsHandler.js';
+import { NodeRegistry } from '../services/nodeRegistry.js';
 export async function startServer(params) {
     const { port, host, conversationManager, db } = params;
+    const nodeRegistry = params.nodeRegistry ?? new NodeRegistry();
     const app = Fastify({ logger: false });
     await app.register(fastifyCors, { origin: true });
     await app.register(fastifyWebSocket);
@@ -20,6 +23,7 @@ export async function startServer(params) {
             agentType: body.agentType,
             workspacePath: body.workspacePath,
             title: body.title,
+            envVars: body.envVars,
         });
         reply.code(201);
         return conv;
@@ -55,10 +59,20 @@ export async function startServer(params) {
             .all(sessionRow.sessionKey);
         return runs;
     });
-    // ─── WebSocket route ───
+    // ─── Node REST routes ───
+    // List connected agent nodes
+    app.get('/api/nodes', async () => {
+        return nodeRegistry.listNodes();
+    });
+    // ─── WebSocket routes ───
+    // Frontend WebSocket stream for a conversation
     app.get('/api/conversations/:id/stream', { websocket: true }, (socket, req) => {
         const conversationId = req.params.id;
         handleWebSocket(socket, conversationId, conversationManager);
+    });
+    // Agent-node WebSocket connection
+    app.get('/api/nodes/connect', { websocket: true }, (socket) => {
+        handleNodeWebSocket(socket, nodeRegistry, broadcast);
     });
     await app.listen({ port, host });
     log.info(`Web server listening on ${host}:${port}`);

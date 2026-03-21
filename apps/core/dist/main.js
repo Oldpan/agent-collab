@@ -1,10 +1,6 @@
 import path from 'node:path';
-import { acquireProcessLock } from './runtime/lock.js';
-import { resolveGatewayHomeDir } from './config.js';
-import { loadConfig } from './config.js';
-import { log } from './logging.js';
-import { openDb } from './db/db.js';
-import { migrate } from './db/migrations.js';
+import { acquireProcessLock, openDb, migrate, log } from '@agent-collab/runtime-acp';
+import { resolveGatewayHomeDir, loadConfig } from './config.js';
 import { ConversationManager } from './web/conversationManager.js';
 import { startServer } from './web/server.js';
 async function main() {

@@ -1,10 +1,5 @@
 import { randomUUID } from 'node:crypto';
-import { log } from '../logging.js';
-import { BindingRuntime } from '../gateway/bindingRuntime.js';
-import { ToolAuth } from '../gateway/toolAuth.js';
-import { createSession, createRun, finishRun, getSession, upsertBinding, } from '../gateway/sessionStore.js';
-import { getUiMode } from '../db/uiPrefStore.js';
-import { buildReplayContextFromRecentRuns } from '../gateway/history.js';
+import { log, BindingRuntime, ToolAuth, createSession, createRun, finishRun, getSession, upsertBinding, getUiMode, buildReplayContextFromRecentRuns, } from '@agent-collab/runtime-acp';
 // Agent CLI presets
 const CLI_PRESETS = {
     claude_acp: {
@@ -27,6 +22,9 @@ export class ConversationManager {
         this.db = params.db;
         this.config = params.config;
         this.toolAuth = new ToolAuth(this.db);
+    }
+    getDb() {
+        return this.db;
     }
     start() {
         this.gcTimer = setInterval(() => {
@@ -55,6 +53,9 @@ export class ConversationManager {
         const agentType = params.agentType ?? 'claude_acp';
         const workspacePath = params.workspacePath ?? this.config.workspaceRoot;
         const title = params.title ?? '';
+        const envVarsJson = params.envVars && Object.keys(params.envVars).length > 0
+            ? JSON.stringify(params.envVars)
+            : null;
         const now = Date.now();
         const sessionKey = randomUUID();
         const preset = CLI_PRESETS[agentType];
@@ -71,9 +72,9 @@ export class ConversationManager {
         upsertBinding(this.db, { platform: 'web', chatId: id, threadId: null, userId: 'web_user' }, sessionKey);
         // Create conversations row
         this.db
-            .prepare(`INSERT INTO conversations(id, title, agent_type, workspace_path, session_key, status, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, 'idle', ?, ?)`)
-            .run(id, title, agentType, workspacePath, sessionKey, now, now);
+            .prepare(`INSERT INTO conversations(id, title, agent_type, workspace_path, session_key, status, env_vars, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, 'idle', ?, ?, ?)`)
+            .run(id, title, agentType, workspacePath, sessionKey, envVarsJson, now, now);
         return { id, title, agentType, workspacePath, status: 'idle', createdAt: now, updatedAt: now };
     }
     listConversations() {
@@ -112,7 +113,7 @@ export class ConversationManager {
     // ─── Runtime management ───
     getOrCreateRuntime(conversationId) {
         const row = this.db
-            .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+            .prepare('SELECT session_key as sessionKey, env_vars as envVarsJson FROM conversations WHERE id = ?')
             .get(conversationId);
         if (!row)
             throw new Error(`Unknown conversation: ${conversationId}`);
@@ -127,6 +128,7 @@ export class ConversationManager {
         if (!sess)
             throw new Error(`Missing session row: ${sessionKey}`);
         const agentArgs = parseAgentArgs(sess.agentArgsJson, this.config.acpAgentArgs);
+        const envVars = parseEnvVars(row.envVarsJson);
         const rt = new BindingRuntime({
             db: this.db,
             config: this.config,
@@ -136,6 +138,7 @@ export class ConversationManager {
             workspaceRoot: sess.cwd,
             agentCommand: sess.agentCommand,
             agentArgs,
+            env: envVars,
         });
         this.runtimesBySessionKey.set(sessionKey, {
             runtime: rt,
@@ -247,6 +250,20 @@ function parseAgentArgs(raw, fallback) {
         // ignore
     }
     return [...fallback];
+}
+function parseEnvVars(raw) {
+    if (!raw)
+        return undefined;
+    try {
+        const parsed = JSON.parse(raw);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return parsed;
+        }
+    }
+    catch {
+        // ignore
+    }
+    return undefined;
 }
 function isAcpTransportError(error) {
     const name = String(error?.name ?? '').trim();

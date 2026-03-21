@@ -21,10 +21,10 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('schema_version 应为最新版本 7', () => {
+  it('schema_version 应为最新版本 8', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBe(7);
+    expect(row.version).toBe(8);
     db.close();
   });
 
@@ -48,6 +48,7 @@ describe('migrations', () => {
     expect(tableNames).toContain('events');
     expect(tableNames).toContain('conversations');
     expect(tableNames).toContain('tool_policies');
+    expect(tableNames).toContain('nodes');
 
     db.close();
   });

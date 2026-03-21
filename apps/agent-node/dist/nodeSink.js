@@ -1,22 +1,26 @@
 /**
- * OutboundSink that broadcasts ServerEvents to WebSocket clients.
- * The broadcast function is injected by wsHandler to fan out to all
- * connected clients for a given conversation.
+ * OutboundSink that forwards agent output to core as run.event / permission.request messages.
  */
-export class WsSink {
-    broadcast;
-    constructor(broadcast) {
-        this.broadcast = broadcast;
+export class NodeSink {
+    runId;
+    conversationId;
+    send;
+    constructor(runId, conversationId, send) {
+        this.runId = runId;
+        this.conversationId = conversationId;
+        this.send = send;
     }
     async sendAgentText(text) {
-        this.broadcast({ type: 'content.delta', text });
+        this.emitEvent({ type: 'content.delta', text });
     }
     async sendText(text) {
-        this.broadcast({ type: 'content.delta', text });
+        this.emitEvent({ type: 'content.delta', text });
     }
     async requestPermission(req) {
-        this.broadcast({
-            type: 'approval.request',
+        this.send({
+            type: 'permission.request',
+            runId: this.runId,
+            conversationId: this.conversationId,
             requestId: req.requestId,
             toolName: req.toolName ?? req.toolTitle,
             toolArgs: req.toolArgs ?? null,
@@ -26,8 +30,7 @@ export class WsSink {
     async sendUi(event) {
         if (event.kind === 'tool') {
             if (event.stage === 'complete') {
-                // 工具执行完成 → 发送 tool.result
-                this.broadcast({
+                this.emitEvent({
                     type: 'tool.result',
                     toolCallId: event.toolCallId ?? '',
                     output: event.detail ?? event.status ?? 'done',
@@ -35,8 +38,7 @@ export class WsSink {
                 });
             }
             else {
-                // 工具开始或更新 → 发送 tool.call
-                this.broadcast({
+                this.emitEvent({
                     type: 'tool.call',
                     toolCallId: event.toolCallId ?? '',
                     name: event.title,
@@ -44,18 +46,21 @@ export class WsSink {
                 });
             }
         }
-        // plan/task events → content delta for now
         if (event.kind === 'plan' || event.kind === 'task') {
             const text = event.detail
                 ? `\n[${event.kind}] ${event.title}\n${event.detail}\n`
                 : `\n[${event.kind}] ${event.title}\n`;
-            this.broadcast({ type: 'content.delta', text });
+            this.emitEvent({ type: 'content.delta', text });
         }
     }
-    async breakTextStream() {
-        // no-op for WebSocket
-    }
-    async flush() {
-        // no-op for WebSocket
+    async breakTextStream() { }
+    async flush() { }
+    emitEvent(event) {
+        this.send({
+            type: 'run.event',
+            runId: this.runId,
+            conversationId: this.conversationId,
+            event,
+        });
     }
 }

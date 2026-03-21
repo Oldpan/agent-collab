@@ -1,5 +1,5 @@
 import type { Db } from '../db/db.js';
-export type Platform = 'discord' | 'telegram' | 'feishu' | 'web';
+export type Platform = 'discord' | 'telegram' | 'feishu' | 'web' | 'node';
 export declare const SHARED_CHAT_SCOPE_USER_ID = "__chat_scope__";
 export type ConversationKey = {
     platform: Platform;

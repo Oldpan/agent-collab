@@ -1,0 +1,28 @@
+{
+  "name": "@agent-collab/agent-node",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Remote agent node — connects to core and runs ACP agents locally",
+  "main": "dist/main.js",
+  "scripts": {
+    "dev": "tsx src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@agent-collab/protocol": "workspace:*",
+    "@agent-collab/runtime-acp": "workspace:*",
+    "better-sqlite3": "^12.6.2",
+    "ws": "^8.18.1"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.3.3",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

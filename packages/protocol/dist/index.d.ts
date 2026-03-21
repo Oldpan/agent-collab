@@ -69,6 +69,65 @@ export type CancelEvent = {
     type: 'cancel';
 };
 export type ClientEvent = PromptEvent | ApprovalResponseEvent | CancelEvent;
+export type NodeRegisterMsg = {
+    type: 'node.register';
+    nodeId: string;
+    hostname: string;
+    agentTypes: string[];
+    version: string;
+};
+export type NodeHeartbeatMsg = {
+    type: 'node.heartbeat';
+    nodeId: string;
+};
+/** Agent subprocess event forwarded by node to core */
+export type RunEventMsg = {
+    type: 'run.event';
+    runId: string;
+    conversationId: string;
+    event: ServerEvent;
+};
+export type RunEndMsg = {
+    type: 'run.end';
+    runId: string;
+    conversationId: string;
+    stopReason?: string;
+    error?: string;
+};
+export type NodePermissionRequestMsg = {
+    type: 'permission.request';
+    runId: string;
+    conversationId: string;
+    requestId: string;
+    toolName: string;
+    toolArgs: unknown;
+    toolKind?: string | null;
+};
+export type NodeToCore = NodeRegisterMsg | NodeHeartbeatMsg | RunEventMsg | RunEndMsg | NodePermissionRequestMsg;
+export type NodeAckMsg = {
+    type: 'node.ack';
+    nodeId: string;
+};
+export type RunDispatchMsg = {
+    type: 'run.dispatch';
+    runId: string;
+    conversationId: string;
+    agentType: string;
+    workspacePath: string | null;
+    envVars?: Record<string, string>;
+    prompt: string;
+    sessionKey: string;
+};
+export type RunCancelMsg = {
+    type: 'run.cancel';
+    runId: string;
+};
+export type NodePermissionResponseMsg = {
+    type: 'permission.response';
+    requestId: string;
+    decision: 'allow' | 'deny';
+};
+export type CoreToNode = NodeAckMsg | RunDispatchMsg | RunCancelMsg | NodePermissionResponseMsg;
 export type AgentType = 'claude_acp' | 'codex_acp';
 export type ConversationInfo = {
     id: string;
@@ -84,4 +143,11 @@ export type CreateConversationRequest = {
     workspacePath?: string;
     title?: string;
     envVars?: Record<string, string>;
+};
+export type NodeInfoRest = {
+    nodeId: string;
+    hostname: string;
+    agentTypes: string[];
+    version: string;
+    lastSeen: number;
 };

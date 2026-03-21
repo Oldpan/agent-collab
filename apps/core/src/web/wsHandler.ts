@@ -8,7 +8,7 @@ import { WsSink } from './wsSink.js';
 const connectionsByConversation = new Map<string, Set<WebSocket>>();
 
 /** Broadcast a ServerEvent to all connected clients for a conversation */
-function broadcast(conversationId: string, event: ServerEvent): void {
+export function broadcast(conversationId: string, event: ServerEvent): void {
   const sockets = connectionsByConversation.get(conversationId);
   if (!sockets) return;
 
