@@ -23,6 +23,7 @@ export async function startServer(params) {
             agentType: body.agentType,
             workspacePath: body.workspacePath,
             title: body.title,
+            channelId: body.channelId,
             envVars: body.envVars,
         });
         reply.code(201);
@@ -58,6 +59,40 @@ export async function startServer(params) {
          FROM runs WHERE session_key = ? ORDER BY started_at ASC`)
             .all(sessionRow.sessionKey);
         return runs;
+    });
+    // ─── Channel routes ───
+    // List all channels
+    app.get('/api/channels', async () => {
+        return conversationManager.listChannels();
+    });
+    // Create channel
+    app.post('/api/channels', async (req, reply) => {
+        const body = (req.body ?? {});
+        if (!body.name) {
+            reply.code(400);
+            return { error: 'name is required' };
+        }
+        try {
+            const channel = conversationManager.createChannel({
+                name: body.name,
+                workspacePath: body.workspacePath,
+            });
+            reply.code(201);
+            return channel;
+        }
+        catch {
+            reply.code(409);
+            return { error: 'Channel name already exists' };
+        }
+    });
+    // List conversations in a channel
+    app.get('/api/channels/:id/conversations', async (req, reply) => {
+        const channel = conversationManager.getChannel(req.params.id);
+        if (!channel) {
+            reply.code(404);
+            return { error: 'Channel not found' };
+        }
+        return conversationManager.listConversations(req.params.id);
     });
     // ─── Node REST routes ───
     // List connected agent nodes

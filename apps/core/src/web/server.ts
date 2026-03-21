@@ -4,7 +4,7 @@ import fastifyWebSocket from '@fastify/websocket';
 
 import type { Db } from '@agent-collab/runtime-acp';
 import { log } from '@agent-collab/runtime-acp';
-import type { CreateConversationRequest } from '@agent-collab/protocol';
+import type { CreateConversationRequest, CreateChannelRequest } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
 import { handleWebSocket, broadcast } from './wsHandler.js';
 import { handleNodeWebSocket } from './nodeWsHandler.js';
@@ -39,6 +39,7 @@ export async function startServer(params: {
       agentType: body.agentType,
       workspacePath: body.workspacePath,
       title: body.title,
+      channelId: body.channelId,
       envVars: body.envVars,
     });
     reply.code(201);
@@ -88,6 +89,43 @@ export async function startServer(params: {
     }>;
 
     return runs;
+  });
+
+  // ─── Channel routes ───
+
+  // List all channels
+  app.get('/api/channels', async () => {
+    return conversationManager.listChannels();
+  });
+
+  // Create channel
+  app.post<{ Body: CreateChannelRequest }>('/api/channels', async (req, reply) => {
+    const body = (req.body ?? {}) as CreateChannelRequest;
+    if (!body.name) {
+      reply.code(400);
+      return { error: 'name is required' };
+    }
+    try {
+      const channel = conversationManager.createChannel({
+        name: body.name,
+        workspacePath: body.workspacePath,
+      });
+      reply.code(201);
+      return channel;
+    } catch {
+      reply.code(409);
+      return { error: 'Channel name already exists' };
+    }
+  });
+
+  // List conversations in a channel
+  app.get<{ Params: { id: string } }>('/api/channels/:id/conversations', async (req, reply) => {
+    const channel = conversationManager.getChannel(req.params.id);
+    if (!channel) {
+      reply.code(404);
+      return { error: 'Channel not found' };
+    }
+    return conversationManager.listConversations(req.params.id);
   });
 
   // ─── Node REST routes ───

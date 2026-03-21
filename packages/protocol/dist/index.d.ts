@@ -131,6 +131,7 @@ export type CoreToNode = NodeAckMsg | RunDispatchMsg | RunCancelMsg | NodePermis
 export type AgentType = 'claude_acp' | 'codex_acp';
 export type ConversationInfo = {
     id: string;
+    channelId: string;
     title: string;
     agentType: AgentType;
     workspacePath: string | null;
@@ -142,7 +143,19 @@ export type CreateConversationRequest = {
     agentType?: AgentType;
     workspacePath?: string;
     title?: string;
+    channelId?: string;
     envVars?: Record<string, string>;
+};
+export type ChannelInfo = {
+    channelId: string;
+    name: string;
+    workspacePath: string | null;
+    createdAt: number;
+    updatedAt: number;
+};
+export type CreateChannelRequest = {
+    name: string;
+    workspacePath?: string;
 };
 export type NodeInfoRest = {
     nodeId: string;

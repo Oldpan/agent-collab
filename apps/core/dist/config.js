@@ -7,10 +7,10 @@ function resolveHomeDir() {
     return os.homedir();
 }
 export function resolveGatewayHomeDir() {
-    const env = process.env.CLI_GATEWAY_HOME;
+    const env = process.env.AGENT_COLLAB_HOME ?? process.env.CLI_GATEWAY_HOME;
     if (env?.trim())
         return expandPath(env.trim(), resolveHomeDir());
-    return path.join(resolveHomeDir(), '.cli-gateway');
+    return path.join(resolveHomeDir(), '.agent-collab');
 }
 export function configFilePath(gatewayHome) {
     return path.join(gatewayHome, 'config.json');
@@ -44,7 +44,7 @@ function createConfigSchema(defaults) {
             .default(['-y', '@zed-industries/codex-acp@latest']),
         // Default workspace is ~ (switchable per conversation via /workspace)
         workspaceRoot: absPath.default(defaults.defaultWorkspaceRoot),
-        // Default DB path lives under ~/.cli-gateway
+        // Default DB path lives under ~/.agent-collab
         dbPath: z.string().min(1).default(defaults.defaultDbPath),
         runtimeIdleTtlSeconds: z.number().int().min(10).default(15 * 60),
         maxBindingRuntimes: z.number().int().min(1).max(200).default(30),
@@ -109,7 +109,7 @@ function isInteractiveTerminal(input, output) {
 }
 async function runFirstTimeSetup(params) {
     params.output.write('\n');
-    params.output.write('cli-gateway first-time setup\n');
+    params.output.write('agent-collab first-time setup\n');
     params.output.write(`Config file: ${params.file}\n`);
     params.output.write('Press Enter to accept defaults.\n\n');
     const rl = createInterface({

@@ -117,7 +117,7 @@ pnpm --filter @agent-collab/agent-node run dev
 
 ## 配置
 
-### core (`~/.cli-gateway/config.json`)
+### core (`~/.agent-collab/config.json`)
 
 | 字段 | 默认值 | 说明 |
 |------|--------|------|
@@ -129,7 +129,7 @@ pnpm --filter @agent-collab/agent-node run dev
 | `maxBindingRuntimes` | `30` | 最大并发 Runtime 数 |
 | `runtimeIdleTtlSeconds` | `900` | 空闲 Runtime 自动回收时间（秒） |
 
-可通过环境变量 `CLI_GATEWAY_HOME` 修改配置目录（默认 `~/.cli-gateway`）。
+可通过环境变量 `AGENT_COLLAB_HOME` 修改配置目录（默认 `~/.agent-collab`）。
 
 ### agent-node（环境变量）
 

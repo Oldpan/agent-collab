@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 8;
+const LATEST_VERSION = 9;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -212,5 +212,59 @@ export function migrate(db: Db): void {
       UPDATE schema_version SET version = 8;
       `,
     );
+  }
+
+  if (current < 9) {
+    const nowMs = Date.now();
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS channels (
+        channel_id     TEXT PRIMARY KEY,
+        name           TEXT NOT NULL UNIQUE,
+        workspace_path TEXT,
+        created_at     INTEGER NOT NULL,
+        updated_at     INTEGER NOT NULL
+      );
+    `);
+
+    db.prepare(
+      `INSERT OR IGNORE INTO channels(channel_id, name, workspace_path, created_at, updated_at)
+       VALUES(?, ?, NULL, ?, ?)`,
+    ).run('default', 'default', nowMs, nowMs);
+
+    // Add channel_id to conversations; back-fill existing rows to 'default'
+    const convCols = db.prepare("PRAGMA table_info('conversations')").all() as Array<{ name: string }>;
+    if (!convCols.some((c) => c.name === 'channel_id')) {
+      db.exec(`ALTER TABLE conversations ADD COLUMN channel_id TEXT REFERENCES channels(channel_id);`);
+    }
+    db.exec(`UPDATE conversations SET channel_id = 'default' WHERE channel_id IS NULL;`);
+
+    // Fix up existing web bindings: old key was web:{convId}:-:web_user
+    // new key is web:{channelId}:{convId}:{agentType}
+    // Join conversations to bindings via session_key to rebuild the key
+    const oldBindings = db.prepare(`
+      SELECT b.binding_key, c.id as convId, c.agent_type as agentType
+      FROM bindings b
+      JOIN conversations c ON c.session_key = b.session_key
+      WHERE b.platform = 'web'
+    `).all() as Array<{ binding_key: string; convId: string; agentType: string }>;
+
+    const updateBinding = db.prepare(
+      `UPDATE bindings SET binding_key = ?, chat_id = ?, thread_id = ?, user_id = ?
+       WHERE binding_key = ?`,
+    );
+    for (const row of oldBindings) {
+      const newKey = `web:default:${row.convId}:${row.agentType}`;
+      if (newKey !== row.binding_key) {
+        updateBinding.run(newKey, 'default', row.convId, row.agentType, row.binding_key);
+      }
+    }
+
+    db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_conversations_channel
+        ON conversations(channel_id, updated_at DESC);
+
+      UPDATE schema_version SET version = 9;
+    `);
   }
 }

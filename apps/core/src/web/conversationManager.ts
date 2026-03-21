@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-import type { ConversationInfo, AgentType } from '@agent-collab/protocol';
+import type { ConversationInfo, AgentType, ChannelInfo } from '@agent-collab/protocol';
 import {
   log,
   BindingRuntime,
@@ -79,12 +79,14 @@ export class ConversationManager {
     agentType?: AgentType;
     workspacePath?: string;
     title?: string;
+    channelId?: string;
     envVars?: Record<string, string>;
   }): ConversationInfo {
     const id = randomUUID();
     const agentType: AgentType = params.agentType ?? 'claude_acp';
     const workspacePath = params.workspacePath ?? this.config.workspaceRoot;
     const title = params.title ?? '';
+    const channelId = params.channelId ?? 'default';
     const envVarsJson = params.envVars && Object.keys(params.envVars).length > 0
       ? JSON.stringify(params.envVars)
       : null;
@@ -102,41 +104,47 @@ export class ConversationManager {
       loadSupported: false,
     });
 
-    // Create binding row (platform=web)
-    const bindingKey = `web:${id}:-:web_user`;
+    // bindingKey = web:{channelId}:{conversationId}:{agentType}
+    // → each agent type in each thread gets its own isolated session
     upsertBinding(
       this.db,
-      { platform: 'web', chatId: id, threadId: null, userId: 'web_user' },
+      { platform: 'web', chatId: channelId, threadId: id, userId: agentType },
       sessionKey,
     );
 
     // Create conversations row
     this.db
       .prepare(
-        `INSERT INTO conversations(id, title, agent_type, workspace_path, session_key, status, env_vars, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, 'idle', ?, ?, ?)`,
+        `INSERT INTO conversations(id, channel_id, title, agent_type, workspace_path, session_key, status, env_vars, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?)`,
       )
-      .run(id, title, agentType, workspacePath, sessionKey, envVarsJson, now, now);
+      .run(id, channelId, title, agentType, workspacePath, sessionKey, envVarsJson, now, now);
 
-    return { id, title, agentType, workspacePath, status: 'idle', createdAt: now, updatedAt: now };
+    return { id, channelId, title, agentType, workspacePath, status: 'idle', createdAt: now, updatedAt: now };
   }
 
-  listConversations(): ConversationInfo[] {
-    const rows = this.db
-      .prepare(
-        `SELECT id, title, agent_type as agentType, workspace_path as workspacePath,
-                status, created_at as createdAt, updated_at as updatedAt
-         FROM conversations ORDER BY updated_at DESC`,
-      )
-      .all() as ConversationInfo[];
-    return rows;
+  listConversations(channelId?: string): ConversationInfo[] {
+    const sql = channelId
+      ? `SELECT id, channel_id as channelId, title, agent_type as agentType,
+                workspace_path as workspacePath, status,
+                created_at as createdAt, updated_at as updatedAt
+         FROM conversations WHERE channel_id = ? ORDER BY updated_at DESC`
+      : `SELECT id, channel_id as channelId, title, agent_type as agentType,
+                workspace_path as workspacePath, status,
+                created_at as createdAt, updated_at as updatedAt
+         FROM conversations ORDER BY updated_at DESC`;
+    const rows = channelId
+      ? this.db.prepare(sql).all(channelId)
+      : this.db.prepare(sql).all();
+    return rows as ConversationInfo[];
   }
 
   getConversation(id: string): ConversationInfo | null {
     const row = this.db
       .prepare(
-        `SELECT id, title, agent_type as agentType, workspace_path as workspacePath,
-                status, created_at as createdAt, updated_at as updatedAt
+        `SELECT id, channel_id as channelId, title, agent_type as agentType,
+                workspace_path as workspacePath, status,
+                created_at as createdAt, updated_at as updatedAt
          FROM conversations WHERE id = ?`,
       )
       .get(id) as ConversationInfo | undefined;
@@ -163,17 +171,67 @@ export class ConversationManager {
     this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
   }
 
+  // ─── Channel CRUD ───
+
+  createChannel(params: { name: string; workspacePath?: string | null }): ChannelInfo {
+    const channelId = params.name === 'default' ? 'default' : randomUUID();
+    const now = Date.now();
+    this.db
+      .prepare(
+        `INSERT INTO channels(channel_id, name, workspace_path, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?)`,
+      )
+      .run(channelId, params.name, params.workspacePath ?? null, now, now);
+    return {
+      channelId,
+      name: params.name,
+      workspacePath: params.workspacePath ?? null,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  listChannels(): ChannelInfo[] {
+    return this.db
+      .prepare(
+        `SELECT channel_id as channelId, name, workspace_path as workspacePath,
+                created_at as createdAt, updated_at as updatedAt
+         FROM channels ORDER BY created_at ASC`,
+      )
+      .all() as ChannelInfo[];
+  }
+
+  getChannel(channelId: string): ChannelInfo | null {
+    const row = this.db
+      .prepare(
+        `SELECT channel_id as channelId, name, workspace_path as workspacePath,
+                created_at as createdAt, updated_at as updatedAt
+         FROM channels WHERE channel_id = ?`,
+      )
+      .get(channelId) as ChannelInfo | undefined;
+    return row ?? null;
+  }
+
   // ─── Runtime management ───
 
   private getOrCreateRuntime(conversationId: string): BindingRuntime {
     const row = this.db
-      .prepare('SELECT session_key as sessionKey, env_vars as envVarsJson FROM conversations WHERE id = ?')
-      .get(conversationId) as { sessionKey: string; envVarsJson: string | null } | undefined;
+      .prepare(
+        `SELECT session_key as sessionKey, channel_id as channelId,
+                agent_type as agentType, env_vars as envVarsJson
+         FROM conversations WHERE id = ?`,
+      )
+      .get(conversationId) as {
+        sessionKey: string;
+        channelId: string;
+        agentType: string;
+        envVarsJson: string | null;
+      } | undefined;
 
     if (!row) throw new Error(`Unknown conversation: ${conversationId}`);
 
-    const { sessionKey } = row;
-    const bindingKey = `web:${conversationId}:-:web_user`;
+    const { sessionKey, channelId, agentType } = row;
+    const bindingKey = `web:${channelId}:${conversationId}:${agentType}`;
 
     const existing = this.runtimesBySessionKey.get(sessionKey);
     if (existing) {
@@ -245,13 +303,16 @@ export class ConversationManager {
     attachments?: Array<{ uri: string; mimeType?: string }>,
   ): Promise<void> {
     const row = this.db
-      .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
-      .get(conversationId) as { sessionKey: string } | undefined;
+      .prepare(
+        `SELECT session_key as sessionKey, channel_id as channelId, agent_type as agentType
+         FROM conversations WHERE id = ?`,
+      )
+      .get(conversationId) as { sessionKey: string; channelId: string; agentType: string } | undefined;
 
     if (!row) throw new Error(`Unknown conversation: ${conversationId}`);
 
-    const { sessionKey } = row;
-    const bindingKey = `web:${conversationId}:-:web_user`;
+    const { sessionKey, channelId, agentType } = row;
+    const bindingKey = `web:${channelId}:${conversationId}:${agentType}`;
     const rt = this.getOrCreateRuntime(conversationId);
 
     // Update status to busy

@@ -25,6 +25,7 @@ describe('ConversationManager', () => {
       const conv = manager.createConversation({ title: 'Test' });
 
       expect(conv.id).toBeTruthy();
+      expect(conv.channelId).toBe('default');
       expect(conv.title).toBe('Test');
       expect(conv.agentType).toBe('claude_acp'); // 默认
       expect(conv.status).toBe('idle');
@@ -103,6 +104,47 @@ describe('ConversationManager', () => {
 
       manager.deleteConversation(c1.id);
       expect(manager.listConversations()).toHaveLength(1);
+    });
+  });
+
+  // ─── channels ───
+
+  describe('channels', () => {
+    it('listChannels 应包含 default channel', () => {
+      const channels = manager.listChannels();
+      expect(channels.some((c) => c.channelId === 'default')).toBe(true);
+    });
+
+    it('createChannel 应创建新 channel', () => {
+      const ch = manager.createChannel({ name: 'my-channel' });
+      expect(ch.channelId).toBeTruthy();
+      expect(ch.name).toBe('my-channel');
+      expect(ch.workspacePath).toBeNull();
+    });
+
+    it('getChannel 应返回存在的 channel', () => {
+      const ch = manager.createChannel({ name: 'find-me' });
+      const found = manager.getChannel(ch.channelId);
+      expect(found).not.toBeNull();
+      expect(found!.name).toBe('find-me');
+    });
+
+    it('getChannel 不存在时返回 null', () => {
+      expect(manager.getChannel('non-existent')).toBeNull();
+    });
+
+    it('listConversations 可按 channelId 过滤', () => {
+      const chanA = manager.createChannel({ name: 'chan-a' });
+      const c1 = manager.createConversation({ title: 'In default', channelId: 'default' });
+      const c2 = manager.createConversation({ title: 'In chan-a', channelId: chanA.channelId });
+
+      const inDefault = manager.listConversations('default');
+      const inChanA = manager.listConversations(chanA.channelId);
+
+      expect(inDefault.some((c) => c.id === c1.id)).toBe(true);
+      expect(inDefault.some((c) => c.id === c2.id)).toBe(false);
+      expect(inChanA.some((c) => c.id === c2.id)).toBe(true);
+      expect(inChanA.some((c) => c.id === c1.id)).toBe(false);
     });
   });
 

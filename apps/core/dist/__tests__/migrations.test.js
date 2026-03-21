@@ -2,11 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { createTestDb } from './helpers.js';
 import { migrate } from '@agent-collab/runtime-acp';
 describe('migrations', () => {
-    it('应创建 conversations 表并包含 env_vars 列', () => {
+    it('应创建 conversations 表并包含 channel_id 列', () => {
         const db = createTestDb();
         const cols = db.prepare("PRAGMA table_info('conversations')").all();
         const colNames = cols.map((c) => c.name);
         expect(colNames).toContain('id');
+        expect(colNames).toContain('channel_id');
         expect(colNames).toContain('title');
         expect(colNames).toContain('agent_type');
         expect(colNames).toContain('workspace_path');
@@ -17,10 +18,23 @@ describe('migrations', () => {
         expect(colNames).toContain('updated_at');
         db.close();
     });
-    it('schema_version 应为最新版本 8', () => {
+    it('schema_version 应为最新版本 9', () => {
         const db = createTestDb();
         const row = db.prepare('SELECT version FROM schema_version').get();
-        expect(row.version).toBe(8);
+        expect(row.version).toBe(9);
+        db.close();
+    });
+    it('channels 表应存在且包含 default 记录', () => {
+        const db = createTestDb();
+        const tables = db
+            .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+            .all();
+        expect(tables.map((t) => t.name)).toContain('channels');
+        const row = db
+            .prepare('SELECT channel_id, name FROM channels WHERE channel_id = ?')
+            .get('default');
+        expect(row).toBeDefined();
+        expect(row.name).toBe('default');
         db.close();
     });
     it('v7 migration 对旧 DB 做 ALTER TABLE 不报错（幂等）', () => {
@@ -42,6 +56,7 @@ describe('migrations', () => {
         expect(tableNames).toContain('conversations');
         expect(tableNames).toContain('tool_policies');
         expect(tableNames).toContain('nodes');
+        expect(tableNames).toContain('channels');
         db.close();
     });
 });
