@@ -1,0 +1,26 @@
+{
+  "name": "@agent-collab/runtime-acp",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "ACP execution engine — shared runtime for core and agent-node",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsc -p tsconfig.json --watch"
+  },
+  "dependencies": {
+    "better-sqlite3": "^12.6.2"
+  },
+  "devDependencies": {
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^25.3.3",
+    "typescript": "^5.9.3"
+  }
+}
