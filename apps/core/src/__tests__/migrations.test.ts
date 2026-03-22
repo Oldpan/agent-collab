@@ -22,10 +22,10 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('schema_version 应为最新版本 13', () => {
+  it('schema_version 应为最新版本 14', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBe(13);
+    expect(row.version).toBe(14);
     db.close();
   });
 
@@ -78,6 +78,7 @@ describe('migrations', () => {
     expect(tableNames).toContain('nodes');
     expect(tableNames).toContain('channels');
     expect(tableNames).toContain('agents');
+    expect(tableNames).toContain('node_dispatch_queue');
 
     db.close();
   });

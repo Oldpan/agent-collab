@@ -73,14 +73,41 @@
 - [x] `apps/web`：侧边栏重构为 Machine → Agent → Conversations 三级，Machine 状态圆点（绿/黄/灰），移除 node 选择下拉
 - [x] 测试：`conversationManager.test.ts` + `migrations.test.ts` 断言升至 v13，`server.test.ts` 更新 WS prompt 测试（无 nodeId → error 事件）
 
+### Phase 7 — 执行层重构 + Host 化恢复（已完成，未 commit）
+
+- [x] `packages/protocol`：新增 `RuntimeDriverDefinition`、`RUNTIME_DRIVERS`、`dispatchMode(cold_start|resume)`、`hostKey`
+- [x] `packages/protocol`：`ConversationStatus` 升级为 `idle / active / recovering / awaiting_approval / failed`
+- [x] `apps/core`：新增 `ExecutionDispatcher`，统一 dispatch / cancel / approval response
+- [x] `apps/core`：`ConversationManager` 退化为 façade，主执行逻辑迁出
+- [x] `apps/core`：新增 `nodeStateReconciler`，core 启动时把 stale `online` node 收敛为 `offline`，并将挂起中的会话标记为 `failed`
+- [x] `apps/core`：`nodeWsHandler` 收到 `run.event(conversation.status)` 时会写回 DB
+- [x] `apps/agent-node`：新增 `AgentHost`，host 状态 `idle / active / failed`
+- [x] `apps/agent-node`：host 支持 inbox 串行调度，同一 host 的并发 prompt 不再直接叠到 runtime queue
+- [x] `apps/agent-node`：新增 `dispatchQueueStore` + `node_dispatch_queue`（migration v14）
+- [x] `apps/agent-node`：`Executor.resumePendingDispatches()` 支持 node 重启后恢复 `queued/running` dispatch
+- [x] `apps/agent-node`：默认 `nodeId` 改为稳定持久 ID（`~/.agent-node/node-id`），不再跟 `pid` 绑定
+- [x] `apps/web`：前端状态机支持 `recovering`，聊天面板显示 `Recovering session...`
+- [x] 历史回放修复：未结束 run 回放时不再强行发送 `turn.end`，允许 recovering 场景下 live 事件接续同一 turn
+- [x] 测试：
+  - [x] core：`ExecutionDispatcher`、`nodeStateReconciler`、`nodeWsHandler(recovering)`、`server(recovering replay)` 已覆盖
+  - [x] agent-node：新增 node 重启恢复测试链（`resumePendingDispatches()`）
+
 ---
 
 ## 待开发
 
-### Phase 7 — 生产就绪
+### Phase 8 — 恢复路径补全
 
-- [ ] 取消执行（cancel）支持
-- [ ] 节点断线重连 + 任务恢复
+- [ ] recovering 场景下的 pending approval 恢复
+- [ ] recovering 场景下的 cancel 语义收敛
+- [ ] node 连接层自动重连 / backoff，而不是当前手动重启
+- [ ] host 级 idle TTL / 淘汰策略
+- [ ] session 级 resume 能力与 driver 能力矩阵进一步对齐
+- [ ] `node_dispatch_queue` 的恢复失败原因落库与可视化
+
+### Phase 9 — 生产就绪
+
+- [x] 取消执行（cancel）基础链路
 - [ ] 前端静态文件由 core `@fastify/static` 托管
 - [ ] 用户认证 / 多用户支持
 - [ ] 生产部署优化（shiki 按需加载）

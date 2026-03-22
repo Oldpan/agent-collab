@@ -5,6 +5,7 @@ import { resolveGatewayHomeDir, loadConfig } from './config.js';
 import { ConversationManager } from './web/conversationManager.js';
 import { startServer } from './web/server.js';
 import { NodeRegistry } from './services/nodeRegistry.js';
+import { reconcileNodeStateOnStartup } from './services/nodeStateReconciler.js';
 
 async function main(): Promise<void> {
   const gatewayHome = resolveGatewayHomeDir();
@@ -28,6 +29,7 @@ async function main(): Promise<void> {
 
   const db = openDb(config.dbPath);
   migrate(db);
+  reconcileNodeStateOnStartup(db);
 
   const nodeRegistry = new NodeRegistry();
   const manager = new ConversationManager({ db, config, nodeRegistry });

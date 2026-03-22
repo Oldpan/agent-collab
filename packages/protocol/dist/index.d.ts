@@ -1,6 +1,20 @@
+export type AgentType = 'claude_acp' | 'codex_acp';
+export type ConversationStatus = 'idle' | 'active' | 'recovering' | 'awaiting_approval' | 'failed';
+export type RuntimeDispatchMode = 'cold_start' | 'resume';
+export type RuntimeDriverDefinition = {
+    agentType: AgentType;
+    command: string;
+    args: string[];
+    supportsResume: boolean;
+    supportsPushNotifications: boolean;
+    nativeMemoryBackend: 'claude' | 'workspace';
+};
+export declare const RUNTIME_DRIVERS: Record<AgentType, RuntimeDriverDefinition>;
+export declare function getRuntimeDriver(agentType: AgentType): RuntimeDriverDefinition;
+export declare function listRuntimeDrivers(): RuntimeDriverDefinition[];
 export type ConversationStatusEvent = {
     type: 'conversation.status';
-    status: 'idle' | 'busy' | 'error';
+    status: ConversationStatus;
     conversationId: string;
 };
 export type TurnBeginEvent = {
@@ -112,11 +126,13 @@ export type RunDispatchMsg = {
     type: 'run.dispatch';
     runId: string;
     conversationId: string;
-    agentType: string;
+    agentType: AgentType;
     workspacePath: string | null;
     envVars?: Record<string, string>;
     prompt: string;
     sessionKey: string;
+    hostKey: string;
+    dispatchMode: RuntimeDispatchMode;
     contextText?: string;
 };
 export type RunCancelMsg = {
@@ -129,14 +145,13 @@ export type NodePermissionResponseMsg = {
     decision: 'allow' | 'deny';
 };
 export type CoreToNode = NodeAckMsg | RunDispatchMsg | RunCancelMsg | NodePermissionResponseMsg;
-export type AgentType = 'claude_acp' | 'codex_acp';
 export type ConversationInfo = {
     id: string;
     channelId: string;
     title: string;
     agentType: AgentType;
     workspacePath: string | null;
-    status: 'idle' | 'busy' | 'error';
+    status: ConversationStatus;
     createdAt: number;
     updatedAt: number;
     nodeId?: string | null;

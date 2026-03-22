@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 13;
+const LATEST_VERSION = 14;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -305,5 +305,28 @@ export function migrate(db: Db): void {
     db.exec(`ALTER TABLE nodes ADD COLUMN env_var_keys TEXT;`);
     db.exec(`ALTER TABLE nodes ADD COLUMN provisioned_at INTEGER NOT NULL DEFAULT 0;`);
     db.exec(`UPDATE schema_version SET version = 13;`);
+  }
+
+  if (current < 14) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS node_dispatch_queue (
+        run_id          TEXT PRIMARY KEY,
+        host_key        TEXT NOT NULL,
+        session_key     TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        payload_json    TEXT NOT NULL,
+        state           TEXT NOT NULL DEFAULT 'queued',
+        created_at      INTEGER NOT NULL,
+        updated_at      INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_node_dispatch_queue_host
+        ON node_dispatch_queue(host_key, created_at ASC);
+
+      CREATE INDEX IF NOT EXISTS idx_node_dispatch_queue_state
+        ON node_dispatch_queue(state, created_at ASC);
+
+      UPDATE schema_version SET version = 14;
+    `);
   }
 }

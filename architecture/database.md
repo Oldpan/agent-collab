@@ -1,6 +1,6 @@
 # 数据库
 
-SQLite，当前 migration 版本 **v13**。
+SQLite，当前 migration 版本 **v14**。
 
 ## 表结构
 
@@ -15,6 +15,7 @@ SQLite，当前 migration 版本 **v13**。
 | `conversations` | 会话/线程（含 `channel_id`、`env_vars`、`node_id`、`agent_id`） |
 | `agents` | Agent 实体（名称、类型、system prompt、memory、所属 node、workspace 路径） |
 | `nodes` | 已注册/预置的远端 Machine 记录（含 `display_name`、`env_var_keys`、`provisioned_at`） |
+| `node_dispatch_queue` | agent-node 本地持久 dispatch 队列（用于 node 重启后的恢复） |
 
 ## nodes 表结构
 
@@ -68,10 +69,33 @@ CREATE TABLE agents (
 | v11 | `agents` 表，`conversations.agent_id` 外键 |
 | v12 | `agents.channel_id TEXT NOT NULL DEFAULT 'default'` |
 | v13 | `nodes.display_name TEXT`，`nodes.env_var_keys TEXT`，`nodes.provisioned_at INTEGER DEFAULT 0` |
+| v14 | `node_dispatch_queue` 表 + `host/state` 索引，用于 node 本地恢复 |
 
 ## agent-node 本地 DB
 
-agent-node 维护独立 SQLite（默认 `~/.agent-collab/agents/db.sqlite`），表结构相同，但：
+agent-node 维护独立 SQLite（默认 `~/.agent-node/db.sqlite`），表结构与 runtime-acp migration 保持一致，但只有少数表会真正被运行态使用。
 
 - `sessions` / `bindings` / `runs` / `events` 由 executor 在收到 `run.dispatch` 时按需创建
-- `conversations` / `channels` / `agents` / `nodes` 表存在但不使用（migration 全量执行）
+- `node_dispatch_queue` 由 executor 在 `queued -> running -> done` 三阶段维护
+- `conversations` / `channels` / `agents` / `nodes` 表虽然存在，但当前 node 侧不直接依赖它们做业务真相
+
+## node_dispatch_queue 表
+
+```sql
+CREATE TABLE node_dispatch_queue (
+  run_id          TEXT PRIMARY KEY,
+  host_key        TEXT NOT NULL,
+  session_key     TEXT NOT NULL,
+  conversation_id TEXT NOT NULL,
+  payload_json    TEXT NOT NULL,
+  state           TEXT NOT NULL DEFAULT 'queued', -- 'queued' | 'running'
+  created_at      INTEGER NOT NULL,
+  updated_at      INTEGER NOT NULL
+);
+```
+
+用途：
+
+- `queued`：已收到 dispatch，但尚未开始执行
+- `running`：host 已开始执行，用于 node 重启后走 `resume`
+- 删除：run 成功结束、失败结束或恢复失败后清理

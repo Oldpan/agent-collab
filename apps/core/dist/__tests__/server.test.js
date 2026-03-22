@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestDb, createTestConfig } from './helpers.js';
 import { ConversationManager } from '../web/conversationManager.js';
+import { createRun } from '@agent-collab/runtime-acp';
 import WebSocket from 'ws';
 let db;
 let manager;
@@ -178,27 +179,55 @@ describe('WebSocket', () => {
                 ws.on('close', () => resolve());
         });
     });
-    it('发送 prompt 应收到 turn 生命周期事件', async () => {
+    it('未绑定 agent-node 时发送 prompt 应收到 error', async () => {
         const { body: conv } = await fetchJson('/api/conversations', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ title: 'Prompt Test' }),
         });
         const { ws, events } = await createWsConnection(conv.id);
-        // 先等 status + history.complete
-        await waitForEvents(events, 2);
-        // 发 prompt（ACP agent 是 echo noop，会启动失败但 turn 事件会正常发出）
+        await waitForEvents(events, 2); // status + history.complete
         ws.send(JSON.stringify({ type: 'prompt', text: 'hello' }));
-        // 总共应收到 2(初始) + 5(turn lifecycle) = 7 个事件
-        const allEvents = await waitForEvents(events, 7, 10000);
+        const allEvents = await waitForEvents(events, 3);
         ws.close();
-        // 取 prompt 后的事件
-        const turnEvents = allEvents.slice(2);
-        const types = turnEvents.map((e) => e.type);
-        expect(types).toContain('turn.begin');
-        expect(types).toContain('turn.end');
-        const statusEvents = turnEvents.filter((e) => e.type === 'conversation.status');
-        expect(statusEvents.length).toBeGreaterThanOrEqual(2);
+        const errorEvent = allEvents.find((e) => e.type === 'error');
+        expect(errorEvent).toBeDefined();
+        expect(errorEvent.message).toContain('agent node');
+        manager.deleteConversation(conv.id);
+    });
+    it('恢复中的未结束 run 回放时不应发送 turn.end', async () => {
+        const conv = manager.createConversation({ title: 'Recovering Replay' });
+        const sessionRow = db
+            .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+            .get(conv.id);
+        createRun(db, {
+            runId: 'run-recovering-1',
+            sessionKey: sessionRow.sessionKey,
+            promptText: 'continue previous run',
+        });
+        db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('recovering', conv.id);
+        db.prepare(`INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, ?, 'node/event', ?, ?)`).run('run-recovering-1', 1, JSON.stringify({ type: 'content.delta', text: 'partial output' }), Date.now());
+        const { ws, events } = await createWsConnection(conv.id);
+        const received = await waitForEvents(events, 5);
+        await new Promise((resolve) => setTimeout(resolve, 100));
+        ws.close();
+        expect(received[0]).toEqual({
+            type: 'conversation.status',
+            conversationId: conv.id,
+            status: 'recovering',
+        });
+        expect(received[1]).toEqual({
+            type: 'history.user_message',
+            text: 'continue previous run',
+        });
+        expect(received[2].type).toBe('turn.begin');
+        expect(received[3]).toEqual({
+            type: 'content.delta',
+            text: 'partial output',
+        });
+        expect(received[4]).toEqual({ type: 'history.complete' });
+        expect(events.some((event) => event.type === 'turn.end')).toBe(false);
         manager.deleteConversation(conv.id);
     });
 });

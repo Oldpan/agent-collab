@@ -138,7 +138,17 @@ export function useConversationStream(
         }
 
         case "conversation.status": {
-          if (event.status === "error") setStatus("error");
+          if (event.status === "idle") {
+            setStatus("idle");
+          } else if (event.status === "active") {
+            setStatus((prev) => (prev === "streaming" ? prev : "submitted"));
+          } else if (event.status === "recovering") {
+            setStatus("recovering");
+          } else if (event.status === "awaiting_approval") {
+            setStatus("awaiting_approval");
+          } else if (event.status === "failed") {
+            setStatus("error");
+          }
           break;
         }
 
@@ -247,6 +257,7 @@ export function useConversationStream(
   const respondApproval = useCallback(
     (requestId: string, decision: "allow" | "deny") => {
       setPendingApproval(null);
+      setStatus("submitted");
       sendEvent({ type: "approval.response", requestId, decision });
     },
     [sendEvent],

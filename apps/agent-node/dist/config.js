@@ -1,16 +1,19 @@
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import { listRuntimeDrivers } from '@agent-collab/protocol';
 export function loadConfig() {
     const coreUrl = process.env.CORE_URL ?? 'ws://localhost:3000';
-    const nodeId = process.env.NODE_ID ?? `node-${process.pid}`;
     const hostname = process.env.NODE_HOSTNAME ?? os.hostname();
     const workspaceRoot = process.env.WORKSPACE_ROOT ?? os.tmpdir();
     const dbPath = process.env.DB_PATH ?? path.join(os.homedir(), '.agent-node', 'db.sqlite');
+    const nodeId = process.env.NODE_ID ?? resolveStableNodeId(dbPath);
     return {
         nodeId,
         hostname,
         coreUrl,
-        agentTypes: ['claude_acp'],
+        agentTypes: listRuntimeDrivers().map((driver) => driver.agentType),
         version: '0.1.0',
         workspaceRoot,
         dbPath,
@@ -22,4 +25,20 @@ export function loadConfig() {
         uiJsonMaxChars: Number(process.env.UI_JSON_MAX_CHARS ?? 3000),
         heartbeatIntervalMs: Number(process.env.HEARTBEAT_INTERVAL_MS ?? 15_000),
     };
+}
+function resolveStableNodeId(dbPath) {
+    const dir = path.dirname(dbPath);
+    const filePath = path.join(dir, 'node-id');
+    fs.mkdirSync(dir, { recursive: true });
+    try {
+        const existing = fs.readFileSync(filePath, 'utf8').trim();
+        if (existing)
+            return existing;
+    }
+    catch {
+        // fall through
+    }
+    const nodeId = `node-${randomUUID()}`;
+    fs.writeFileSync(filePath, `${nodeId}\n`, 'utf8');
+    return nodeId;
 }

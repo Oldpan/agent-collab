@@ -1,48 +1,72 @@
 import {
-  BindingRuntime,
   ToolAuth,
-  createRun,
   createSession,
-  finishRun,
   getSession,
   upsertBinding,
-  getUiMode,
   log,
 } from '@agent-collab/runtime-acp';
-import type { Db, UiMode } from '@agent-collab/runtime-acp';
-import type { RunDispatchMsg, NodeToCore } from '@agent-collab/protocol';
+import type { Db } from '@agent-collab/runtime-acp';
+import { getRuntimeDriver, type RunDispatchMsg, type NodeToCore } from '@agent-collab/protocol';
 import type { AgentNodeConfig } from './config.js';
-import { NodeSink } from './nodeSink.js';
+import { AgentHost } from './agentHost.js';
+import {
+  enqueueDispatch,
+  listPendingDispatches,
+  removeDispatch,
+  updateDispatchState,
+} from './dispatchQueueStore.js';
 
 type SendFn = (msg: NodeToCore) => void;
+type HostInstance = Pick<
+  AgentHost,
+  'dispatch' | 'cancelRun' | 'handlePermissionResponse' | 'close' | 'getState' | 'getCurrentRunId' | 'getLastError'
+>;
+type CreateHostFn = (params: ConstructorParameters<typeof AgentHost>[0]) => HostInstance;
 
 export class Executor {
   private readonly db: Db;
   private readonly config: AgentNodeConfig;
   private readonly toolAuth: ToolAuth;
-  private readonly runtimes = new Map<string, BindingRuntime>();
+  private readonly hosts = new Map<string, HostInstance>();
+  private readonly runToHost = new Map<string, string>();
   private readonly send: SendFn;
+  private readonly createHost: CreateHostFn;
 
-  constructor(params: { db: Db; config: AgentNodeConfig; send: SendFn }) {
+  constructor(params: { db: Db; config: AgentNodeConfig; send: SendFn; createHost?: CreateHostFn }) {
     this.db = params.db;
     this.config = params.config;
     this.toolAuth = new ToolAuth(params.db);
     this.send = params.send;
+    this.createHost = params.createHost ?? ((hostParams) => new AgentHost(hostParams));
   }
 
-  async dispatch(msg: RunDispatchMsg): Promise<void> {
-    const { runId, conversationId, sessionKey, prompt } = msg;
+  async dispatch(msg: RunDispatchMsg, options?: { persist?: boolean }): Promise<void> {
+    const shouldPersist = options?.persist !== false;
+    const { runId, conversationId, sessionKey, prompt, hostKey } = msg;
     const bindingKey = `node:${conversationId}:-:node_user`;
+    const runtimeKey = hostKey || sessionKey;
+    const driver = getRuntimeDriver(msg.agentType);
 
-    log.info('[executor] dispatch received', { runId, conversationId, sessionKey });
+    log.info('[executor] dispatch received', {
+      runId,
+      conversationId,
+      sessionKey,
+      runtimeKey,
+      dispatchMode: msg.dispatchMode,
+      agentType: msg.agentType,
+    });
+
+    if (shouldPersist) {
+      enqueueDispatch(this.db, msg, 'queued');
+    }
 
     // Ensure local session row exists (bindings has FK → sessions)
     const existingSession = getSession(this.db, sessionKey);
     if (!existingSession) {
       createSession(this.db, {
         sessionKey,
-        agentCommand: this.config.acpAgentCommand,
-        agentArgs: this.config.acpAgentArgs,
+        agentCommand: driver.command,
+        agentArgs: driver.args,
         cwd: msg.workspacePath ?? this.config.workspaceRoot,
         loadSupported: false,
       });
@@ -56,66 +80,114 @@ export class Executor {
       sessionKey,
     );
 
-    const sess = getSession(this.db, sessionKey)!;
-
-    let runtime = this.runtimes.get(sessionKey);
-    if (!runtime) {
-      runtime = new BindingRuntime({
+    let host = this.hosts.get(runtimeKey);
+    if (host?.getState() === 'failed') {
+      log.warn('[executor] recreating failed host', {
+        runtimeKey,
+        sessionKey,
+        previousRunId: host.getCurrentRunId(),
+        lastError: host.getLastError(),
+      });
+      host.close();
+      this.hosts.delete(runtimeKey);
+      host = undefined;
+    }
+    if (!host) {
+      host = this.createHost({
+        hostKey: runtimeKey,
+        sessionKey,
+        bindingKey,
         db: this.db,
         config: this.config,
         toolAuth: this.toolAuth,
-        sessionKey,
-        bindingKey,
         workspaceRoot: msg.workspacePath ?? this.config.workspaceRoot,
-        agentCommand: this.config.acpAgentCommand,
-        agentArgs: this.config.acpAgentArgs,
+        agentCommand: driver.command,
+        agentArgs: driver.args,
         env: msg.envVars,
+        send: this.send,
+        hooks: {
+          onRunStart: (dispatchMsg) => {
+            updateDispatchState(this.db, dispatchMsg.runId, 'running');
+          },
+          onRunFinish: (dispatchMsg) => {
+            removeDispatch(this.db, dispatchMsg.runId);
+          },
+        },
       });
-      this.runtimes.set(sessionKey, runtime);
+      this.hosts.set(runtimeKey, host);
     }
 
-    const sink = new NodeSink(runId, conversationId, this.send);
-    createRun(this.db, { runId, sessionKey, promptText: prompt });
-
-    // Signal turn lifecycle to core
-    this.send({
-      type: 'run.event',
-      runId,
-      conversationId,
-      event: { type: 'turn.begin', turnId: runId },
-    });
-    this.send({
-      type: 'run.event',
-      runId,
-      conversationId,
-      event: { type: 'conversation.status', conversationId, status: 'busy' },
-    });
+    this.runToHost.set(runId, runtimeKey);
 
     try {
-      const uiMode: UiMode = getUiMode(this.db, bindingKey) ?? 'summary';
-      const result = await runtime.prompt({
-        runId,
-        promptText: prompt,
-        sink,
-        uiMode,
-        contextText: msg.contextText,
-        actorUserId: 'node_user',
-      });
-      finishRun(this.db, { runId, stopReason: result.stopReason });
-      log.info('[executor] run finished', { runId, conversationId, stopReason: result.stopReason });
-      this.send({ type: 'run.end', runId, conversationId, stopReason: result.stopReason });
-    } catch (error: any) {
-      const errMsg = String(error?.message ?? error);
-      log.warn('[executor] run error', { runId, conversationId, error: errMsg });
-      finishRun(this.db, { runId, error: errMsg });
-      this.send({ type: 'run.end', runId, conversationId, error: errMsg });
+      await host.dispatch(msg);
+    } finally {
+      this.runToHost.delete(runId);
+      if (host.getState() === 'failed') {
+        removeDispatch(this.db, runId);
+      }
     }
   }
 
-  close(): void {
-    for (const rt of this.runtimes.values()) {
-      rt.close();
+  resumePendingDispatches(): void {
+    const pending = listPendingDispatches(this.db);
+    if (pending.length === 0) return;
+
+    log.warn('[executor] restoring pending dispatches after node restart', {
+      count: pending.length,
+    });
+
+    for (const entry of pending) {
+      const restoredMsg: RunDispatchMsg =
+        entry.state === 'running'
+          ? { ...entry.payload, dispatchMode: 'resume' }
+          : entry.payload;
+
+      this.send({
+        type: 'run.event',
+        runId: restoredMsg.runId,
+        conversationId: restoredMsg.conversationId,
+        event: {
+          type: 'conversation.status',
+          conversationId: restoredMsg.conversationId,
+          status: 'recovering',
+        },
+      });
+
+      void this.dispatch(restoredMsg, { persist: false }).catch((error) => {
+        log.warn('[executor] failed to restore pending dispatch', {
+          runId: restoredMsg.runId,
+          hostKey: restoredMsg.hostKey,
+          error: String((error as Error)?.message ?? error),
+        });
+        removeDispatch(this.db, restoredMsg.runId);
+      });
     }
-    this.runtimes.clear();
+  }
+
+  async cancelRun(runId: string): Promise<boolean> {
+    const runtimeKey = this.runToHost.get(runId);
+    if (!runtimeKey) return false;
+    const host = this.hosts.get(runtimeKey);
+    if (!host) return false;
+    return host.cancelRun(runId);
+  }
+
+  async handlePermissionResponse(
+    requestId: string,
+    decision: 'allow' | 'deny',
+  ): Promise<boolean> {
+    for (const host of this.hosts.values()) {
+      const handled = await host.handlePermissionResponse(requestId, decision);
+      if (handled) return true;
+    }
+    return false;
+  }
+
+  close(): void {
+    for (const host of this.hosts.values()) {
+      host.close();
+    }
+    this.hosts.clear();
   }
 }

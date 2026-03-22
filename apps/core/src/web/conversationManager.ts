@@ -7,13 +7,12 @@ import type { ConversationInfo, AgentType, ChannelInfo, AgentInfo, CreateAgentRe
 import {
   log,
   createSession,
-  createRun,
-  finishRun,
   upsertBinding,
 } from '@agent-collab/runtime-acp';
 import type { Db } from '@agent-collab/runtime-acp';
-import { buildAgentContextText } from '@agent-collab/memory';
+import { getRuntimeDriver } from '@agent-collab/protocol';
 import type { AppConfig } from '../config.js';
+import { ExecutionDispatcher } from '../execution/executionDispatcher.js';
 import type { NodeRegistry } from '../services/nodeRegistry.js';
 
 function slugifyAgentName(name: string): string {
@@ -26,27 +25,22 @@ function slugifyAgentName(name: string): string {
     .slice(0, 40);
 }
 
-// Agent CLI presets
-const CLI_PRESETS: Record<AgentType, { command: string; args: string[] }> = {
-  claude_acp: {
-    command: 'npx',
-    args: ['-y', '@zed-industries/claude-code-acp@latest'],
-  },
-  codex_acp: {
-    command: 'npx',
-    args: ['-y', '@zed-industries/codex-acp@latest'],
-  },
-};
-
 export class ConversationManager {
   private readonly db: Db;
   private readonly config: AppConfig;
   private readonly nodeRegistry?: NodeRegistry;
+  private readonly executionDispatcher: ExecutionDispatcher;
 
   constructor(params: { db: Db; config: AppConfig; nodeRegistry?: NodeRegistry }) {
     this.db = params.db;
     this.config = params.config;
     this.nodeRegistry = params.nodeRegistry;
+    this.executionDispatcher = new ExecutionDispatcher({
+      db: params.db,
+      config: params.config,
+      nodeRegistry: params.nodeRegistry,
+      getAgentById: (agentId) => this.getAgent(agentId),
+    });
   }
 
   getDb(): Db {
@@ -172,7 +166,7 @@ export class ConversationManager {
     const now = Date.now();
 
     const sessionKey = randomUUID();
-    const preset = CLI_PRESETS[agentType];
+    const preset = getRuntimeDriver(agentType);
 
     // Create session row
     createSession(this.db, {
@@ -240,62 +234,7 @@ export class ConversationManager {
   }
 
   async dispatchToNode(conversationId: string, promptText: string): Promise<void> {
-    const row = this.db.prepare(
-      `SELECT session_key as sessionKey, agent_type as agentType,
-              workspace_path as workspacePath, env_vars as envVarsJson,
-              node_id as nodeId, agent_id as agentId
-       FROM conversations WHERE id = ?`
-    ).get(conversationId) as {
-      sessionKey: string; agentType: string; workspacePath: string | null;
-      envVarsJson: string | null; nodeId: string; agentId: string | null;
-    } | undefined;
-
-    if (!row) throw new Error(`Unknown conversation: ${conversationId}`);
-
-    const node = this.nodeRegistry?.getNode(row.nodeId);
-    if (!node) {
-      log.warn('[conv-mgr] node not connected', { nodeId: row.nodeId, conversationId });
-      throw new Error(`Node not connected: ${row.nodeId}`);
-    }
-
-    const runId = randomUUID();
-    createRun(this.db, { runId, sessionKey: row.sessionKey, promptText });
-    this.updateStatus(conversationId, 'busy');
-
-    // Build agent context to send to remote node
-    let contextText = '';
-    if (row.agentId) {
-      const agent = this.getAgent(row.agentId);
-      if (agent) {
-        contextText = await buildAgentContextText({
-          systemPrompt: agent.systemPrompt,
-          memory: agent.memory,
-          agentType: agent.agentType,
-          workspacePath: row.workspacePath ?? this.config.workspaceRoot,
-        });
-      }
-    }
-
-    log.info('[conv-mgr] dispatching to node', { nodeId: row.nodeId, conversationId, runId });
-
-    const sent = this.nodeRegistry!.send(row.nodeId, {
-      type: 'run.dispatch',
-      runId,
-      conversationId,
-      agentType: row.agentType,
-      workspacePath: row.workspacePath,
-      envVars: parseEnvVars(row.envVarsJson),
-      prompt: promptText,
-      sessionKey: row.sessionKey,
-      contextText: contextText || undefined,
-    });
-
-    if (!sent) {
-      // WebSocket closed between getNode check and send — mark the orphaned run as failed
-      finishRun(this.db, { runId, error: 'Node disconnected during dispatch' });
-      this.updateStatus(conversationId, 'idle');
-      throw new Error(`Node disconnected: ${row.nodeId}`);
-    }
+    await this.executionDispatcher.dispatchPrompt(conversationId, promptText);
   }
 
   // ─── Channel CRUD ───
@@ -344,19 +283,13 @@ export class ConversationManager {
     requestId: string,
     decision: 'allow' | 'deny',
   ): Promise<{ ok: boolean; message: string }> {
-    const convRow = this.db
-      .prepare('SELECT node_id as nodeId FROM conversations WHERE id = ?')
-      .get(conversationId) as { nodeId: string | null } | undefined;
+    return this.executionDispatcher.handleApproval(conversationId, requestId, decision);
+  }
 
-    if (!convRow) return { ok: false, message: 'Unknown conversation.' };
-    if (!convRow.nodeId) return { ok: false, message: 'No agent node assigned to this conversation.' };
-
-    const sent = this.nodeRegistry?.send(convRow.nodeId, {
-      type: 'permission.response',
-      requestId,
-      decision,
-    });
-    return sent ? { ok: true, message: '' } : { ok: false, message: 'Node not connected.' };
+  cancelConversationRun(
+    conversationId: string,
+  ): { ok: boolean; message: string; runId?: string } {
+    return this.executionDispatcher.cancelConversationRun(conversationId);
   }
 
   private updateStatus(conversationId: string, status: string): void {
@@ -506,4 +439,3 @@ function parseEnvVars(raw: string | null): Record<string, string> | undefined {
   }
   return undefined;
 }
-

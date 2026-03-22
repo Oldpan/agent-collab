@@ -468,6 +468,38 @@ export class BindingRuntime {
     await sink.sendText(res.message);
   }
 
+  async respondToPermission(
+    requestId: string,
+    decision: 'allow' | 'deny',
+    actorUserId?: string,
+  ): Promise<boolean> {
+    const pending = this.pendingPermission;
+    if (!pending || String(pending.requestId) !== requestId) {
+      return false;
+    }
+
+    const result = await this.decidePermission({
+      decision,
+      requestId,
+      actorUserId,
+    });
+    return result.ok;
+  }
+
+  async cancelCurrentRun(runId?: string): Promise<boolean> {
+    if (runId && this.currentRunId !== runId) return false;
+    if (!this.currentRunId || !this.acpSessionId) return false;
+
+    if (this.pendingPermission) {
+      await this.client.respondPermission(this.pendingPermission, { kind: 'cancelled' });
+      this.pendingPermission = null;
+      this.pendingPermissionActorUserId = null;
+    }
+
+    this.client.notifyCancel(this.acpSessionId);
+    return true;
+  }
+
   prompt(params: {
     runId: string;
     promptText: string;

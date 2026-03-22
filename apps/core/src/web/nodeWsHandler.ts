@@ -75,6 +75,10 @@ export function handleNodeWebSocket(
 
       case 'run.event': {
         log.debug('[node-ws] run.event', { conversationId: msg.conversationId, eventType: msg.event.type });
+        if (msg.event.type === 'conversation.status') {
+          db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
+            .run(msg.event.status, Date.now(), msg.conversationId);
+        }
         broadcast(msg.conversationId, msg.event);
         // Persist replay-worthy events to core DB immediately
         if (REPLAY_EVENT_TYPES.has(msg.event.type)) {
@@ -94,7 +98,7 @@ export function handleNodeWebSocket(
           : { runId: msg.runId, stopReason: msg.stopReason ?? 'end_turn' });
         // Update conversation status in DB
         db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
-          .run('idle', Date.now(), msg.conversationId);
+          .run(msg.error ? 'failed' : 'idle', Date.now(), msg.conversationId);
         broadcast(msg.conversationId, {
           type: 'turn.end',
           turnId: msg.runId,
@@ -106,12 +110,19 @@ export function handleNodeWebSocket(
         broadcast(msg.conversationId, {
           type: 'conversation.status',
           conversationId: msg.conversationId,
-          status: 'idle',
+          status: msg.error ? 'failed' : 'idle',
         });
         break;
       }
 
       case 'permission.request': {
+        db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
+          .run('awaiting_approval', Date.now(), msg.conversationId);
+        broadcast(msg.conversationId, {
+          type: 'conversation.status',
+          conversationId: msg.conversationId,
+          status: 'awaiting_approval',
+        });
         broadcast(msg.conversationId, {
           type: 'approval.request',
           requestId: msg.requestId,
@@ -133,6 +144,22 @@ export function handleNodeWebSocket(
       registry.unregister(nodeId);
       db.prepare(`UPDATE nodes SET status='offline', last_seen=? WHERE node_id=?`)
         .run(Date.now(), nodeId);
+      const affected = db.prepare(
+        `SELECT id FROM conversations WHERE node_id = ? AND status != 'idle'`
+      ).all(nodeId) as Array<{ id: string }>;
+      db.prepare(`UPDATE conversations SET status='failed', updated_at=? WHERE node_id=? AND status != 'idle'`)
+        .run(Date.now(), nodeId);
+      for (const conv of affected) {
+        broadcast(conv.id, {
+          type: 'conversation.status',
+          conversationId: conv.id,
+          status: 'failed',
+        });
+        broadcast(conv.id, {
+          type: 'error',
+          message: `Agent node disconnected: ${nodeId}`,
+        });
+      }
       log.info(`[node-ws] disconnected: ${nodeId}`);
     }
   });

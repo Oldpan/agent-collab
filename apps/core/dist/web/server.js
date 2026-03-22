@@ -143,8 +143,40 @@ export async function startServer(params) {
         }
         return conversationManager.listConversations({ channelId: req.params.id });
     });
+    // ─── Machine routes ───
+    app.get('/api/machines', async () => {
+        return conversationManager.listMachines();
+    });
+    app.post('/api/machines', async (req, reply) => {
+        const body = (req.body ?? {});
+        if (!body.name) {
+            reply.code(400);
+            return { error: 'name is required' };
+        }
+        const machine = conversationManager.createMachine(body);
+        reply.code(201);
+        return machine;
+    });
+    app.get('/api/machines/:id', async (req, reply) => {
+        const machine = conversationManager.getMachine(req.params.id);
+        if (!machine) {
+            reply.code(404);
+            return { error: 'Not found' };
+        }
+        return machine;
+    });
+    app.delete('/api/machines/:id', async (req, reply) => {
+        const machine = conversationManager.getMachine(req.params.id);
+        if (!machine) {
+            reply.code(404);
+            return { error: 'Not found' };
+        }
+        conversationManager.deleteMachine(req.params.id);
+        reply.code(204);
+        return;
+    });
     // ─── Node REST routes ───
-    // List connected agent nodes
+    // List connected agent nodes (in-memory only, for backward compat)
     app.get('/api/nodes', async () => {
         return nodeRegistry.listNodes();
     });

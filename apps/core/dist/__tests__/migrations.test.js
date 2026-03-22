@@ -18,10 +18,19 @@ describe('migrations', () => {
         expect(colNames).toContain('updated_at');
         db.close();
     });
-    it('schema_version 应为最新版本 12', () => {
+    it('schema_version 应为最新版本 14', () => {
         const db = createTestDb();
         const row = db.prepare('SELECT version FROM schema_version').get();
-        expect(row.version).toBe(12);
+        expect(row.version).toBe(14);
+        db.close();
+    });
+    it('nodes 表应包含 display_name, env_var_keys, provisioned_at 列', () => {
+        const db = createTestDb();
+        const cols = db.prepare("PRAGMA table_info('nodes')").all();
+        const colNames = cols.map((c) => c.name);
+        expect(colNames).toContain('display_name');
+        expect(colNames).toContain('env_var_keys');
+        expect(colNames).toContain('provisioned_at');
         db.close();
     });
     it('channels 表应存在且包含 default 记录', () => {
@@ -58,6 +67,7 @@ describe('migrations', () => {
         expect(tableNames).toContain('nodes');
         expect(tableNames).toContain('channels');
         expect(tableNames).toContain('agents');
+        expect(tableNames).toContain('node_dispatch_queue');
         db.close();
     });
 });

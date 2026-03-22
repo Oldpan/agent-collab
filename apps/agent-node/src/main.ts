@@ -31,11 +31,23 @@ async function main(): Promise<void> {
         break;
 
       case 'run.cancel':
-        log.warn('[agent-node] run.cancel not yet implemented', msg.runId);
+        executor.cancelRun(msg.runId).then((handled) => {
+          if (!handled) {
+            log.warn('[agent-node] run.cancel had no active runtime', msg.runId);
+          }
+        }).catch((err) => {
+          log.warn('[agent-node] run.cancel error', err);
+        });
         break;
 
       case 'permission.response':
-        // TODO: route decision to the waiting BindingRuntime
+        executor.handlePermissionResponse(msg.requestId, msg.decision).then((handled) => {
+          if (!handled) {
+            log.warn('[agent-node] permission.response had no pending request', msg.requestId);
+          }
+        }).catch((err) => {
+          log.warn('[agent-node] permission.response error', err);
+        });
         break;
 
       default: {
@@ -50,6 +62,7 @@ async function main(): Promise<void> {
 
   await connection.connect();
   log.info(`[agent-node] connected to ${config.coreUrl} as ${config.nodeId}`);
+  executor.resumePendingDispatches();
 
   const shutdown = (): void => {
     log.warn('[agent-node] shutting down');

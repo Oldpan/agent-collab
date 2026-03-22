@@ -1,54 +1,43 @@
 import { randomUUID } from 'node:crypto';
-import { log, BindingRuntime, ToolAuth, createSession, createRun, finishRun, getSession, upsertBinding, getUiMode, buildReplayContextFromRecentRuns, } from '@agent-collab/runtime-acp';
-import { buildAgentContextText } from '@agent-collab/memory';
-// Agent CLI presets
-const CLI_PRESETS = {
-    claude_acp: {
-        command: 'npx',
-        args: ['-y', '@zed-industries/claude-code-acp@latest'],
-    },
-    codex_acp: {
-        command: 'npx',
-        args: ['-y', '@zed-industries/codex-acp@latest'],
-    },
-};
+import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
+import { log, createSession, upsertBinding, } from '@agent-collab/runtime-acp';
+import { getRuntimeDriver } from '@agent-collab/protocol';
+import { ExecutionDispatcher } from '../execution/executionDispatcher.js';
+function slugifyAgentName(name) {
+    return name
+        .toLowerCase()
+        .replace(/[^\w\s-]/g, '')
+        .replace(/[\s_]+/g, '-')
+        .replace(/-+/g, '-')
+        .replace(/^-|-$/g, '')
+        .slice(0, 40);
+}
 export class ConversationManager {
     db;
     config;
-    toolAuth;
     nodeRegistry;
-    // Active runtimes keyed by sessionKey
-    runtimesBySessionKey = new Map();
-    gcTimer = null;
+    executionDispatcher;
     constructor(params) {
         this.db = params.db;
         this.config = params.config;
-        this.toolAuth = new ToolAuth(this.db);
         this.nodeRegistry = params.nodeRegistry;
+        this.executionDispatcher = new ExecutionDispatcher({
+            db: params.db,
+            config: params.config,
+            nodeRegistry: params.nodeRegistry,
+            getAgentById: (agentId) => this.getAgent(agentId),
+        });
     }
     getDb() {
         return this.db;
     }
     start() {
-        this.gcTimer = setInterval(() => {
-            try {
-                this.gc();
-            }
-            catch (error) {
-                log.warn('runtime GC error', error);
-            }
-        }, 60_000);
         log.info('ConversationManager ready');
     }
     close() {
-        if (this.gcTimer) {
-            clearInterval(this.gcTimer);
-            this.gcTimer = null;
-        }
-        for (const entry of this.runtimesBySessionKey.values()) {
-            entry.runtime.close();
-        }
-        this.runtimesBySessionKey.clear();
+        // no-op: all execution happens on agent-nodes
     }
     // ─── Agent CRUD ───
     createAgent(params) {
@@ -59,13 +48,16 @@ export class ConversationManager {
             ? JSON.stringify(params.envVars)
             : null;
         const now = Date.now();
+        const workspacePath = params.workspacePath
+            ?? path.join(os.homedir(), '.agent-collab', 'agents', `${agentId}-${slugifyAgentName(params.name)}`);
+        fs.mkdirSync(workspacePath, { recursive: true });
         this.db.prepare(`INSERT INTO agents(agent_id, name, agent_type, channel_id, system_prompt, memory, env_vars, node_id, workspace_path, created_at, updated_at)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(agentId, params.name, agentType, channelId, params.systemPrompt ?? '', params.memory ?? '', envVarsJson, params.nodeId ?? null, params.workspacePath ?? null, now, now);
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(agentId, params.name, agentType, channelId, params.systemPrompt ?? '', params.memory ?? '', envVarsJson, params.nodeId ?? null, workspacePath, now, now);
         return {
             agentId, name: params.name, agentType, channelId,
             systemPrompt: params.systemPrompt ?? '', memory: params.memory ?? '',
             envVars: params.envVars, nodeId: params.nodeId ?? null,
-            workspacePath: params.workspacePath ?? null, createdAt: now, updatedAt: now,
+            workspacePath, createdAt: now, updatedAt: now,
         };
     }
     listAgents(channelId) {
@@ -125,7 +117,7 @@ export class ConversationManager {
         })();
         const now = Date.now();
         const sessionKey = randomUUID();
-        const preset = CLI_PRESETS[agentType];
+        const preset = getRuntimeDriver(agentType);
         // Create session row
         createSession(this.db, {
             sessionKey,
@@ -173,68 +165,10 @@ export class ConversationManager {
         return row ?? null;
     }
     deleteConversation(id) {
-        const conv = this.getConversation(id);
-        if (!conv)
-            return;
-        // Find and clean up runtime
-        const row = this.db
-            .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
-            .get(id);
-        if (row) {
-            const entry = this.runtimesBySessionKey.get(row.sessionKey);
-            if (entry) {
-                entry.runtime.close();
-                this.runtimesBySessionKey.delete(row.sessionKey);
-            }
-        }
         this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
     }
     async dispatchToNode(conversationId, promptText) {
-        const row = this.db.prepare(`SELECT session_key as sessionKey, agent_type as agentType,
-              workspace_path as workspacePath, env_vars as envVarsJson,
-              node_id as nodeId, agent_id as agentId
-       FROM conversations WHERE id = ?`).get(conversationId);
-        if (!row)
-            throw new Error(`Unknown conversation: ${conversationId}`);
-        const node = this.nodeRegistry?.getNode(row.nodeId);
-        if (!node) {
-            log.warn('[conv-mgr] node not connected', { nodeId: row.nodeId, conversationId });
-            throw new Error(`Node not connected: ${row.nodeId}`);
-        }
-        const runId = randomUUID();
-        createRun(this.db, { runId, sessionKey: row.sessionKey, promptText });
-        this.updateStatus(conversationId, 'busy');
-        // Build agent context to send to remote node
-        let contextText = '';
-        if (row.agentId) {
-            const agent = this.getAgent(row.agentId);
-            if (agent) {
-                contextText = await buildAgentContextText({
-                    systemPrompt: agent.systemPrompt,
-                    memory: agent.memory,
-                    agentType: agent.agentType,
-                    workspacePath: row.workspacePath ?? this.config.workspaceRoot,
-                });
-            }
-        }
-        log.info('[conv-mgr] dispatching to node', { nodeId: row.nodeId, conversationId, runId });
-        const sent = this.nodeRegistry.send(row.nodeId, {
-            type: 'run.dispatch',
-            runId,
-            conversationId,
-            agentType: row.agentType,
-            workspacePath: row.workspacePath,
-            envVars: parseEnvVars(row.envVarsJson),
-            prompt: promptText,
-            sessionKey: row.sessionKey,
-            contextText: contextText || undefined,
-        });
-        if (!sent) {
-            // WebSocket closed between getNode check and send — mark the orphaned run as failed
-            finishRun(this.db, { runId, error: 'Node disconnected during dispatch' });
-            this.updateStatus(conversationId, 'idle');
-            throw new Error(`Node disconnected: ${row.nodeId}`);
-        }
+        await this.executionDispatcher.dispatchPrompt(conversationId, promptText);
     }
     // ─── Channel CRUD ───
     createChannel(params) {
@@ -267,163 +201,60 @@ export class ConversationManager {
             .get(channelId);
         return row ?? null;
     }
-    // ─── Runtime management ───
-    getOrCreateRuntime(conversationId) {
-        const row = this.db
-            .prepare(`SELECT session_key as sessionKey, channel_id as channelId,
-                agent_type as agentType, env_vars as envVarsJson
-         FROM conversations WHERE id = ?`)
-            .get(conversationId);
-        if (!row)
-            throw new Error(`Unknown conversation: ${conversationId}`);
-        const { sessionKey, channelId, agentType } = row;
-        const bindingKey = `web:${channelId}:${conversationId}:${agentType}`;
-        const existing = this.runtimesBySessionKey.get(sessionKey);
-        if (existing) {
-            existing.lastUsedMs = Date.now();
-            return existing.runtime;
-        }
-        const sess = getSession(this.db, sessionKey);
-        if (!sess)
-            throw new Error(`Missing session row: ${sessionKey}`);
-        const agentArgs = parseAgentArgs(sess.agentArgsJson, this.config.acpAgentArgs);
-        const envVars = parseEnvVars(row.envVarsJson);
-        const rt = new BindingRuntime({
-            db: this.db,
-            config: this.config,
-            toolAuth: this.toolAuth,
-            sessionKey,
-            bindingKey,
-            workspaceRoot: sess.cwd,
-            agentCommand: sess.agentCommand,
-            agentArgs,
-            env: envVars,
-        });
-        this.runtimesBySessionKey.set(sessionKey, {
-            runtime: rt,
-            lastUsedMs: Date.now(),
-        });
-        this.enforceRuntimeLimit();
-        return rt;
-    }
-    gc() {
-        const now = Date.now();
-        const ttlMs = this.config.runtimeIdleTtlSeconds * 1000;
-        for (const [sessionKey, entry] of this.runtimesBySessionKey.entries()) {
-            if (now - entry.lastUsedMs <= ttlMs)
-                continue;
-            entry.runtime.close();
-            this.runtimesBySessionKey.delete(sessionKey);
-        }
-        this.enforceRuntimeLimit();
-    }
-    enforceRuntimeLimit() {
-        const max = this.config.maxBindingRuntimes;
-        if (this.runtimesBySessionKey.size <= max)
-            return;
-        const entries = [...this.runtimesBySessionKey.entries()].sort((a, b) => a[1].lastUsedMs - b[1].lastUsedMs);
-        const removeCount = Math.max(0, entries.length - max);
-        for (let i = 0; i < removeCount; i++) {
-            const [sessionKey, entry] = entries[i];
-            entry.runtime.close();
-            this.runtimesBySessionKey.delete(sessionKey);
-        }
-    }
-    // ─── Prompt handling ───
-    async sendPrompt(conversationId, text, sink, attachments) {
-        const row = this.db
-            .prepare(`SELECT session_key as sessionKey, channel_id as channelId, agent_type as agentType
-         FROM conversations WHERE id = ?`)
-            .get(conversationId);
-        if (!row)
-            throw new Error(`Unknown conversation: ${conversationId}`);
-        const { sessionKey, channelId, agentType } = row;
-        const bindingKey = `web:${channelId}:${conversationId}:${agentType}`;
-        const rt = this.getOrCreateRuntime(conversationId);
-        // Update status to busy
-        this.updateStatus(conversationId, 'busy');
-        const runId = randomUUID();
-        createRun(this.db, { runId, sessionKey, promptText: text });
-        // Build context for fresh sessions: agent context + history replay
-        let contextText = '';
-        const isFreshSession = !rt.hasSessionId();
-        if (isFreshSession) {
-            // Agent system prompt + platform memory + native memory (Claude ~/.claude/... or workspace fallback)
-            const convRow = this.db
-                .prepare('SELECT agent_id as agentId, workspace_path as workspacePath FROM conversations WHERE id = ?')
-                .get(conversationId);
-            if (convRow?.agentId) {
-                const agent = this.getAgent(convRow.agentId);
-                if (agent) {
-                    contextText = await buildAgentContextText({
-                        systemPrompt: agent.systemPrompt,
-                        memory: agent.memory,
-                        agentType: agent.agentType,
-                        workspacePath: convRow.workspacePath ?? this.config.workspaceRoot,
-                    });
-                }
-            }
-            if (this.config.contextReplayEnabled && this.config.contextReplayRuns > 0) {
-                const replay = buildReplayContextFromRecentRuns(this.db, {
-                    sessionKey,
-                    excludeRunId: runId,
-                    maxRuns: this.config.contextReplayRuns,
-                    maxChars: this.config.contextReplayMaxChars,
-                });
-                if (replay)
-                    contextText += (contextText ? '\n\n' : '') + replay;
-            }
-        }
-        try {
-            const uiMode = getUiMode(this.db, bindingKey) ?? this.config.uiDefaultMode;
-            const result = await rt.prompt({
-                runId,
-                promptText: text,
-                promptResources: attachments,
-                sink,
-                uiMode,
-                contextText,
-                actorUserId: 'web_user',
-            });
-            finishRun(this.db, { runId, stopReason: result.stopReason });
-        }
-        catch (error) {
-            finishRun(this.db, { runId, error: String(error?.message ?? error) });
-            // Evict broken runtimes on transport errors
-            if (isAcpTransportError(error)) {
-                const stale = this.runtimesBySessionKey.get(sessionKey);
-                stale?.runtime.close();
-                this.runtimesBySessionKey.delete(sessionKey);
-            }
-            throw error;
-        }
-        finally {
-            this.updateStatus(conversationId, 'idle');
-        }
-    }
     async handleApproval(conversationId, requestId, decision) {
-        const convRow = this.db
-            .prepare('SELECT session_key as sessionKey, node_id as nodeId FROM conversations WHERE id = ?')
-            .get(conversationId);
-        if (!convRow)
-            return { ok: false, message: 'Unknown conversation.' };
-        if (convRow.nodeId) {
-            const sent = this.nodeRegistry?.send(convRow.nodeId, {
-                type: 'permission.response',
-                requestId,
-                decision,
-            });
-            return sent ? { ok: true, message: '' } : { ok: false, message: 'Node not connected.' };
-        }
-        const entry = this.runtimesBySessionKey.get(convRow.sessionKey);
-        if (!entry)
-            return { ok: false, message: 'No active runtime. Send a message first.' };
-        return entry.runtime.decidePermission({ decision, requestId, actorUserId: 'web_user' });
+        return this.executionDispatcher.handleApproval(conversationId, requestId, decision);
+    }
+    cancelConversationRun(conversationId) {
+        return this.executionDispatcher.cancelConversationRun(conversationId);
     }
     updateStatus(conversationId, status) {
         this.db
             .prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
             .run(status, Date.now(), conversationId);
+    }
+    // ─── Machine CRUD ───
+    createMachine(params) {
+        const nodeId = randomUUID();
+        const now = Date.now();
+        const envVarKeysJson = JSON.stringify(params.envVarKeys ?? []);
+        this.db.prepare(`INSERT INTO nodes(node_id, hostname, agent_types_json, version, status, last_seen, created_at, display_name, env_var_keys, provisioned_at)
+       VALUES(?, '', '[]', '', 'pending', 0, 0, ?, ?, ?)`).run(nodeId, params.name, envVarKeysJson, now);
+        return {
+            nodeId,
+            name: params.name,
+            hostname: null,
+            agentTypes: [],
+            version: null,
+            status: 'pending',
+            envVarKeys: params.envVarKeys ?? [],
+            lastSeen: null,
+            provisionedAt: now,
+            createdAt: 0,
+        };
+    }
+    listMachines() {
+        const rows = this.db.prepare(`SELECT node_id as nodeId, hostname, agent_types_json as agentTypesJson, version,
+              status, last_seen as lastSeen, created_at as createdAt,
+              display_name as displayName, env_var_keys as envVarKeysJson, provisioned_at as provisionedAt
+       FROM nodes ORDER BY provisioned_at DESC, created_at ASC`).all();
+        return rows.map((row) => {
+            const isOnline = !!this.nodeRegistry?.getNode(row.nodeId);
+            return rowToMachineInfo(row, isOnline);
+        });
+    }
+    getMachine(nodeId) {
+        const row = this.db.prepare(`SELECT node_id as nodeId, hostname, agent_types_json as agentTypesJson, version,
+              status, last_seen as lastSeen, created_at as createdAt,
+              display_name as displayName, env_var_keys as envVarKeysJson, provisioned_at as provisionedAt
+       FROM nodes WHERE node_id = ?`).get(nodeId);
+        if (!row)
+            return null;
+        const isOnline = !!this.nodeRegistry?.getNode(nodeId);
+        return rowToMachineInfo(row, isOnline);
+    }
+    deleteMachine(nodeId) {
+        this.db.prepare(`UPDATE agents SET node_id = NULL WHERE node_id = ?`).run(nodeId);
+        this.db.prepare(`DELETE FROM nodes WHERE node_id = ?`).run(nodeId);
     }
 }
 function rowToAgentInfo(row) {
@@ -441,17 +272,33 @@ function rowToAgentInfo(row) {
         updatedAt: row.updatedAt,
     };
 }
-function parseAgentArgs(raw, fallback) {
+function rowToMachineInfo(row, isOnline) {
+    let agentTypes = [];
     try {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) {
-            return parsed;
-        }
+        agentTypes = JSON.parse(row.agentTypesJson);
     }
-    catch {
-        // ignore
+    catch { /* ignore */ }
+    let envVarKeys = [];
+    try {
+        const parsed = JSON.parse(row.envVarKeysJson ?? '[]');
+        if (Array.isArray(parsed))
+            envVarKeys = parsed;
     }
-    return [...fallback];
+    catch { /* ignore */ }
+    const status = isOnline ? 'online'
+        : (row.status === 'pending' ? 'pending' : 'offline');
+    return {
+        nodeId: row.nodeId,
+        name: row.displayName || row.hostname || row.nodeId,
+        hostname: row.hostname || null,
+        agentTypes,
+        version: row.version || null,
+        status,
+        envVarKeys,
+        lastSeen: row.lastSeen || null,
+        provisionedAt: row.provisionedAt,
+        createdAt: row.createdAt,
+    };
 }
 function parseEnvVars(raw) {
     if (!raw)
@@ -466,13 +313,4 @@ function parseEnvVars(raw) {
         // ignore
     }
     return undefined;
-}
-function isAcpTransportError(error) {
-    const name = String(error?.name ?? '').trim();
-    if (name === 'AcpTransportError')
-        return true;
-    const message = String(error?.message ?? error ?? '').toLowerCase();
-    return (message.includes('acp process is not running') ||
-        message.includes('acp agent exited') ||
-        message.includes('acp request timed out'));
 }

@@ -25,4 +25,10 @@ export type PendingApproval = {
 };
 
 /** Chat status state machine */
-export type ChatStatus = "idle" | "submitted" | "streaming" | "error";
+export type ChatStatus =
+  | "idle"
+  | "submitted"
+  | "streaming"
+  | "recovering"
+  | "awaiting_approval"
+  | "error";

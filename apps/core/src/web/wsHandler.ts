@@ -98,13 +98,14 @@ function replayHistory(
   // 获取所有 runs，按时间正序
   const runs = db
     .prepare(
-      `SELECT run_id as runId, prompt_text as promptText, stop_reason as stopReason
+      `SELECT run_id as runId, prompt_text as promptText, stop_reason as stopReason, ended_at as endedAt
        FROM runs WHERE session_key = ? ORDER BY started_at ASC`,
     )
     .all(row.sessionKey) as Array<{
     runId: string;
     promptText: string;
     stopReason: string | null;
+    endedAt: number | null;
   }>;
 
   const send = (event: ServerEvent) => {
@@ -194,7 +195,9 @@ function replayHistory(
       }
     }
 
-    send({ type: 'turn.end', turnId, stopReason: run.stopReason ?? 'end_turn' });
+    if (run.endedAt !== null) {
+      send({ type: 'turn.end', turnId, stopReason: run.stopReason ?? 'end_turn' });
+    }
   }
 }
 
@@ -218,7 +221,7 @@ async function handleClientEvent(
       }
 
       log.info('[ws] prompt → remote node', { conversationId, nodeId: conv.nodeId });
-      broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'busy' });
+      broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'active' });
       try {
         await manager.dispatchToNode(conversationId, event.text);
       } catch (error: any) {
@@ -242,7 +245,12 @@ async function handleClientEvent(
     }
 
     case 'cancel':
-      // TODO: implement cancellation when BindingRuntime supports it
+      {
+        const result = manager.cancelConversationRun(conversationId);
+        if (!result.ok) {
+          broadcast(conversationId, { type: 'error', message: result.message });
+        }
+      }
       break;
   }
 }

@@ -4,6 +4,7 @@ import { resolveGatewayHomeDir, loadConfig } from './config.js';
 import { ConversationManager } from './web/conversationManager.js';
 import { startServer } from './web/server.js';
 import { NodeRegistry } from './services/nodeRegistry.js';
+import { reconcileNodeStateOnStartup } from './services/nodeStateReconciler.js';
 async function main() {
     const gatewayHome = resolveGatewayHomeDir();
     const lock = acquireProcessLock(path.join(gatewayHome, 'gateway.lock'));
@@ -22,6 +23,7 @@ async function main() {
     const config = await loadConfig({ interactiveBootstrap: true });
     const db = openDb(config.dbPath);
     migrate(db);
+    reconcileNodeStateOnStartup(db);
     const nodeRegistry = new NodeRegistry();
     const manager = new ConversationManager({ db, config, nodeRegistry });
     manager.start();

@@ -1,8 +1,49 @@
 // ─── 服务端 → 客户端 事件 ───
 
+export type AgentType = 'claude_acp' | 'codex_acp';
+export type ConversationStatus = 'idle' | 'active' | 'recovering' | 'awaiting_approval' | 'failed';
+
+export type RuntimeDispatchMode = 'cold_start' | 'resume';
+
+export type RuntimeDriverDefinition = {
+  agentType: AgentType;
+  command: string;
+  args: string[];
+  supportsResume: boolean;
+  supportsPushNotifications: boolean;
+  nativeMemoryBackend: 'claude' | 'workspace';
+};
+
+export const RUNTIME_DRIVERS: Record<AgentType, RuntimeDriverDefinition> = {
+  claude_acp: {
+    agentType: 'claude_acp',
+    command: 'npx',
+    args: ['-y', '@zed-industries/claude-code-acp@latest'],
+    supportsResume: true,
+    supportsPushNotifications: true,
+    nativeMemoryBackend: 'claude',
+  },
+  codex_acp: {
+    agentType: 'codex_acp',
+    command: 'npx',
+    args: ['-y', '@zed-industries/codex-acp@latest'],
+    supportsResume: true,
+    supportsPushNotifications: false,
+    nativeMemoryBackend: 'workspace',
+  },
+};
+
+export function getRuntimeDriver(agentType: AgentType): RuntimeDriverDefinition {
+  return RUNTIME_DRIVERS[agentType];
+}
+
+export function listRuntimeDrivers(): RuntimeDriverDefinition[] {
+  return Object.values(RUNTIME_DRIVERS);
+}
+
 export type ConversationStatusEvent = {
   type: 'conversation.status';
-  status: 'idle' | 'busy' | 'error';
+  status: ConversationStatus;
   conversationId: string;
 };
 
@@ -166,11 +207,13 @@ export type RunDispatchMsg = {
   type: 'run.dispatch';
   runId: string;
   conversationId: string;
-  agentType: string;
+  agentType: AgentType;
   workspacePath: string | null;
   envVars?: Record<string, string>;
   prompt: string;
   sessionKey: string;
+  hostKey: string;
+  dispatchMode: RuntimeDispatchMode;
   contextText?: string;
 };
 
@@ -189,15 +232,13 @@ export type CoreToNode = NodeAckMsg | RunDispatchMsg | RunCancelMsg | NodePermis
 
 // ─── REST API 类型 ───
 
-export type AgentType = 'claude_acp' | 'codex_acp';
-
 export type ConversationInfo = {
   id: string;
   channelId: string;
   title: string;
   agentType: AgentType;
   workspacePath: string | null;
-  status: 'idle' | 'busy' | 'error';
+  status: ConversationStatus;
   createdAt: number;
   updatedAt: number;
   nodeId?: string | null;

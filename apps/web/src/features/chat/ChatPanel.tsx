@@ -51,6 +51,17 @@ export function ChatPanel({ conversation }: ChatPanelProps) {
     cancel,
   } = useConversationStream({ conversationId: conversation.id });
 
+  const displayStatus =
+    status === "submitted" || status === "streaming"
+      ? "active"
+      : status === "recovering"
+        ? "recovering"
+      : status === "awaiting_approval"
+        ? "awaiting_approval"
+        : status === "error"
+          ? "failed"
+          : conversation.status;
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -61,7 +72,7 @@ export function ChatPanel({ conversation }: ChatPanelProps) {
         <Badge variant="secondary" className="text-[11px]">
           {conversation.agentType === "claude_acp" ? "Claude" : "Codex"}
         </Badge>
-        <StatusDot status={conversation.status} />
+        <StatusDot status={displayStatus} />
       </div>
 
       {/* Messages */}
@@ -91,10 +102,18 @@ export function ChatPanel({ conversation }: ChatPanelProps) {
           )}
 
           {/* Streaming indicator */}
-          {(status === "submitted" || status === "streaming") && (
+          {(status === "submitted" || status === "streaming" || status === "recovering" || status === "awaiting_approval") && (
             <div className="flex items-center gap-2 py-2 text-muted-foreground text-sm">
               <Loader size={14} />
-              <span>{status === "submitted" ? "Thinking..." : "Streaming..."}</span>
+              <span>
+                {status === "submitted"
+                  ? "Thinking..."
+                  : status === "recovering"
+                    ? "Recovering session..."
+                  : status === "awaiting_approval"
+                    ? "Waiting for approval..."
+                    : "Streaming..."}
+              </span>
             </div>
           )}
         </ConversationContent>
@@ -168,8 +187,10 @@ function StatusDot({ status }: { status: string }) {
       className={cn(
         "size-2 rounded-full shrink-0",
         status === "idle" && "bg-success",
-        status === "busy" && "bg-warning",
-        status === "error" && "bg-destructive",
+        status === "active" && "bg-warning",
+        status === "recovering" && "bg-sky-500",
+        status === "awaiting_approval" && "bg-amber-500",
+        status === "failed" && "bg-destructive",
       )}
       title={status}
     />

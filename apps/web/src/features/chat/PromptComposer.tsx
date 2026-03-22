@@ -29,7 +29,9 @@ export function PromptComposer({ status, onSend, onCancel }: PromptComposerProps
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        if (status === "idle") handleSubmit();
+        if (status !== "submitted" && status !== "streaming" && status !== "recovering" && status !== "awaiting_approval") {
+          handleSubmit();
+        }
       }
     },
     [status, handleSubmit],
@@ -42,7 +44,11 @@ export function PromptComposer({ status, onSend, onCancel }: PromptComposerProps
     textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
   }, []);
 
-  const isBusy = status === "submitted" || status === "streaming";
+  const isBusy =
+    status === "submitted" ||
+    status === "streaming" ||
+    status === "recovering" ||
+    status === "awaiting_approval";
 
   return (
     <div className="flex items-end gap-2 border-t border-border bg-background p-4">

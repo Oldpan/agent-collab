@@ -3,6 +3,7 @@ import { createTestDb, createTestConfig } from './helpers.js';
 import { ConversationManager } from '../web/conversationManager.js';
 import { startServer } from '../web/server.js';
 import type { Db } from '@agent-collab/runtime-acp';
+import { createRun } from '@agent-collab/runtime-acp';
 import WebSocket from 'ws';
 
 let db: Db;
@@ -240,6 +241,53 @@ describe('WebSocket', () => {
     const errorEvent = allEvents.find((e) => e.type === 'error');
     expect(errorEvent).toBeDefined();
     expect(errorEvent.message).toContain('agent node');
+
+    manager.deleteConversation(conv.id);
+  });
+
+  it('恢复中的未结束 run 回放时不应发送 turn.end', async () => {
+    const conv = manager.createConversation({ title: 'Recovering Replay' });
+    const sessionRow = db
+      .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+
+    createRun(db, {
+      runId: 'run-recovering-1',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'continue previous run',
+    });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('recovering', conv.id);
+    db.prepare(
+      `INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, ?, 'node/event', ?, ?)`,
+    ).run(
+      'run-recovering-1',
+      1,
+      JSON.stringify({ type: 'content.delta', text: 'partial output' }),
+      Date.now(),
+    );
+
+    const { ws, events } = await createWsConnection(conv.id);
+    const received = await waitForEvents(events, 5);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    ws.close();
+
+    expect(received[0]).toEqual({
+      type: 'conversation.status',
+      conversationId: conv.id,
+      status: 'recovering',
+    });
+    expect(received[1]).toEqual({
+      type: 'history.user_message',
+      text: 'continue previous run',
+    });
+    expect(received[2].type).toBe('turn.begin');
+    expect(received[3]).toEqual({
+      type: 'content.delta',
+      text: 'partial output',
+    });
+    expect(received[4]).toEqual({ type: 'history.complete' });
+    expect(events.some((event) => event.type === 'turn.end')).toBe(false);
 
     manager.deleteConversation(conv.id);
   });

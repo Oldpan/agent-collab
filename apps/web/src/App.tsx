@@ -41,7 +41,9 @@ export function App() {
   );
 
   const handleUpdateAgent = useCallback(
-    (id: string, req: UpdateAgentRequest) => updateAgent(id, req),
+    async (id: string, req: UpdateAgentRequest) => {
+      await updateAgent(id, req);
+    },
     [updateAgent],
   );
 

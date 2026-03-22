@@ -1,5 +1,4 @@
 import { log } from '@agent-collab/runtime-acp';
-import { WsSink } from './wsSink.js';
 // Active WebSocket connections per conversation
 const connectionsByConversation = new Map();
 /** Broadcast a ServerEvent to all connected clients for a conversation */
@@ -13,10 +12,6 @@ export function broadcast(conversationId, event) {
             ws.send(data);
         }
     }
-}
-/** Create a WsSink bound to a specific conversation */
-export function createSinkForConversation(conversationId) {
-    return new WsSink((event) => broadcast(conversationId, event));
 }
 /** Handle a new WebSocket connection for a conversation */
 export function handleWebSocket(socket, conversationId, manager) {
@@ -81,7 +76,7 @@ function replayHistory(socket, conversationId, manager) {
         return;
     // 获取所有 runs，按时间正序
     const runs = db
-        .prepare(`SELECT run_id as runId, prompt_text as promptText, stop_reason as stopReason
+        .prepare(`SELECT run_id as runId, prompt_text as promptText, stop_reason as stopReason, ended_at as endedAt
        FROM runs WHERE session_key = ? ORDER BY started_at ASC`)
         .all(row.sessionKey);
     const send = (event) => {
@@ -160,7 +155,9 @@ function replayHistory(socket, conversationId, manager) {
                 }
             }
         }
-        send({ type: 'turn.end', turnId, stopReason: run.stopReason ?? 'end_turn' });
+        if (run.endedAt !== null) {
+            send({ type: 'turn.end', turnId, stopReason: run.stopReason ?? 'end_turn' });
+        }
     }
 }
 /** 从 update 中提取 toolCallId */
@@ -171,44 +168,20 @@ async function handleClientEvent(conversationId, event, manager) {
     switch (event.type) {
         case 'prompt': {
             const conv = manager.getConversation(conversationId);
-            if (conv?.nodeId) {
-                // Remote: dispatch to node, events come back via run.event
-                log.info('[ws] prompt → remote node', { conversationId, nodeId: conv.nodeId });
-                broadcast(conversationId, {
-                    type: 'conversation.status',
-                    conversationId,
-                    status: 'busy',
-                });
-                try {
-                    await manager.dispatchToNode(conversationId, event.text);
-                }
-                catch (error) {
-                    broadcast(conversationId, { type: 'error', message: String(error?.message ?? error) });
-                    broadcast(conversationId, {
-                        type: 'conversation.status',
-                        conversationId,
-                        status: 'idle',
-                    });
-                }
-                // Do NOT broadcast turn.end or idle status here — nodeWsHandler does it on run.end
+            if (!conv?.nodeId) {
+                broadcast(conversationId, { type: 'error', message: 'No agent node assigned. Connect an agent-node first.' });
                 break;
             }
-            // Local path (existing behavior)
-            const sink = createSinkForConversation(conversationId);
-            const turnId = `turn-${Date.now()}`;
-            broadcast(conversationId, { type: 'turn.begin', turnId });
-            broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'busy' });
+            log.info('[ws] prompt → remote node', { conversationId, nodeId: conv.nodeId });
+            broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'active' });
             try {
-                await manager.sendPrompt(conversationId, event.text, sink, event.attachments);
-                broadcast(conversationId, { type: 'turn.end', turnId, stopReason: 'end_turn' });
+                await manager.dispatchToNode(conversationId, event.text);
             }
             catch (error) {
                 broadcast(conversationId, { type: 'error', message: String(error?.message ?? error) });
-                broadcast(conversationId, { type: 'turn.end', turnId, stopReason: 'error' });
-            }
-            finally {
                 broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'idle' });
             }
+            // turn.end and idle status come from nodeWsHandler on run.end
             break;
         }
         case 'approval.response': {
@@ -219,7 +192,12 @@ async function handleClientEvent(conversationId, event, manager) {
             break;
         }
         case 'cancel':
-            // TODO: implement cancellation when BindingRuntime supports it
+            {
+                const result = manager.cancelConversationRun(conversationId);
+                if (!result.ok) {
+                    broadcast(conversationId, { type: 'error', message: result.message });
+                }
+            }
             break;
     }
 }

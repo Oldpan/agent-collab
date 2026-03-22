@@ -21,14 +21,26 @@ export function handleNodeWebSocket(socket, registry, broadcast, db) {
         switch (msg.type) {
             case 'node.register': {
                 nodeId = msg.nodeId;
+                const now = Date.now();
                 registry.register({
                     nodeId: msg.nodeId,
                     hostname: msg.hostname,
                     agentTypes: msg.agentTypes,
                     version: msg.version,
                     ws: socket,
-                    lastSeen: Date.now(),
+                    lastSeen: now,
                 });
+                // Persist to DB: update existing pre-provisioned row or insert new
+                const agentTypesJson = JSON.stringify(msg.agentTypes);
+                const existing = db.prepare('SELECT node_id FROM nodes WHERE node_id = ?').get(msg.nodeId);
+                if (existing) {
+                    db.prepare(`UPDATE nodes SET hostname=?, agent_types_json=?, version=?, status='online', last_seen=?,
+             created_at=CASE WHEN created_at=0 THEN ? ELSE created_at END WHERE node_id=?`).run(msg.hostname, agentTypesJson, msg.version, now, now, msg.nodeId);
+                }
+                else {
+                    db.prepare(`INSERT INTO nodes(node_id, hostname, agent_types_json, version, status, last_seen, created_at, provisioned_at, display_name, env_var_keys)
+             VALUES(?,?,?,?,'online',?,?,0,NULL,'[]')`).run(msg.nodeId, msg.hostname, agentTypesJson, msg.version, now, now);
+                }
                 socket.send(JSON.stringify({ type: 'node.ack', nodeId: msg.nodeId }));
                 log.info(`[node-ws] registered: ${msg.nodeId} (${msg.hostname})`);
                 break;
@@ -39,6 +51,10 @@ export function handleNodeWebSocket(socket, registry, broadcast, db) {
             }
             case 'run.event': {
                 log.debug('[node-ws] run.event', { conversationId: msg.conversationId, eventType: msg.event.type });
+                if (msg.event.type === 'conversation.status') {
+                    db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
+                        .run(msg.event.status, Date.now(), msg.conversationId);
+                }
                 broadcast(msg.conversationId, msg.event);
                 // Persist replay-worthy events to core DB immediately
                 if (REPLAY_EVENT_TYPES.has(msg.event.type)) {
@@ -57,7 +73,7 @@ export function handleNodeWebSocket(socket, registry, broadcast, db) {
                     : { runId: msg.runId, stopReason: msg.stopReason ?? 'end_turn' });
                 // Update conversation status in DB
                 db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
-                    .run('idle', Date.now(), msg.conversationId);
+                    .run(msg.error ? 'failed' : 'idle', Date.now(), msg.conversationId);
                 broadcast(msg.conversationId, {
                     type: 'turn.end',
                     turnId: msg.runId,
@@ -69,11 +85,18 @@ export function handleNodeWebSocket(socket, registry, broadcast, db) {
                 broadcast(msg.conversationId, {
                     type: 'conversation.status',
                     conversationId: msg.conversationId,
-                    status: 'idle',
+                    status: msg.error ? 'failed' : 'idle',
                 });
                 break;
             }
             case 'permission.request': {
+                db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
+                    .run('awaiting_approval', Date.now(), msg.conversationId);
+                broadcast(msg.conversationId, {
+                    type: 'conversation.status',
+                    conversationId: msg.conversationId,
+                    status: 'awaiting_approval',
+                });
                 broadcast(msg.conversationId, {
                     type: 'approval.request',
                     requestId: msg.requestId,
@@ -91,6 +114,22 @@ export function handleNodeWebSocket(socket, registry, broadcast, db) {
     socket.on('close', () => {
         if (nodeId) {
             registry.unregister(nodeId);
+            db.prepare(`UPDATE nodes SET status='offline', last_seen=? WHERE node_id=?`)
+                .run(Date.now(), nodeId);
+            const affected = db.prepare(`SELECT id FROM conversations WHERE node_id = ? AND status != 'idle'`).all(nodeId);
+            db.prepare(`UPDATE conversations SET status='failed', updated_at=? WHERE node_id=? AND status != 'idle'`)
+                .run(Date.now(), nodeId);
+            for (const conv of affected) {
+                broadcast(conv.id, {
+                    type: 'conversation.status',
+                    conversationId: conv.id,
+                    status: 'failed',
+                });
+                broadcast(conv.id, {
+                    type: 'error',
+                    message: `Agent node disconnected: ${nodeId}`,
+                });
+            }
             log.info(`[node-ws] disconnected: ${nodeId}`);
         }
     });

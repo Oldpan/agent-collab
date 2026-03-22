@@ -29,6 +29,14 @@ describe('ConversationManager', () => {
         it('应支持指定 agentType', () => {
             const conv = manager.createConversation({ agentType: 'codex_acp', title: 'Codex' });
             expect(conv.agentType).toBe('codex_acp');
+            const row = db
+                .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+                .get(conv.id);
+            const session = db
+                .prepare('SELECT agent_command as agentCommand, agent_args_json as agentArgsJson FROM sessions WHERE session_key = ?')
+                .get(row.sessionKey);
+            expect(session.agentCommand).toBe('npx');
+            expect(JSON.parse(session.agentArgsJson)).toEqual(['-y', '@zed-industries/codex-acp@latest']);
         });
         it('不传参数时使用默认值', () => {
             const conv = manager.createConversation({});
