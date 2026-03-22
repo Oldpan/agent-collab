@@ -2,10 +2,12 @@ import {
   BindingRuntime,
   ToolAuth,
   createRun,
+  createSession,
   finishRun,
   getSession,
   upsertBinding,
   getUiMode,
+  log,
 } from '@agent-collab/runtime-acp';
 import type { Db, UiMode } from '@agent-collab/runtime-acp';
 import type { RunDispatchMsg, NodeToCore } from '@agent-collab/protocol';
@@ -32,6 +34,21 @@ export class Executor {
     const { runId, conversationId, sessionKey, prompt } = msg;
     const bindingKey = `node:${conversationId}:-:node_user`;
 
+    log.info('[executor] dispatch received', { runId, conversationId, sessionKey });
+
+    // Ensure local session row exists (bindings has FK → sessions)
+    const existingSession = getSession(this.db, sessionKey);
+    if (!existingSession) {
+      createSession(this.db, {
+        sessionKey,
+        agentCommand: this.config.acpAgentCommand,
+        agentArgs: this.config.acpAgentArgs,
+        cwd: msg.workspacePath ?? this.config.workspaceRoot,
+        loadSupported: false,
+      });
+      log.debug('[executor] created local session', { sessionKey, conversationId });
+    }
+
     // Ensure binding exists
     upsertBinding(
       this.db,
@@ -39,16 +56,7 @@ export class Executor {
       sessionKey,
     );
 
-    const sess = getSession(this.db, sessionKey);
-    if (!sess) {
-      this.send({
-        type: 'run.end',
-        runId,
-        conversationId,
-        error: `Missing session: ${sessionKey}`,
-      });
-      return;
-    }
+    const sess = getSession(this.db, sessionKey)!;
 
     let runtime = this.runtimes.get(sessionKey);
     if (!runtime) {
@@ -93,9 +101,11 @@ export class Executor {
         actorUserId: 'node_user',
       });
       finishRun(this.db, { runId, stopReason: result.stopReason });
+      log.info('[executor] run finished', { runId, conversationId, stopReason: result.stopReason });
       this.send({ type: 'run.end', runId, conversationId, stopReason: result.stopReason });
     } catch (error: any) {
       const errMsg = String(error?.message ?? error);
+      log.warn('[executor] run error', { runId, conversationId, error: errMsg });
       finishRun(this.db, { runId, error: errMsg });
       this.send({ type: 'run.end', runId, conversationId, error: errMsg });
     }

@@ -45,11 +45,13 @@ export function handleNodeWebSocket(
       }
 
       case 'run.event': {
+        log.debug('[node-ws] run.event', { conversationId: msg.conversationId, eventType: msg.event.type });
         broadcast(msg.conversationId, msg.event);
         break;
       }
 
       case 'run.end': {
+        log.info('[node-ws] run.end', { runId: msg.runId, conversationId: msg.conversationId, error: msg.error ?? null });
         // Update conversation status in DB
         db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
           .run('idle', Date.now(), msg.conversationId);

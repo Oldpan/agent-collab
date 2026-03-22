@@ -206,6 +206,7 @@ async function handleClientEvent(
 
       if (conv?.nodeId) {
         // Remote: dispatch to node, events come back via run.event
+        log.info('[ws] prompt → remote node', { conversationId, nodeId: conv.nodeId });
         broadcast(conversationId, {
           type: 'conversation.status',
           conversationId,

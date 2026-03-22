@@ -188,11 +188,16 @@ export class ConversationManager {
     if (!row) throw new Error(`Unknown conversation: ${conversationId}`);
 
     const node = this.nodeRegistry?.getNode(row.nodeId);
-    if (!node) throw new Error(`Node not connected: ${row.nodeId}`);
+    if (!node) {
+      log.warn('[conv-mgr] node not connected', { nodeId: row.nodeId, conversationId });
+      throw new Error(`Node not connected: ${row.nodeId}`);
+    }
 
     const runId = randomUUID();
     createRun(this.db, { runId, sessionKey: row.sessionKey, promptText });
     this.updateStatus(conversationId, 'busy');
+
+    log.info('[conv-mgr] dispatching to node', { nodeId: row.nodeId, conversationId, runId });
 
     this.nodeRegistry!.send(row.nodeId, {
       type: 'run.dispatch',
