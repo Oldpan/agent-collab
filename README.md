@@ -15,6 +15,7 @@
 | [protocol.md](./architecture/protocol.md) | WebSocket 协议（前端↔core、node↔core） |
 | [database.md](./architecture/database.md) | 数据库表结构、migration 历史 |
 | [configuration.md](./architecture/configuration.md) | core 和 agent-node 配置项 |
+| [permissions.md](./architecture/permissions.md) | 权限系统：宿主层 vs Claude Code 内部层、实际控制方式 |
 | [roadmap.md](./architecture/roadmap.md) | 已完成阶段 + 待开发 TODO |
 
 ---
