@@ -76,15 +76,33 @@ agent-collab/
 ## 核心数据流
 
 ```
-用户浏览器 ──WS──▶ apps/core ──WS──▶ apps/agent-node ──stdio──▶ ACP Agent (Claude Code)
-                     │                       │
-                     │ SQLite (sessions,      │ SQLite (local)
-                     │  runs, events, …)      │
-                     │                       │
-                  REST API              本地执行 BindingRuntime
+用户浏览器 ──WS──▶ apps/core ──(本地)──▶ BindingRuntime ──stdio──▶ ACP Agent
+                     │
+                     └──(远端, conv.nodeId set)──WS──▶ apps/agent-node ──stdio──▶ ACP Agent
+                                                              │
+                                              run.event / run.end 流式回传 ──▶ core ──▶ 前端
 ```
 
-1. 用户在前端发送 prompt → 通过 WebSocket 到 core
-2. core 的 `ConversationManager` 查找或创建 `BindingRuntime`（本地或远端节点）
-3. BindingRuntime 通过 ACP JSON-RPC 协议与 Agent 子进程通信
-4. Agent 输出流式回传：agent → BindingRuntime → OutboundSink → WebSocket → 前端
+**本地路由**（`conv.nodeId` 为空）：
+1. `wsHandler` 收到 prompt → `ConversationManager.sendPrompt()` → 本地 `BindingRuntime` → ACP Agent 子进程
+2. Agent 输出经 `OutboundSink` → `WsSink` → broadcast → 前端
+
+**远端路由**（`conv.nodeId` 已设置）：
+1. `wsHandler` 收到 prompt → `ConversationManager.dispatchToNode()` → `NodeRegistry.send(run.dispatch)`
+2. `agent-node` 的 `Executor` 收到 `run.dispatch` → 本地 `BindingRuntime` 执行
+3. Agent 输出经 `NodeSink` → `run.event` → core `nodeWsHandler` → broadcast → 前端
+4. 执行结束 → `run.end` → core 更新 conversations 状态 → broadcast `turn.end` + `idle`
+
+## 日志
+
+使用 `packages/runtime-acp/src/logging.ts` 的 `log` 对象，通过 `LOG_LEVEL` 环境变量控制级别（`debug` / `info` / `warn` / `error`，默认 `info`）。
+
+远端执行链路的关键 log 点：
+
+| 位置 | 内容 |
+|------|------|
+| `wsHandler` `[ws] prompt → remote node` | prompt 路由到远端，含 nodeId |
+| `conversationManager` `[conv-mgr] dispatching to node` | dispatch 发出，含 runId |
+| `executor` `[executor] dispatch received` | 节点收到任务，含 sessionKey |
+| `executor` `[executor] run finished/error` | 执行结果 |
+| `nodeWsHandler` `[node-ws] run.end` | core 收到结束信号 |

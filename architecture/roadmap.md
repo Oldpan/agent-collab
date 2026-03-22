@@ -34,19 +34,29 @@
 - [x] 配置目录统一为 `~/.agent-collab`（旧 `~/.cli-gateway` 兼容读取）
 - [x] 测试覆盖：channel CRUD + migration v9，38 个测试全部通过
 
-> 前端 Channel / Thread UI 暂时写死为 `default` channel，待 Phase 4 前端部分完善。
+> 前端 Channel / Thread UI 暂时写死为 `default` channel，待后续完善。
+
+### Phase 4 — 远端调度集成（已完成，未 commit）
+
+- [x] `packages/protocol`：`CreateConversationRequest` 新增 `nodeId?`，`ConversationInfo` 新增 `nodeId?`
+- [x] `packages/runtime-acp`：migration v10（`conversations.node_id` 列）
+- [x] `apps/core`：`ConversationManager` 接受 `NodeRegistry`，存储 `nodeId`，新增 `dispatchToNode()` 方法
+- [x] `apps/core`：`handleApproval` 按 `nodeId` 路由 `permission.response` 到对应节点
+- [x] `apps/core`：`wsHandler` prompt 按 `conv.nodeId` 分支本地执行 vs 远端 dispatch
+- [x] `apps/core`：`nodeWsHandler` `run.end` 时更新 conversations 状态到 DB
+- [x] `apps/core`：`main.ts` 创建 `NodeRegistry` 并注入 `ConversationManager`
+- [x] `apps/web`：`api.ts` 新增 `listNodes()`，`Sidebar` 创建表单加节点选择器（Local / 远端节点）
+- [x] Bug fix：`executor.ts` 在 `upsertBinding` 前先 `createSession`，修复 FK 约束失败
+- [x] 日志：remote 执行链路各关键节点加结构化 `log`（`wsHandler`、`conversationManager`、`nodeWsHandler`、`executor`）
+- [x] 38 个测试全部通过，migration version 断言升至 v10
 
 ---
 
 ## 待开发
 
-### Phase 4 — 前端多 Channel UI + 远端调度集成
+### Phase 4 剩余 — 前端多 Channel UI
 
 - [ ] 前端 Channel / Thread 侧边栏 UI（创建频道、切换频道、thread 列表）
-- [ ] `RuntimeAdapter` 抽象（`LocalRuntimeAdapter` / `RemoteNodeAdapter`）
-- [ ] `ConversationManager` 按 agentType 选择本地或远端节点执行
-- [ ] 前端节点选择 UI（创建会话时选择目标节点）
-- [ ] `permission.response` 路由到对应节点的等待中的 BindingRuntime
 
 ### Phase 5 — 生产就绪
 

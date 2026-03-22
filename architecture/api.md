@@ -5,7 +5,7 @@
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/api/conversations` | 获取所有会话列表 |
-| `POST` | `/api/conversations` | 创建会话 (`{ agentType?, workspacePath?, title?, channelId?, envVars? }`) |
+| `POST` | `/api/conversations` | 创建会话 (`{ agentType?, workspacePath?, title?, channelId?, envVars?, nodeId? }`) |
 | `DELETE` | `/api/conversations/:id` | 删除会话 |
 | `GET` | `/api/conversations/:id/history` | 获取会话历史（runs 列表） |
 | `GET` | `/api/channels` | 获取所有 channel 列表 |
@@ -17,4 +17,5 @@
 
 - 会话创建时可传入 `envVars` 对象，注入到 Agent 进程环境变量中
 - `channelId` 用于将会话归属到指定频道（默认 `default`）
-- `agentType` 当前支持 `claude-code`，后续可扩展 `codex` 等
+- `agentType` 当前支持 `claude_acp` / `codex_acp`
+- `nodeId` 指定远端执行节点 ID（从 `GET /api/nodes` 获取）；不传则本地执行
