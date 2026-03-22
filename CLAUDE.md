@@ -46,14 +46,24 @@ apps/web               — React frontend: Sidebar, ChatPanel, WebSocket streami
 
 `packages/runtime-acp/package.json` points to `dist/index.js`. **After editing any file in `packages/runtime-acp/src/`, you must run `pnpm --filter @agent-collab/runtime-acp run build` before running tests or other apps will use stale code.** Tests failing with unexpected errors after editing runtime-acp almost always indicate a missing rebuild.
 
-### Prompt routing: local vs remote
+### Prompt routing: remote-only
 
 `apps/core/src/web/wsHandler.ts` checks `conv.nodeId` on every incoming `prompt` event:
 
-- **Local** (`nodeId` null): calls `ConversationManager.sendPrompt()` → `BindingRuntime` runs in-process → `WsSink` broadcasts events
-- **Remote** (`nodeId` set): calls `ConversationManager.dispatchToNode()` → `NodeRegistry.send(run.dispatch)` → agent-node executes and streams `run.event` messages back → `nodeWsHandler` broadcasts to frontend
+- **No `nodeId`**: immediately broadcasts `{ type: 'error', message: 'No agent node assigned...' }` — no local execution path exists
+- **`nodeId` set**: calls `ConversationManager.dispatchToNode()` → `NodeRegistry.send(run.dispatch)` → agent-node executes and streams `run.event` messages back → `nodeWsHandler` broadcasts to frontend
 
-For remote runs, `wsHandler` does **not** broadcast `turn.begin`, `turn.end`, or `idle` status — all of those come from the node via `run.event` / `run.end`.
+`wsHandler` does **not** broadcast `turn.begin`, `turn.end`, or `idle` — all of those come from the node via `run.event` / `run.end`.
+
+### Machine pre-provisioning
+
+Machines (remote nodes) can be registered in DB before the physical machine connects:
+1. `POST /api/machines` → inserts `nodes` row with `status='pending'`, returns `nodeId`
+2. UI generates a connection command containing `NODE_ID=<nodeId>`
+3. Running the command on the target machine → agent-node sends `node.register` → `nodeWsHandler` UPSERTs the row → `status='online'`
+4. Disconnect → `UPDATE nodes SET status='offline'`
+
+Machine CRUD lives in `ConversationManager` (`createMachine`, `listMachines`, `getMachine`, `deleteMachine`). `listMachines()` overlays live NodeRegistry status on top of DB-persisted status via `rowToMachineInfo(row, isOnline)`.
 
 ### agent-node executor FK constraint
 
@@ -69,10 +79,11 @@ Migrations live in `packages/runtime-acp/src/db/migrations.ts`. Rules:
 ### ConversationManager owns all session lifecycle
 
 `apps/core/src/web/conversationManager.ts` is the central coordinator:
-- `createConversation()` — creates session + binding rows in DB, stores `nodeId`
-- `sendPrompt()` — local execution path, manages `BindingRuntime` lifecycle with LRU eviction
-- `dispatchToNode()` — remote path, fire-and-forget dispatch via `NodeRegistry`
-- `handleApproval()` — routes `permission.response` to local `BindingRuntime` or remote node based on `nodeId`
+- `createMachine()` / `listMachines()` / `getMachine()` / `deleteMachine()` — Machine (node) CRUD; `deleteMachine` nulls out `agents.node_id` before deleting
+- `createAgent()` / `listAgents()` / `getAgent()` / `updateAgent()` / `deleteAgent()` — Agent CRUD
+- `createConversation()` — creates session + binding rows in DB, inherits `nodeId`/`agentType`/`workspacePath`/`envVars` from agent if `agentId` provided
+- `dispatchToNode()` — builds `contextText` (system prompt + platform memory + local memory), fire-and-forget dispatch via `NodeRegistry`
+- `handleApproval()` — routes `permission.response` to remote node based on `nodeId`
 
 ### Logging
 

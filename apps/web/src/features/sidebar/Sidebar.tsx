@@ -5,21 +5,24 @@ import { cn } from "@/lib/utils";
 import {
   PlusIcon, TrashIcon, XIcon, ChevronRightIcon, ChevronDownIcon, PencilIcon,
 } from "lucide-react";
-import { useCallback, useState, useEffect } from "react";
+import { useCallback, useState } from "react";
 import type {
-  ConversationInfo, AgentInfo, ChannelInfo,
-  AgentType, CreateAgentRequest, CreateConversationRequest, NodeInfoRest, UpdateAgentRequest,
+  AgentInfo, MachineInfo,
+  AgentType, CreateAgentRequest, CreateConversationRequest,
+  UpdateAgentRequest, CreateMachineRequest, ConversationInfo,
 } from "@agent-collab/protocol";
-import { listNodes } from "@/lib/api";
 import { AgentDetailPanel } from "./AgentDetailPanel";
+import { MachineCreatePanel } from "./MachineCreatePanel";
 import defaultSystemPrompt from "@/prompts/default-system-prompt.md?raw";
 
 type SidebarProps = {
-  channels: ChannelInfo[];
+  machines: MachineInfo[];
   agents: AgentInfo[];
   conversations: ConversationInfo[];
   selectedId: string | null;
   onSelect: (id: string) => void;
+  onCreateMachine: (req: CreateMachineRequest) => Promise<MachineInfo>;
+  onDeleteMachine: (id: string) => void;
   onCreateAgent: (req: CreateAgentRequest) => void;
   onUpdateAgent: (id: string, req: UpdateAgentRequest) => Promise<void>;
   onDeleteAgent: (id: string) => void;
@@ -38,36 +41,40 @@ function formatRelativeTime(ts: number): string {
   return `${Math.floor(hours / 24)}d ago`;
 }
 
+function StatusDot({ status }: { status: MachineInfo["status"] }) {
+  return (
+    <span
+      className={cn("inline-block size-1.5 rounded-full shrink-0", {
+        "bg-green-500": status === "online",
+        "bg-yellow-400": status === "pending",
+        "bg-muted-foreground/40": status === "offline",
+      })}
+      title={status}
+    />
+  );
+}
+
 export function Sidebar({
-  channels, agents, conversations, selectedId,
-  onSelect, onCreateAgent, onUpdateAgent, onDeleteAgent,
+  machines, agents, conversations, selectedId,
+  onSelect, onCreateMachine, onDeleteMachine,
+  onCreateAgent, onUpdateAgent, onDeleteAgent,
   onCreateConversation, onDeleteConversation,
 }: SidebarProps) {
-  const [expandedChannels, setExpandedChannels] = useState<Set<string>>(new Set(["default"]));
+  const [expandedMachines, setExpandedMachines] = useState<Set<string>>(new Set());
   const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
+  const [showCreateMachine, setShowCreateMachine] = useState(false);
 
-  // Create agent form state
-  const [createAgentInChannel, setCreateAgentInChannel] = useState<string | null>(null);
+  // Create agent form state (keyed by machineNodeId)
+  const [createAgentInMachine, setCreateAgentInMachine] = useState<string | null>(null);
   const [newAgentName, setNewAgentName] = useState("");
   const [newAgentType, setNewAgentType] = useState<AgentType>("claude_acp");
   const [newAgentSystemPrompt, setNewAgentSystemPrompt] = useState(defaultSystemPrompt);
-  const [nodes, setNodes] = useState<NodeInfoRest[]>([]);
-  const [newAgentNodeId, setNewAgentNodeId] = useState<string | undefined>(undefined);
 
-  // Create conversation form state
-  const [createConvInAgent, setCreateConvInAgent] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (createAgentInChannel !== null) {
-      listNodes().then(setNodes).catch(() => setNodes([]));
-    }
-  }, [createAgentInChannel]);
-
-  const toggleChannel = (channelId: string) => {
-    setExpandedChannels((prev) => {
+  const toggleMachine = (nodeId: string) => {
+    setExpandedMachines((prev) => {
       const next = new Set(prev);
-      next.has(channelId) ? next.delete(channelId) : next.add(channelId);
+      next.has(nodeId) ? next.delete(nodeId) : next.add(nodeId);
       return next;
     });
   };
@@ -81,90 +88,117 @@ export function Sidebar({
   };
 
   const handleCreateAgent = useCallback(() => {
-    if (!newAgentName.trim() || !createAgentInChannel) return;
+    if (!newAgentName.trim() || !createAgentInMachine) return;
     onCreateAgent({
       name: newAgentName.trim(),
       agentType: newAgentType,
-      channelId: createAgentInChannel,
       systemPrompt: newAgentSystemPrompt.trim() || undefined,
-      nodeId: newAgentNodeId,
+      nodeId: createAgentInMachine,
     });
-    setCreateAgentInChannel(null);
+    setCreateAgentInMachine(null);
     setNewAgentName("");
     setNewAgentSystemPrompt(defaultSystemPrompt);
-    setNewAgentNodeId(undefined);
-  }, [newAgentName, newAgentType, newAgentSystemPrompt, newAgentNodeId, createAgentInChannel, onCreateAgent]);
+  }, [newAgentName, newAgentType, newAgentSystemPrompt, createAgentInMachine, onCreateAgent]);
 
-  const handleCreateConversation = useCallback((agentId: string, channelId: string) => {
+  const handleCreateConversation = useCallback((agentId: string) => {
     const agent = agents.find((a) => a.agentId === agentId);
     if (!agent) return;
     onCreateConversation({
       agentId,
-      channelId,
       agentType: agent.agentType,
       nodeId: agent.nodeId ?? undefined,
       workspacePath: agent.workspacePath ?? undefined,
     });
-    setCreateConvInAgent(null);
   }, [agents, onCreateConversation]);
 
-  const openCreateAgentForm = (channelId: string, e: React.MouseEvent) => {
+  const openCreateAgentForm = (nodeId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setCreateAgentInChannel(channelId);
+    setCreateAgentInMachine(nodeId);
     setNewAgentName("");
     setNewAgentSystemPrompt(defaultSystemPrompt);
-    setNewAgentNodeId(undefined);
-    setExpandedChannels((prev) => new Set(prev).add(channelId));
+    setExpandedMachines((prev) => new Set(prev).add(nodeId));
   };
-
-  // All channels — ensure "default" is always first
-  const sortedChannels = [...channels].sort((a, b) =>
-    a.channelId === "default" ? -1 : b.channelId === "default" ? 1 : 0,
-  );
 
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-sidebar-border px-3 py-3">
-        <h1 className="text-sm font-semibold">Agents</h1>
+        <h1 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+          Machines &amp; Agents
+        </h1>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          title="Add machine"
+          onClick={() => setShowCreateMachine((v) => !v)}
+        >
+          <PlusIcon className="size-3" />
+        </Button>
       </div>
+
+      {/* Create machine panel */}
+      {showCreateMachine && (
+        <MachineCreatePanel
+          onClose={() => setShowCreateMachine(false)}
+          onCreate={async (req) => {
+            const m = await onCreateMachine(req);
+            setExpandedMachines((prev) => new Set(prev).add(m.nodeId));
+            return m;
+          }}
+        />
+      )}
 
       <ScrollArea className="flex-1">
         <div className="flex flex-col p-1.5 gap-0.5">
-          {sortedChannels.map((channel) => {
-            const channelAgents = agents.filter((a) => a.channelId === channel.channelId);
-            const isExpanded = expandedChannels.has(channel.channelId);
+          {machines.length === 0 && (
+            <p className="px-3 py-4 text-[10px] text-muted-foreground text-center">
+              No machines yet — click + to add one
+            </p>
+          )}
+
+          {machines.map((machine) => {
+            const machineAgents = agents.filter((a) => a.nodeId === machine.nodeId);
+            const isExpanded = expandedMachines.has(machine.nodeId);
 
             return (
-              <div key={channel.channelId}>
-                {/* Channel row */}
+              <div key={machine.nodeId}>
+                {/* Machine row */}
                 <button
                   type="button"
                   className="group flex w-full items-center gap-1.5 rounded px-2 py-1 text-left hover:bg-accent/50 cursor-pointer"
-                  onClick={() => toggleChannel(channel.channelId)}
+                  onClick={() => toggleMachine(machine.nodeId)}
                 >
                   {isExpanded
                     ? <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
                     : <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground" />
                   }
-                  <span className="flex-1 text-xs font-medium text-muted-foreground truncate">
-                    {channel.name}
-                  </span>
-                  <button
-                    type="button"
-                    className="opacity-0 group-hover:opacity-100 p-0.5 rounded hover:bg-accent cursor-pointer"
-                    title="New agent in this channel"
-                    onClick={(e) => openCreateAgentForm(channel.channelId, e)}
-                  >
-                    <PlusIcon className="size-3 text-muted-foreground" />
-                  </button>
+                  <StatusDot status={machine.status} />
+                  <span className="flex-1 text-xs font-medium truncate">{machine.name}</span>
+                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                    <button
+                      type="button"
+                      className="p-0.5 rounded hover:bg-accent cursor-pointer"
+                      title="Add agent to this machine"
+                      onClick={(e) => openCreateAgentForm(machine.nodeId, e)}
+                    >
+                      <PlusIcon className="size-3 text-muted-foreground" />
+                    </button>
+                    <button
+                      type="button"
+                      className="p-0.5 rounded hover:bg-accent cursor-pointer"
+                      title="Delete machine"
+                      onClick={(e) => { e.stopPropagation(); onDeleteMachine(machine.nodeId); }}
+                    >
+                      <TrashIcon className="size-3 text-muted-foreground hover:text-destructive" />
+                    </button>
+                  </div>
                 </button>
 
-                {/* Channel content */}
+                {/* Machine content */}
                 {isExpanded && (
                   <div className="ml-3 flex flex-col gap-0.5">
                     {/* Create agent form */}
-                    {createAgentInChannel === channel.channelId && (
+                    {createAgentInMachine === machine.nodeId && (
                       <div className="border border-sidebar-border rounded p-2 space-y-1.5 my-1 bg-sidebar-accent/20">
                         <input
                           autoFocus
@@ -172,9 +206,11 @@ export function Sidebar({
                           placeholder="Agent name"
                           value={newAgentName}
                           onChange={(e) => setNewAgentName(e.target.value)}
-                          onKeyDown={(e) => { if (e.key === "Enter") handleCreateAgent(); if (e.key === "Escape") setCreateAgentInChannel(null); }}
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter") handleCreateAgent();
+                            if (e.key === "Escape") setCreateAgentInMachine(null);
+                          }}
                         />
-                        {/* Agent type */}
                         <div className="flex gap-1">
                           {(["claude_acp", "codex_acp"] as AgentType[]).map((t) => (
                             <button
@@ -182,7 +218,9 @@ export function Sidebar({
                               type="button"
                               className={cn(
                                 "flex-1 rounded px-1 py-0.5 text-[10px] border cursor-pointer",
-                                newAgentType === t ? "bg-primary text-primary-foreground border-primary" : "border-input hover:bg-accent",
+                                newAgentType === t
+                                  ? "bg-primary text-primary-foreground border-primary"
+                                  : "border-input hover:bg-accent",
                               )}
                               onClick={() => setNewAgentType(t)}
                             >
@@ -190,54 +228,46 @@ export function Sidebar({
                             </button>
                           ))}
                         </div>
-                        {/* System prompt (optional) */}
                         <textarea
                           className="w-full rounded border border-input bg-background px-1.5 py-0.5 text-xs resize-none min-h-[40px] placeholder:text-muted-foreground"
                           placeholder="System prompt (optional)"
                           value={newAgentSystemPrompt}
                           onChange={(e) => setNewAgentSystemPrompt(e.target.value)}
                         />
-                        {/* Node selector */}
-                        {nodes.length > 0 && (
-                          <select
-                            className="w-full rounded border border-input bg-background px-1.5 py-0.5 text-xs"
-                            value={newAgentNodeId ?? ""}
-                            onChange={(e) => setNewAgentNodeId(e.target.value || undefined)}
-                          >
-                            <option value="">Local</option>
-                            {nodes.map((n) => (
-                              <option key={n.nodeId} value={n.nodeId}>
-                                {n.hostname} ({n.nodeId})
-                              </option>
-                            ))}
-                          </select>
-                        )}
                         <div className="flex gap-1">
-                          <Button size="sm" className="flex-1 text-xs h-6" onClick={handleCreateAgent} disabled={!newAgentName.trim()}>
+                          <Button
+                            size="sm"
+                            className="flex-1 text-xs h-6"
+                            onClick={handleCreateAgent}
+                            disabled={!newAgentName.trim()}
+                          >
                             Create
                           </Button>
-                          <Button size="sm" variant="ghost" className="text-xs h-6 px-2" onClick={() => setCreateAgentInChannel(null)}>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="text-xs h-6 px-2"
+                            onClick={() => setCreateAgentInMachine(null)}
+                          >
                             <XIcon className="size-3" />
                           </Button>
                         </div>
                       </div>
                     )}
 
-                    {/* Agents in this channel */}
-                    {channelAgents.length === 0 && createAgentInChannel !== channel.channelId && (
+                    {machineAgents.length === 0 && createAgentInMachine !== machine.nodeId && (
                       <p className="px-2 py-2 text-[10px] text-muted-foreground">
                         No agents — click + to create one
                       </p>
                     )}
 
-                    {channelAgents.map((agent) => {
+                    {machineAgents.map((agent) => {
                       const agentConvs = conversations.filter((c) => c.agentId === agent.agentId);
                       const isAgentExpanded = expandedAgents.has(agent.agentId);
                       const isEditing = editingAgentId === agent.agentId;
 
                       return (
                         <div key={agent.agentId}>
-                          {/* Agent row */}
                           <AgentRow
                             agent={agent}
                             conversationCount={agentConvs.length}
@@ -248,7 +278,6 @@ export function Sidebar({
                             onDelete={() => onDeleteAgent(agent.agentId)}
                           />
 
-                          {/* Agent detail panel */}
                           {isEditing && (
                             <AgentDetailPanel
                               agent={agent}
@@ -257,7 +286,6 @@ export function Sidebar({
                             />
                           )}
 
-                          {/* Conversations under agent */}
                           {isAgentExpanded && (
                             <div className="ml-3 flex flex-col gap-0.5 mt-0.5">
                               {agentConvs.map((conv) => (
@@ -270,26 +298,17 @@ export function Sidebar({
                                 />
                               ))}
                               {agentConvs.length === 0 && (
-                                <p className="text-[10px] text-muted-foreground px-2 py-1">No threads yet</p>
+                                <p className="text-[10px] text-muted-foreground px-2 py-1">
+                                  No threads yet
+                                </p>
                               )}
-                              {createConvInAgent === agent.agentId ? (
-                                <div className="flex gap-1 mt-0.5">
-                                  <Button size="sm" className="flex-1 text-xs h-6" onClick={() => handleCreateConversation(agent.agentId, channel.channelId)}>
-                                    + New Thread
-                                  </Button>
-                                  <Button size="sm" variant="ghost" className="h-6 px-1.5" onClick={() => setCreateConvInAgent(null)}>
-                                    <XIcon className="size-3" />
-                                  </Button>
-                                </div>
-                              ) : (
-                                <button
-                                  type="button"
-                                  className="text-left text-[10px] text-muted-foreground px-2 py-0.5 rounded hover:bg-accent/50 cursor-pointer"
-                                  onClick={() => handleCreateConversation(agent.agentId, channel.channelId)}
-                                >
-                                  + New Thread
-                                </button>
-                              )}
+                              <button
+                                type="button"
+                                className="text-left text-[10px] text-muted-foreground px-2 py-0.5 rounded hover:bg-accent/50 cursor-pointer"
+                                onClick={() => handleCreateConversation(agent.agentId)}
+                              >
+                                + New Thread
+                              </button>
                             </div>
                           )}
                         </div>
@@ -346,11 +365,6 @@ function AgentRow({ agent, conversationCount, isExpanded, isEditing, onToggle, o
         <Badge variant="secondary" className="text-[9px] px-1 py-0">
           {agent.agentType === "claude_acp" ? "Claude" : "Codex"}
         </Badge>
-        {agent.nodeId && (
-          <Badge variant="outline" className="text-[9px] px-1 py-0 hidden group-hover:flex">
-            {agent.nodeId.slice(0, 8)}
-          </Badge>
-        )}
         <button
           type="button"
           className={cn(

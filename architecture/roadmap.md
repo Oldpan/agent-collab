@@ -50,15 +50,34 @@
 - [x] 日志：remote 执行链路各关键节点加结构化 `log`（`wsHandler`、`conversationManager`、`nodeWsHandler`、`executor`）
 - [x] 38 个测试全部通过，migration version 断言升至 v10
 
+### Phase 5 — Agent 第一公民（已完成）
+
+- [x] `packages/runtime-acp`：migration v11（`agents` 表）、migration v12（`agents.channel_id`）
+- [x] `packages/protocol`：新增 `AgentInfo`、`CreateAgentRequest`、`UpdateAgentRequest` 类型
+- [x] `apps/core`：`ConversationManager` 新增 Agent CRUD（`createAgent` / `listAgents` / `getAgent` / `updateAgent` / `deleteAgent`）
+- [x] `apps/core`：`server.ts` 新增 `/api/agents` REST 路由（GET/POST/PATCH/DELETE/GET-conversations）
+- [x] `apps/core`：`dispatchToNode` 构建 `contextText`（System Prompt + Platform Memory + Local Memory）注入 ACP session
+- [x] `packages/memory`：新包 `@agent-collab/memory`，`ClaudeMemoryBackend`（读 `~/.claude/projects/…/MEMORY.md`）+ `WorkspaceMemoryBackend`（读 `<agentDir>/MEMORY.md`）
+- [x] `apps/web`：`useAgents` hook，`AgentDetailPanel`（名称 + Platform Memory 编辑），侧边栏改为 Channel → Agent → Conversations 三级
+- [x] `apps/core/src/__tests__/conversationManager.test.ts`：Agent CRUD 测试，migration 断言升至 v12
+
+### Phase 6 — Machine 预置 + 纯远端架构（已完成）
+
+- [x] **移除本地执行路径**：`wsHandler` 不再支持 `nodeId=null`；`sendPrompt()`、`BindingRuntime`、`WsSink` 从 core 中删除
+- [x] `packages/runtime-acp`：migration v13（`nodes` 表新增 `display_name TEXT`、`env_var_keys TEXT`、`provisioned_at INTEGER`）
+- [x] `packages/protocol`：新增 `MachineInfo`、`CreateMachineRequest` 类型
+- [x] `apps/core`：`ConversationManager` 新增 Machine CRUD（`createMachine` / `listMachines` / `getMachine` / `deleteMachine`）
+- [x] `apps/core`：`nodeWsHandler` `node.register` 改为 UPSERT（pending → online），断线时 UPDATE `status='offline'`
+- [x] `apps/core`：`server.ts` 新增 `/api/machines` REST 路由（GET/POST/GET:id/DELETE:id）
+- [x] `apps/web`：新增 `useMachines` hook、`MachineCreatePanel`（生成含 `NODE_ID` 的连接命令，一键复制）
+- [x] `apps/web`：侧边栏重构为 Machine → Agent → Conversations 三级，Machine 状态圆点（绿/黄/灰），移除 node 选择下拉
+- [x] 测试：`conversationManager.test.ts` + `migrations.test.ts` 断言升至 v13，`server.test.ts` 更新 WS prompt 测试（无 nodeId → error 事件）
+
 ---
 
 ## 待开发
 
-### Phase 4 剩余 — 前端多 Channel UI
-
-- [ ] 前端 Channel / Thread 侧边栏 UI（创建频道、切换频道、thread 列表）
-
-### Phase 5 — 生产就绪
+### Phase 7 — 生产就绪
 
 - [ ] 取消执行（cancel）支持
 - [ ] 节点断线重连 + 任务恢复

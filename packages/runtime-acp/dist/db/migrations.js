@@ -1,4 +1,4 @@
-const LATEST_VERSION = 12;
+const LATEST_VERSION = 13;
 export function migrate(db) {
     db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -253,5 +253,11 @@ export function migrate(db) {
     if (current < 12) {
         db.exec(`ALTER TABLE agents ADD COLUMN channel_id TEXT NOT NULL DEFAULT 'default' REFERENCES channels(channel_id);`);
         db.exec(`UPDATE schema_version SET version = 12;`);
+    }
+    if (current < 13) {
+        db.exec(`ALTER TABLE nodes ADD COLUMN display_name TEXT;`);
+        db.exec(`ALTER TABLE nodes ADD COLUMN env_var_keys TEXT;`);
+        db.exec(`ALTER TABLE nodes ADD COLUMN provisioned_at INTEGER NOT NULL DEFAULT 0;`);
+        db.exec(`UPDATE schema_version SET version = 13;`);
     }
 }

@@ -4,7 +4,7 @@ import fastifyWebSocket from '@fastify/websocket';
 
 import type { Db } from '@agent-collab/runtime-acp';
 import { log } from '@agent-collab/runtime-acp';
-import type { CreateConversationRequest, CreateChannelRequest, CreateAgentRequest, UpdateAgentRequest } from '@agent-collab/protocol';
+import type { CreateConversationRequest, CreateChannelRequest, CreateAgentRequest, UpdateAgentRequest, CreateMachineRequest } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
 import { handleWebSocket, broadcast } from './wsHandler.js';
 import { handleNodeWebSocket } from './nodeWsHandler.js';
@@ -172,9 +172,40 @@ export async function startServer(params: {
     return conversationManager.listConversations({ channelId: req.params.id });
   });
 
+  // ─── Machine routes ───
+
+  app.get('/api/machines', async () => {
+    return conversationManager.listMachines();
+  });
+
+  app.post<{ Body: CreateMachineRequest }>('/api/machines', async (req, reply) => {
+    const body = (req.body ?? {}) as CreateMachineRequest;
+    if (!body.name) {
+      reply.code(400);
+      return { error: 'name is required' };
+    }
+    const machine = conversationManager.createMachine(body);
+    reply.code(201);
+    return machine;
+  });
+
+  app.get<{ Params: { id: string } }>('/api/machines/:id', async (req, reply) => {
+    const machine = conversationManager.getMachine(req.params.id);
+    if (!machine) { reply.code(404); return { error: 'Not found' }; }
+    return machine;
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/machines/:id', async (req, reply) => {
+    const machine = conversationManager.getMachine(req.params.id);
+    if (!machine) { reply.code(404); return { error: 'Not found' }; }
+    conversationManager.deleteMachine(req.params.id);
+    reply.code(204);
+    return;
+  });
+
   // ─── Node REST routes ───
 
-  // List connected agent nodes
+  // List connected agent nodes (in-memory only, for backward compat)
   app.get('/api/nodes', async () => {
     return nodeRegistry.listNodes();
   });

@@ -38,14 +38,31 @@ export function handleNodeWebSocket(
     switch (msg.type) {
       case 'node.register': {
         nodeId = msg.nodeId;
+        const now = Date.now();
         registry.register({
           nodeId: msg.nodeId,
           hostname: msg.hostname,
           agentTypes: msg.agentTypes,
           version: msg.version,
           ws: socket,
-          lastSeen: Date.now(),
+          lastSeen: now,
         });
+
+        // Persist to DB: update existing pre-provisioned row or insert new
+        const agentTypesJson = JSON.stringify(msg.agentTypes);
+        const existing = db.prepare('SELECT node_id FROM nodes WHERE node_id = ?').get(msg.nodeId);
+        if (existing) {
+          db.prepare(
+            `UPDATE nodes SET hostname=?, agent_types_json=?, version=?, status='online', last_seen=?,
+             created_at=CASE WHEN created_at=0 THEN ? ELSE created_at END WHERE node_id=?`
+          ).run(msg.hostname, agentTypesJson, msg.version, now, now, msg.nodeId);
+        } else {
+          db.prepare(
+            `INSERT INTO nodes(node_id, hostname, agent_types_json, version, status, last_seen, created_at, provisioned_at, display_name, env_var_keys)
+             VALUES(?,?,?,?,'online',?,?,0,NULL,'[]')`
+          ).run(msg.nodeId, msg.hostname, agentTypesJson, msg.version, now, now);
+        }
+
         socket.send(JSON.stringify({ type: 'node.ack', nodeId: msg.nodeId }));
         log.info(`[node-ws] registered: ${msg.nodeId} (${msg.hostname})`);
         break;
@@ -114,6 +131,8 @@ export function handleNodeWebSocket(
   socket.on('close', () => {
     if (nodeId) {
       registry.unregister(nodeId);
+      db.prepare(`UPDATE nodes SET status='offline', last_seen=? WHERE node_id=?`)
+        .run(Date.now(), nodeId);
       log.info(`[node-ws] disconnected: ${nodeId}`);
     }
   });

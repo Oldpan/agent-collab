@@ -265,3 +265,21 @@ export type NodeInfoRest = {
   version: string;
   lastSeen: number;
 };
+
+export type MachineInfo = {
+  nodeId: string;
+  name: string;           // display_name ?? hostname ?? nodeId
+  hostname: string | null;
+  agentTypes: string[];
+  version: string | null;
+  status: 'pending' | 'online' | 'offline';
+  envVarKeys: string[];
+  lastSeen: number | null;
+  provisionedAt: number;
+  createdAt: number;
+};
+
+export type CreateMachineRequest = {
+  name: string;
+  envVarKeys?: string[];  // e.g. ["ANTHROPIC_API_KEY"]
+};

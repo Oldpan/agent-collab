@@ -3,7 +3,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 
-import type { ConversationInfo, AgentType, ChannelInfo, AgentInfo, CreateAgentRequest, UpdateAgentRequest } from '@agent-collab/protocol';
+import type { ConversationInfo, AgentType, ChannelInfo, AgentInfo, CreateAgentRequest, UpdateAgentRequest, MachineInfo, CreateMachineRequest } from '@agent-collab/protocol';
 import {
   log,
   createSession,
@@ -364,6 +364,64 @@ export class ConversationManager {
       .prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
       .run(status, Date.now(), conversationId);
   }
+
+  // ─── Machine CRUD ───
+
+  createMachine(params: CreateMachineRequest): MachineInfo {
+    const nodeId = randomUUID();
+    const now = Date.now();
+    const envVarKeysJson = JSON.stringify(params.envVarKeys ?? []);
+
+    this.db.prepare(
+      `INSERT INTO nodes(node_id, hostname, agent_types_json, version, status, last_seen, created_at, display_name, env_var_keys, provisioned_at)
+       VALUES(?, '', '[]', '', 'pending', 0, 0, ?, ?, ?)`
+    ).run(nodeId, params.name, envVarKeysJson, now);
+
+    return {
+      nodeId,
+      name: params.name,
+      hostname: null,
+      agentTypes: [],
+      version: null,
+      status: 'pending',
+      envVarKeys: params.envVarKeys ?? [],
+      lastSeen: null,
+      provisionedAt: now,
+      createdAt: 0,
+    };
+  }
+
+  listMachines(): MachineInfo[] {
+    const rows = this.db.prepare(
+      `SELECT node_id as nodeId, hostname, agent_types_json as agentTypesJson, version,
+              status, last_seen as lastSeen, created_at as createdAt,
+              display_name as displayName, env_var_keys as envVarKeysJson, provisioned_at as provisionedAt
+       FROM nodes ORDER BY provisioned_at DESC, created_at ASC`
+    ).all() as Array<MachineRow>;
+
+    return rows.map((row) => {
+      const isOnline = !!this.nodeRegistry?.getNode(row.nodeId);
+      return rowToMachineInfo(row, isOnline);
+    });
+  }
+
+  getMachine(nodeId: string): MachineInfo | null {
+    const row = this.db.prepare(
+      `SELECT node_id as nodeId, hostname, agent_types_json as agentTypesJson, version,
+              status, last_seen as lastSeen, created_at as createdAt,
+              display_name as displayName, env_var_keys as envVarKeysJson, provisioned_at as provisionedAt
+       FROM nodes WHERE node_id = ?`
+    ).get(nodeId) as MachineRow | undefined;
+
+    if (!row) return null;
+    const isOnline = !!this.nodeRegistry?.getNode(nodeId);
+    return rowToMachineInfo(row, isOnline);
+  }
+
+  deleteMachine(nodeId: string): void {
+    this.db.prepare(`UPDATE agents SET node_id = NULL WHERE node_id = ?`).run(nodeId);
+    this.db.prepare(`DELETE FROM nodes WHERE node_id = ?`).run(nodeId);
+  }
 }
 
 type AgentRow = {
@@ -393,6 +451,46 @@ function rowToAgentInfo(row: AgentRow): AgentInfo {
     workspacePath: row.workspacePath,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
+  };
+}
+
+type MachineRow = {
+  nodeId: string;
+  hostname: string;
+  agentTypesJson: string;
+  version: string;
+  status: string;
+  lastSeen: number;
+  createdAt: number;
+  displayName: string | null;
+  envVarKeysJson: string | null;
+  provisionedAt: number;
+};
+
+function rowToMachineInfo(row: MachineRow, isOnline: boolean): MachineInfo {
+  let agentTypes: string[] = [];
+  try { agentTypes = JSON.parse(row.agentTypesJson); } catch { /* ignore */ }
+
+  let envVarKeys: string[] = [];
+  try {
+    const parsed = JSON.parse(row.envVarKeysJson ?? '[]');
+    if (Array.isArray(parsed)) envVarKeys = parsed;
+  } catch { /* ignore */ }
+
+  const status: MachineInfo['status'] = isOnline ? 'online'
+    : (row.status === 'pending' ? 'pending' : 'offline');
+
+  return {
+    nodeId: row.nodeId,
+    name: row.displayName || row.hostname || row.nodeId,
+    hostname: row.hostname || null,
+    agentTypes,
+    version: row.version || null,
+    status,
+    envVarKeys,
+    lastSeen: row.lastSeen || null,
+    provisionedAt: row.provisionedAt,
+    createdAt: row.createdAt,
   };
 }
 

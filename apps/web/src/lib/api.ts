@@ -7,6 +7,8 @@ import type {
   CreateAgentRequest,
   UpdateAgentRequest,
   ChannelInfo,
+  MachineInfo,
+  CreateMachineRequest,
 } from "@agent-collab/protocol";
 
 const API_BASE = "/api";
@@ -50,6 +52,29 @@ export async function listNodes(): Promise<NodeInfoRest[]> {
   const res = await fetch(`${API_BASE}/nodes`);
   if (!res.ok) throw new Error(`Failed to list nodes: ${res.statusText}`);
   return res.json();
+}
+
+// ─── Machine API ───
+
+export async function listMachines(): Promise<MachineInfo[]> {
+  const res = await fetch(`${API_BASE}/machines`);
+  if (!res.ok) throw new Error(`Failed to list machines: ${res.statusText}`);
+  return res.json();
+}
+
+export async function createMachine(req: CreateMachineRequest): Promise<MachineInfo> {
+  const res = await fetch(`${API_BASE}/machines`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) throw new Error(`Failed to create machine: ${res.statusText}`);
+  return res.json();
+}
+
+export async function deleteMachine(id: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/machines/${id}`, { method: "DELETE" });
+  if (!res.ok) throw new Error(`Failed to delete machine: ${res.statusText}`);
 }
 
 // ─── Agent API ───

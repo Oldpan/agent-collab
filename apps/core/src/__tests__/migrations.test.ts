@@ -22,10 +22,20 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('schema_version 应为最新版本 12', () => {
+  it('schema_version 应为最新版本 13', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBe(12);
+    expect(row.version).toBe(13);
+    db.close();
+  });
+
+  it('nodes 表应包含 display_name, env_var_keys, provisioned_at 列', () => {
+    const db = createTestDb();
+    const cols = db.prepare("PRAGMA table_info('nodes')").all() as Array<{ name: string }>;
+    const colNames = cols.map((c) => c.name);
+    expect(colNames).toContain('display_name');
+    expect(colNames).toContain('env_var_keys');
+    expect(colNames).toContain('provisioned_at');
     db.close();
   });
 

@@ -1,6 +1,7 @@
-import { useMemo, useCallback, useState, useEffect } from "react";
+import { useMemo, useCallback } from "react";
 import { useConversations } from "@/hooks/useConversations";
 import { useAgents } from "@/hooks/useAgents";
+import { useMachines } from "@/hooks/useMachines";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { ChatPanel } from "@/features/chat/ChatPanel";
 import {
@@ -12,9 +13,7 @@ import type {
   CreateConversationRequest,
   CreateAgentRequest,
   UpdateAgentRequest,
-  ChannelInfo,
 } from "@agent-collab/protocol";
-import * as api from "@/lib/api";
 
 export function App() {
   const {
@@ -27,12 +26,7 @@ export function App() {
   } = useConversations();
 
   const { agents, createAgent, updateAgent, deleteAgent } = useAgents();
-
-  const [channels, setChannels] = useState<ChannelInfo[]>([]);
-
-  useEffect(() => {
-    api.listChannels().then(setChannels).catch(() => setChannels([]));
-  }, []);
+  const { machines, createMachine, deleteMachine } = useMachines();
 
   const selectedConversation = useMemo(
     () => conversations.find((c) => c.id === selectedId),
@@ -83,11 +77,13 @@ export function App() {
           className="bg-sidebar text-sidebar-foreground"
         >
           <Sidebar
-            channels={channels}
+            machines={machines}
             agents={agents}
             conversations={conversations}
             selectedId={selectedId}
             onSelect={selectConversation}
+            onCreateMachine={createMachine}
+            onDeleteMachine={deleteMachine}
             onCreateAgent={handleCreateAgent}
             onUpdateAgent={handleUpdateAgent}
             onDeleteAgent={handleDeleteAgent}
