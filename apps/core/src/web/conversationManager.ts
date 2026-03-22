@@ -6,17 +6,12 @@ import path from 'node:path';
 import type { ConversationInfo, AgentType, ChannelInfo, AgentInfo, CreateAgentRequest, UpdateAgentRequest } from '@agent-collab/protocol';
 import {
   log,
-  BindingRuntime,
-  ToolAuth,
   createSession,
   createRun,
   finishRun,
-  getSession,
   upsertBinding,
-  getUiMode,
-  buildReplayContextFromRecentRuns,
 } from '@agent-collab/runtime-acp';
-import type { Db, OutboundSink, UiMode } from '@agent-collab/runtime-acp';
+import type { Db } from '@agent-collab/runtime-acp';
 import { buildAgentContextText } from '@agent-collab/memory';
 import type { AppConfig } from '../config.js';
 import type { NodeRegistry } from '../services/nodeRegistry.js';
@@ -46,21 +41,11 @@ const CLI_PRESETS: Record<AgentType, { command: string; args: string[] }> = {
 export class ConversationManager {
   private readonly db: Db;
   private readonly config: AppConfig;
-  private readonly toolAuth: ToolAuth;
   private readonly nodeRegistry?: NodeRegistry;
-
-  // Active runtimes keyed by sessionKey
-  private readonly runtimesBySessionKey = new Map<
-    string,
-    { runtime: BindingRuntime; lastUsedMs: number }
-  >();
-
-  private gcTimer: NodeJS.Timeout | null = null;
 
   constructor(params: { db: Db; config: AppConfig; nodeRegistry?: NodeRegistry }) {
     this.db = params.db;
     this.config = params.config;
-    this.toolAuth = new ToolAuth(this.db);
     this.nodeRegistry = params.nodeRegistry;
   }
 
@@ -69,25 +54,11 @@ export class ConversationManager {
   }
 
   start(): void {
-    this.gcTimer = setInterval(() => {
-      try {
-        this.gc();
-      } catch (error) {
-        log.warn('runtime GC error', error);
-      }
-    }, 60_000);
     log.info('ConversationManager ready');
   }
 
   close(): void {
-    if (this.gcTimer) {
-      clearInterval(this.gcTimer);
-      this.gcTimer = null;
-    }
-    for (const entry of this.runtimesBySessionKey.values()) {
-      entry.runtime.close();
-    }
-    this.runtimesBySessionKey.clear();
+    // no-op: all execution happens on agent-nodes
   }
 
   // ─── Agent CRUD ───
@@ -265,22 +236,6 @@ export class ConversationManager {
   }
 
   deleteConversation(id: string): void {
-    const conv = this.getConversation(id);
-    if (!conv) return;
-
-    // Find and clean up runtime
-    const row = this.db
-      .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
-      .get(id) as { sessionKey: string } | undefined;
-
-    if (row) {
-      const entry = this.runtimesBySessionKey.get(row.sessionKey);
-      if (entry) {
-        entry.runtime.close();
-        this.runtimesBySessionKey.delete(row.sessionKey);
-      }
-    }
-
     this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
   }
 
@@ -384,201 +339,24 @@ export class ConversationManager {
     return row ?? null;
   }
 
-  // ─── Runtime management ───
-
-  private getOrCreateRuntime(conversationId: string): BindingRuntime {
-    const row = this.db
-      .prepare(
-        `SELECT session_key as sessionKey, channel_id as channelId,
-                agent_type as agentType, env_vars as envVarsJson
-         FROM conversations WHERE id = ?`,
-      )
-      .get(conversationId) as {
-        sessionKey: string;
-        channelId: string;
-        agentType: string;
-        envVarsJson: string | null;
-      } | undefined;
-
-    if (!row) throw new Error(`Unknown conversation: ${conversationId}`);
-
-    const { sessionKey, channelId, agentType } = row;
-    const bindingKey = `web:${channelId}:${conversationId}:${agentType}`;
-
-    const existing = this.runtimesBySessionKey.get(sessionKey);
-    if (existing) {
-      existing.lastUsedMs = Date.now();
-      return existing.runtime;
-    }
-
-    const sess = getSession(this.db, sessionKey);
-    if (!sess) throw new Error(`Missing session row: ${sessionKey}`);
-
-    const agentArgs = parseAgentArgs(sess.agentArgsJson, this.config.acpAgentArgs);
-    const envVars = parseEnvVars(row.envVarsJson);
-
-    const rt = new BindingRuntime({
-      db: this.db,
-      config: this.config,
-      toolAuth: this.toolAuth,
-      sessionKey,
-      bindingKey,
-      workspaceRoot: sess.cwd,
-      agentCommand: sess.agentCommand,
-      agentArgs,
-      env: envVars,
-    });
-
-    this.runtimesBySessionKey.set(sessionKey, {
-      runtime: rt,
-      lastUsedMs: Date.now(),
-    });
-
-    this.enforceRuntimeLimit();
-    return rt;
-  }
-
-  private gc(): void {
-    const now = Date.now();
-    const ttlMs = this.config.runtimeIdleTtlSeconds * 1000;
-
-    for (const [sessionKey, entry] of this.runtimesBySessionKey.entries()) {
-      if (now - entry.lastUsedMs <= ttlMs) continue;
-      entry.runtime.close();
-      this.runtimesBySessionKey.delete(sessionKey);
-    }
-    this.enforceRuntimeLimit();
-  }
-
-  private enforceRuntimeLimit(): void {
-    const max = this.config.maxBindingRuntimes;
-    if (this.runtimesBySessionKey.size <= max) return;
-
-    const entries = [...this.runtimesBySessionKey.entries()].sort(
-      (a, b) => a[1].lastUsedMs - b[1].lastUsedMs,
-    );
-
-    const removeCount = Math.max(0, entries.length - max);
-    for (let i = 0; i < removeCount; i++) {
-      const [sessionKey, entry] = entries[i];
-      entry.runtime.close();
-      this.runtimesBySessionKey.delete(sessionKey);
-    }
-  }
-
-  // ─── Prompt handling ───
-
-  async sendPrompt(
-    conversationId: string,
-    text: string,
-    sink: OutboundSink,
-    attachments?: Array<{ uri: string; mimeType?: string }>,
-  ): Promise<void> {
-    const row = this.db
-      .prepare(
-        `SELECT session_key as sessionKey, channel_id as channelId, agent_type as agentType
-         FROM conversations WHERE id = ?`,
-      )
-      .get(conversationId) as { sessionKey: string; channelId: string; agentType: string } | undefined;
-
-    if (!row) throw new Error(`Unknown conversation: ${conversationId}`);
-
-    const { sessionKey, channelId, agentType } = row;
-    const bindingKey = `web:${channelId}:${conversationId}:${agentType}`;
-    const rt = this.getOrCreateRuntime(conversationId);
-
-    // Update status to busy
-    this.updateStatus(conversationId, 'busy');
-
-    const runId = randomUUID();
-    createRun(this.db, { runId, sessionKey, promptText: text });
-
-    // Build context for fresh sessions: agent context + history replay
-    let contextText = '';
-    const isFreshSession = !rt.hasSessionId();
-    if (isFreshSession) {
-      // Agent system prompt + platform memory + native memory (Claude ~/.claude/... or workspace fallback)
-      const convRow = this.db
-        .prepare('SELECT agent_id as agentId, workspace_path as workspacePath FROM conversations WHERE id = ?')
-        .get(conversationId) as { agentId: string | null; workspacePath: string | null } | undefined;
-
-      if (convRow?.agentId) {
-        const agent = this.getAgent(convRow.agentId);
-        if (agent) {
-          contextText = await buildAgentContextText({
-            systemPrompt: agent.systemPrompt,
-            memory: agent.memory,
-            agentType: agent.agentType,
-            workspacePath: convRow.workspacePath ?? this.config.workspaceRoot,
-          });
-        }
-      }
-
-      if (this.config.contextReplayEnabled && this.config.contextReplayRuns > 0) {
-        const replay = buildReplayContextFromRecentRuns(this.db, {
-          sessionKey,
-          excludeRunId: runId,
-          maxRuns: this.config.contextReplayRuns,
-          maxChars: this.config.contextReplayMaxChars,
-        });
-        if (replay) contextText += (contextText ? '\n\n' : '') + replay;
-      }
-    }
-
-    try {
-      const uiMode: UiMode = getUiMode(this.db, bindingKey) ?? this.config.uiDefaultMode;
-
-      const result = await rt.prompt({
-        runId,
-        promptText: text,
-        promptResources: attachments,
-        sink,
-        uiMode,
-        contextText,
-        actorUserId: 'web_user',
-      });
-
-      finishRun(this.db, { runId, stopReason: result.stopReason });
-    } catch (error: any) {
-      finishRun(this.db, { runId, error: String(error?.message ?? error) });
-
-      // Evict broken runtimes on transport errors
-      if (isAcpTransportError(error)) {
-        const stale = this.runtimesBySessionKey.get(sessionKey);
-        stale?.runtime.close();
-        this.runtimesBySessionKey.delete(sessionKey);
-      }
-
-      throw error;
-    } finally {
-      this.updateStatus(conversationId, 'idle');
-    }
-  }
-
   async handleApproval(
     conversationId: string,
     requestId: string,
     decision: 'allow' | 'deny',
   ): Promise<{ ok: boolean; message: string }> {
     const convRow = this.db
-      .prepare('SELECT session_key as sessionKey, node_id as nodeId FROM conversations WHERE id = ?')
-      .get(conversationId) as { sessionKey: string; nodeId: string | null } | undefined;
+      .prepare('SELECT node_id as nodeId FROM conversations WHERE id = ?')
+      .get(conversationId) as { nodeId: string | null } | undefined;
 
     if (!convRow) return { ok: false, message: 'Unknown conversation.' };
+    if (!convRow.nodeId) return { ok: false, message: 'No agent node assigned to this conversation.' };
 
-    if (convRow.nodeId) {
-      const sent = this.nodeRegistry?.send(convRow.nodeId, {
-        type: 'permission.response',
-        requestId,
-        decision,
-      });
-      return sent ? { ok: true, message: '' } : { ok: false, message: 'Node not connected.' };
-    }
-
-    const entry = this.runtimesBySessionKey.get(convRow.sessionKey);
-    if (!entry) return { ok: false, message: 'No active runtime. Send a message first.' };
-
-    return entry.runtime.decidePermission({ decision, requestId, actorUserId: 'web_user' });
+    const sent = this.nodeRegistry?.send(convRow.nodeId, {
+      type: 'permission.response',
+      requestId,
+      decision,
+    });
+    return sent ? { ok: true, message: '' } : { ok: false, message: 'Node not connected.' };
   }
 
   private updateStatus(conversationId: string, status: string): void {
@@ -618,18 +396,6 @@ function rowToAgentInfo(row: AgentRow): AgentInfo {
   };
 }
 
-function parseAgentArgs(raw: string, fallback: string[]): string[] {
-  try {
-    const parsed = JSON.parse(raw);
-    if (Array.isArray(parsed) && parsed.every((item) => typeof item === 'string')) {
-      return parsed;
-    }
-  } catch {
-    // ignore
-  }
-  return [...fallback];
-}
-
 function parseEnvVars(raw: string | null): Record<string, string> | undefined {
   if (!raw) return undefined;
   try {
@@ -643,14 +409,3 @@ function parseEnvVars(raw: string | null): Record<string, string> | undefined {
   return undefined;
 }
 
-function isAcpTransportError(error: unknown): boolean {
-  const name = String((error as any)?.name ?? '').trim();
-  if (name === 'AcpTransportError') return true;
-
-  const message = String((error as any)?.message ?? error ?? '').toLowerCase();
-  return (
-    message.includes('acp process is not running') ||
-    message.includes('acp agent exited') ||
-    message.includes('acp request timed out')
-  );
-}

@@ -222,7 +222,7 @@ describe('WebSocket', () => {
     });
   });
 
-  it('发送 prompt 应收到 turn 生命周期事件', async () => {
+  it('未绑定 agent-node 时发送 prompt 应收到 error', async () => {
     const { body: conv } = await fetchJson('/api/conversations', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -230,24 +230,16 @@ describe('WebSocket', () => {
     });
 
     const { ws, events } = await createWsConnection(conv.id);
-    // 先等 status + history.complete
-    await waitForEvents(events, 2);
+    await waitForEvents(events, 2); // status + history.complete
 
-    // 发 prompt（ACP agent 是 echo noop，会启动失败但 turn 事件会正常发出）
     ws.send(JSON.stringify({ type: 'prompt', text: 'hello' }));
 
-    // 总共应收到 2(初始) + 5(turn lifecycle) = 7 个事件
-    const allEvents = await waitForEvents(events, 7, 10000);
+    const allEvents = await waitForEvents(events, 3);
     ws.close();
 
-    // 取 prompt 后的事件
-    const turnEvents = allEvents.slice(2);
-    const types = turnEvents.map((e) => e.type);
-    expect(types).toContain('turn.begin');
-    expect(types).toContain('turn.end');
-
-    const statusEvents = turnEvents.filter((e) => e.type === 'conversation.status');
-    expect(statusEvents.length).toBeGreaterThanOrEqual(2);
+    const errorEvent = allEvents.find((e) => e.type === 'error');
+    expect(errorEvent).toBeDefined();
+    expect(errorEvent.message).toContain('agent node');
 
     manager.deleteConversation(conv.id);
   });
