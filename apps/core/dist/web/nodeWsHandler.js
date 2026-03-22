@@ -5,7 +5,7 @@ function appendNodeEvent(db, runId, seq, event) {
 }
 /** Event types worth persisting for history replay */
 const REPLAY_EVENT_TYPES = new Set(['content.delta', 'tool.call', 'tool.result', 'thinking.delta']);
-export function handleNodeWebSocket(socket, registry, broadcast, db) {
+export function handleNodeWebSocket(socket, registry, broadcast, db, workspaceBroker) {
     let nodeId = null;
     // Sequence counter per runId for node/event persistence
     const runSeq = new Map();
@@ -106,6 +106,14 @@ export function handleNodeWebSocket(socket, registry, broadcast, db) {
                 });
                 break;
             }
+            case 'workspace.list.response': {
+                workspaceBroker?.handleWorkspaceListResponse(msg);
+                break;
+            }
+            case 'workspace.read.response': {
+                workspaceBroker?.handleWorkspaceReadResponse(msg);
+                break;
+            }
             default: {
                 log.warn('[node-ws] unknown message type', msg.type);
             }
@@ -113,6 +121,7 @@ export function handleNodeWebSocket(socket, registry, broadcast, db) {
     });
     socket.on('close', () => {
         if (nodeId) {
+            workspaceBroker?.rejectPendingForNode(nodeId);
             registry.unregister(nodeId);
             db.prepare(`UPDATE nodes SET status='offline', last_seen=? WHERE node_id=?`)
                 .run(Date.now(), nodeId);

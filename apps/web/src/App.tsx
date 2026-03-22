@@ -32,6 +32,13 @@ export function App() {
     () => conversations.find((c) => c.id === selectedId),
     [conversations, selectedId],
   );
+  const selectedAgent = useMemo(
+    () => {
+      if (!selectedConversation?.agentId) return null;
+      return agents.find((agent) => agent.agentId === selectedConversation.agentId) ?? null;
+    },
+    [agents, selectedConversation?.agentId],
+  );
 
   const handleCreateAgent = useCallback(
     (req: CreateAgentRequest) => {
@@ -99,7 +106,7 @@ export function App() {
         {/* Chat area */}
         <ResizablePanel defaultSize={75} minSize={50}>
           {selectedConversation ? (
-            <ChatPanel conversation={selectedConversation} />
+            <ChatPanel conversation={selectedConversation} agent={selectedAgent} />
           ) : (
             <div className="flex h-full items-center justify-center text-muted-foreground">
               <div className="text-center space-y-2">

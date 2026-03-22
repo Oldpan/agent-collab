@@ -5,9 +5,16 @@ import { log } from '@agent-collab/runtime-acp';
 import { handleWebSocket, broadcast } from './wsHandler.js';
 import { handleNodeWebSocket } from './nodeWsHandler.js';
 import { NodeRegistry } from '../services/nodeRegistry.js';
+import { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
+import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/agentWorkspaceService.js';
 export async function startServer(params) {
     const { port, host, conversationManager, db } = params;
     const nodeRegistry = params.nodeRegistry ?? new NodeRegistry();
+    const workspaceBroker = params.workspaceBroker ?? new AgentWorkspaceBroker({ nodeRegistry });
+    const workspaceService = new AgentWorkspaceService({
+        getAgentById: (agentId) => conversationManager.getAgent(agentId),
+        broker: workspaceBroker,
+    });
     const app = Fastify({ logger: false });
     await app.register(fastifyCors, { origin: true });
     await app.register(fastifyWebSocket);
@@ -64,6 +71,32 @@ export async function startServer(params) {
         }
         return conversationManager.listConversations({ agentId: req.params.id });
     });
+    app.get('/api/agents/:id/workspace', async (req, reply) => {
+        try {
+            return await workspaceService.listWorkspace(req.params.id, normalizeWorkspaceQueryPath(req.query.path));
+        }
+        catch (error) {
+            if (error instanceof AgentWorkspaceServiceError) {
+                reply.code(error.statusCode);
+                return { error: error.message };
+            }
+            reply.code(500);
+            return { error: String(error?.message ?? error) };
+        }
+    });
+    app.get('/api/agents/:id/workspace/file', async (req, reply) => {
+        try {
+            return await workspaceService.readWorkspaceFile(req.params.id, normalizeWorkspaceQueryPath(req.query.path));
+        }
+        catch (error) {
+            if (error instanceof AgentWorkspaceServiceError) {
+                reply.code(error.statusCode);
+                return { error: error.message };
+            }
+            reply.code(500);
+            return { error: String(error?.message ?? error) };
+        }
+    });
     // Create conversation
     app.post('/api/conversations', async (req, reply) => {
         const body = req.body ?? {};
@@ -74,6 +107,7 @@ export async function startServer(params) {
             channelId: body.channelId,
             envVars: body.envVars,
             nodeId: body.nodeId,
+            agentId: body.agentId,
         });
         reply.code(201);
         return conv;
@@ -188,8 +222,13 @@ export async function startServer(params) {
     });
     // Agent-node WebSocket connection
     app.get('/api/nodes/connect', { websocket: true }, (socket) => {
-        handleNodeWebSocket(socket, nodeRegistry, broadcast, db);
+        handleNodeWebSocket(socket, nodeRegistry, broadcast, db, workspaceBroker);
     });
     await app.listen({ port, host });
     log.info(`Web server listening on ${host}:${port}`);
+}
+function normalizeWorkspaceQueryPath(rawPath) {
+    if (!rawPath)
+        return '';
+    return rawPath.replace(/^\/+/, '');
 }

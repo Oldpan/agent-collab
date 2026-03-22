@@ -4,6 +4,7 @@ import { resolveGatewayHomeDir, loadConfig } from './config.js';
 import { ConversationManager } from './web/conversationManager.js';
 import { startServer } from './web/server.js';
 import { NodeRegistry } from './services/nodeRegistry.js';
+import { AgentWorkspaceBroker } from './services/agentWorkspaceBroker.js';
 import { reconcileNodeStateOnStartup } from './services/nodeStateReconciler.js';
 async function main() {
     const gatewayHome = resolveGatewayHomeDir();
@@ -25,6 +26,7 @@ async function main() {
     migrate(db);
     reconcileNodeStateOnStartup(db);
     const nodeRegistry = new NodeRegistry();
+    const workspaceBroker = new AgentWorkspaceBroker({ nodeRegistry });
     const manager = new ConversationManager({ db, config, nodeRegistry });
     manager.start();
     await startServer({
@@ -33,6 +35,7 @@ async function main() {
         conversationManager: manager,
         db,
         nodeRegistry,
+        workspaceBroker,
     });
     log.info('agent-node started', {
         port: config.webPort,

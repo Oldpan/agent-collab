@@ -9,6 +9,8 @@ import type {
   ChannelInfo,
   MachineInfo,
   CreateMachineRequest,
+  AgentWorkspaceListResult,
+  AgentWorkspaceFileResult,
 } from "@agent-collab/protocol";
 
 const API_BASE = "/api";
@@ -114,4 +116,42 @@ export async function listAgentConversations(agentId: string): Promise<Conversat
   const res = await fetch(`${API_BASE}/agents/${agentId}/conversations`);
   if (!res.ok) throw new Error(`Failed to list agent conversations: ${res.statusText}`);
   return res.json();
+}
+
+export async function listAgentWorkspace(
+  agentId: string,
+  relativePath = "",
+): Promise<AgentWorkspaceListResult> {
+  const params = new URLSearchParams();
+  if (relativePath) params.set("path", relativePath);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const res = await fetch(`${API_BASE}/agents/${agentId}/workspace${suffix}`);
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to list workspace: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function readAgentWorkspaceFile(
+  agentId: string,
+  relativePath: string,
+): Promise<AgentWorkspaceFileResult> {
+  const params = new URLSearchParams();
+  params.set("path", relativePath);
+  const res = await fetch(`${API_BASE}/agents/${agentId}/workspace/file?${params.toString()}`);
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to read workspace file: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+async function safeReadErrorBody(res: Response): Promise<string | null> {
+  try {
+    const body = await res.json() as { error?: string };
+    return body.error ?? null;
+  } catch {
+    return null;
+  }
 }

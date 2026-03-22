@@ -3,6 +3,22 @@ import { create } from "zustand";
 import type { ConversationInfo, CreateConversationRequest } from "@agent-collab/protocol";
 import * as api from "@/lib/api";
 
+const SELECTED_CONVERSATION_STORAGE_KEY = "agent-collab:selected-conversation-id";
+
+function readStoredSelectedConversationId(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(SELECTED_CONVERSATION_STORAGE_KEY);
+}
+
+function writeStoredSelectedConversationId(id: string | null): void {
+  if (typeof window === "undefined") return;
+  if (id) {
+    window.localStorage.setItem(SELECTED_CONVERSATION_STORAGE_KEY, id);
+  } else {
+    window.localStorage.removeItem(SELECTED_CONVERSATION_STORAGE_KEY);
+  }
+}
+
 type ConversationsState = {
   conversations: ConversationInfo[];
   selectedId: string | null;
@@ -18,22 +34,39 @@ type ConversationsState = {
 
 const useConversationsStore = create<ConversationsState>((set) => ({
   conversations: [],
-  selectedId: null,
+  selectedId: readStoredSelectedConversationId(),
   loading: false,
   error: null,
   setConversations: (conversations) =>
-    set({ conversations: conversations.sort((a, b) => b.updatedAt - a.updatedAt) }),
+    set((state) => {
+      const sorted = conversations.sort((a, b) => b.updatedAt - a.updatedAt);
+      const selectedId = sorted.some((conversation) => conversation.id === state.selectedId)
+        ? state.selectedId
+        : (sorted[0]?.id ?? null);
+      writeStoredSelectedConversationId(selectedId);
+      return { conversations: sorted, selectedId };
+    }),
   addConversation: (conversation) =>
-    set((state) => ({
-      conversations: [conversation, ...state.conversations],
-      selectedId: conversation.id,
-    })),
+    set((state) => {
+      writeStoredSelectedConversationId(conversation.id);
+      return {
+        conversations: [conversation, ...state.conversations],
+        selectedId: conversation.id,
+      };
+    }),
   removeConversation: (id) =>
-    set((state) => ({
-      conversations: state.conversations.filter((c) => c.id !== id),
-      selectedId: state.selectedId === id ? null : state.selectedId,
-    })),
-  selectConversation: (id) => set({ selectedId: id }),
+    set((state) => {
+      const conversations = state.conversations.filter((conversation) => conversation.id !== id);
+      const selectedId = state.selectedId === id
+        ? (conversations[0]?.id ?? null)
+        : state.selectedId;
+      writeStoredSelectedConversationId(selectedId);
+      return { conversations, selectedId };
+    }),
+  selectConversation: (id) => {
+    writeStoredSelectedConversationId(id);
+    set({ selectedId: id });
+  },
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
 }));

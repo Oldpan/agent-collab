@@ -6,6 +6,7 @@ import type { CoreToNode } from '@agent-collab/protocol';
 import { loadConfig } from './config.js';
 import { CoreConnection } from './connection.js';
 import { Executor } from './executor.js';
+import { listWorkspaceDirectory, readWorkspaceFile, WorkspaceFsError } from './workspaceFs.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -50,6 +51,37 @@ async function main(): Promise<void> {
         });
         break;
 
+      case 'workspace.list.request':
+        try {
+          const result = listWorkspaceDirectory(msg.workspaceRoot, msg.relativePath);
+          connection.send({
+            type: 'workspace.list.response',
+            requestId: msg.requestId,
+            relativePath: result.relativePath,
+            entries: result.entries,
+          });
+        } catch (error) {
+          connection.send(workspaceErrorResponse('workspace.list.response', msg.requestId, msg.relativePath, error));
+        }
+        break;
+
+      case 'workspace.read.request':
+        try {
+          const result = readWorkspaceFile(msg.workspaceRoot, msg.relativePath);
+          connection.send({
+            type: 'workspace.read.response',
+            requestId: msg.requestId,
+            relativePath: result.relativePath,
+            content: result.content,
+            mimeType: result.mimeType,
+            size: result.size,
+            modifiedAt: result.modifiedAt,
+          });
+        } catch (error) {
+          connection.send(workspaceErrorResponse('workspace.read.response', msg.requestId, msg.relativePath, error));
+        }
+        break;
+
       default: {
         const _exhaustive: never = msg;
         log.warn('[agent-node] unknown message', _exhaustive);
@@ -77,3 +109,28 @@ async function main(): Promise<void> {
 }
 
 await main();
+
+function workspaceErrorResponse(
+  type: 'workspace.list.response' | 'workspace.read.response',
+  requestId: string,
+  relativePath: string,
+  error: unknown,
+) {
+  if (error instanceof WorkspaceFsError) {
+    return {
+      type,
+      requestId,
+      relativePath,
+      error: error.message,
+      errorCode: error.code,
+    };
+  }
+
+  return {
+    type,
+    requestId,
+    relativePath,
+    error: String((error as Error)?.message ?? error),
+    errorCode: 'io_error' as const,
+  };
+}

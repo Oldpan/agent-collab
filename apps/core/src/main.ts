@@ -5,6 +5,7 @@ import { resolveGatewayHomeDir, loadConfig } from './config.js';
 import { ConversationManager } from './web/conversationManager.js';
 import { startServer } from './web/server.js';
 import { NodeRegistry } from './services/nodeRegistry.js';
+import { AgentWorkspaceBroker } from './services/agentWorkspaceBroker.js';
 import { reconcileNodeStateOnStartup } from './services/nodeStateReconciler.js';
 
 async function main(): Promise<void> {
@@ -32,6 +33,7 @@ async function main(): Promise<void> {
   reconcileNodeStateOnStartup(db);
 
   const nodeRegistry = new NodeRegistry();
+  const workspaceBroker = new AgentWorkspaceBroker({ nodeRegistry });
   const manager = new ConversationManager({ db, config, nodeRegistry });
   manager.start();
 
@@ -41,6 +43,7 @@ async function main(): Promise<void> {
     conversationManager: manager,
     db,
     nodeRegistry,
+    workspaceBroker,
   });
 
   log.info('agent-node started', {

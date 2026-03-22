@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import {
   PlusIcon, TrashIcon, XIcon, ChevronRightIcon, ChevronDownIcon, PencilIcon,
 } from "lucide-react";
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type {
   AgentInfo, MachineInfo,
   AgentType, CreateAgentRequest, CreateConversationRequest,
@@ -14,6 +14,27 @@ import type {
 import { AgentDetailPanel } from "./AgentDetailPanel";
 import { MachineCreatePanel } from "./MachineCreatePanel";
 import defaultSystemPrompt from "@/prompts/default-system-prompt.md?raw";
+
+const EXPANDED_MACHINES_STORAGE_KEY = "agent-collab:expanded-machines";
+const EXPANDED_AGENTS_STORAGE_KEY = "agent-collab:expanded-agents";
+
+function readStoredSet(storageKey: string): Set<string> {
+  if (typeof window === "undefined") return new Set();
+  try {
+    const raw = window.localStorage.getItem(storageKey);
+    if (!raw) return new Set();
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return new Set();
+    return new Set(parsed.filter((value): value is string => typeof value === "string"));
+  } catch {
+    return new Set();
+  }
+}
+
+function writeStoredSet(storageKey: string, value: Set<string>): void {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(storageKey, JSON.stringify([...value]));
+}
 
 type SidebarProps = {
   machines: MachineInfo[];
@@ -60,8 +81,12 @@ export function Sidebar({
   onCreateAgent, onUpdateAgent, onDeleteAgent,
   onCreateConversation, onDeleteConversation,
 }: SidebarProps) {
-  const [expandedMachines, setExpandedMachines] = useState<Set<string>>(new Set());
-  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(new Set());
+  const [expandedMachines, setExpandedMachines] = useState<Set<string>>(
+    () => readStoredSet(EXPANDED_MACHINES_STORAGE_KEY),
+  );
+  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(
+    () => readStoredSet(EXPANDED_AGENTS_STORAGE_KEY),
+  );
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [showCreateMachine, setShowCreateMachine] = useState(false);
 
@@ -75,6 +100,7 @@ export function Sidebar({
     setExpandedMachines((prev) => {
       const next = new Set(prev);
       next.has(nodeId) ? next.delete(nodeId) : next.add(nodeId);
+      writeStoredSet(EXPANDED_MACHINES_STORAGE_KEY, next);
       return next;
     });
   };
@@ -83,6 +109,7 @@ export function Sidebar({
     setExpandedAgents((prev) => {
       const next = new Set(prev);
       next.has(agentId) ? next.delete(agentId) : next.add(agentId);
+      writeStoredSet(EXPANDED_AGENTS_STORAGE_KEY, next);
       return next;
     });
   };
@@ -116,8 +143,38 @@ export function Sidebar({
     setCreateAgentInMachine(nodeId);
     setNewAgentName("");
     setNewAgentSystemPrompt(defaultSystemPrompt);
-    setExpandedMachines((prev) => new Set(prev).add(nodeId));
+    setExpandedMachines((prev) => {
+      const next = new Set(prev).add(nodeId);
+      writeStoredSet(EXPANDED_MACHINES_STORAGE_KEY, next);
+      return next;
+    });
   };
+
+  useEffect(() => {
+    if (!selectedId) return;
+
+    const selectedConversation = conversations.find((conversation) => conversation.id === selectedId);
+    if (!selectedConversation?.agentId) return;
+
+    const selectedAgent = agents.find((agent) => agent.agentId === selectedConversation.agentId);
+    if (!selectedAgent) return;
+
+    setExpandedAgents((prev) => {
+      if (prev.has(selectedAgent.agentId)) return prev;
+      const next = new Set(prev).add(selectedAgent.agentId);
+      writeStoredSet(EXPANDED_AGENTS_STORAGE_KEY, next);
+      return next;
+    });
+
+    if (selectedAgent.nodeId) {
+      setExpandedMachines((prev) => {
+        if (prev.has(selectedAgent.nodeId!)) return prev;
+        const next = new Set(prev).add(selectedAgent.nodeId!);
+        writeStoredSet(EXPANDED_MACHINES_STORAGE_KEY, next);
+        return next;
+      });
+    }
+  }, [agents, conversations, selectedId]);
 
   return (
     <div className="flex h-full flex-col">

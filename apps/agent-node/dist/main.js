@@ -4,6 +4,7 @@ import { openDb, migrate, log } from '@agent-collab/runtime-acp';
 import { loadConfig } from './config.js';
 import { CoreConnection } from './connection.js';
 import { Executor } from './executor.js';
+import { listWorkspaceDirectory, readWorkspaceFile, WorkspaceFsError } from './workspaceFs.js';
 async function main() {
     const config = loadConfig();
     // Ensure DB directory exists
@@ -39,6 +40,37 @@ async function main() {
                     log.warn('[agent-node] permission.response error', err);
                 });
                 break;
+            case 'workspace.list.request':
+                try {
+                    const result = listWorkspaceDirectory(msg.workspaceRoot, msg.relativePath);
+                    connection.send({
+                        type: 'workspace.list.response',
+                        requestId: msg.requestId,
+                        relativePath: result.relativePath,
+                        entries: result.entries,
+                    });
+                }
+                catch (error) {
+                    connection.send(workspaceErrorResponse('workspace.list.response', msg.requestId, msg.relativePath, error));
+                }
+                break;
+            case 'workspace.read.request':
+                try {
+                    const result = readWorkspaceFile(msg.workspaceRoot, msg.relativePath);
+                    connection.send({
+                        type: 'workspace.read.response',
+                        requestId: msg.requestId,
+                        relativePath: result.relativePath,
+                        content: result.content,
+                        mimeType: result.mimeType,
+                        size: result.size,
+                        modifiedAt: result.modifiedAt,
+                    });
+                }
+                catch (error) {
+                    connection.send(workspaceErrorResponse('workspace.read.response', msg.requestId, msg.relativePath, error));
+                }
+                break;
             default: {
                 const _exhaustive = msg;
                 log.warn('[agent-node] unknown message', _exhaustive);
@@ -61,3 +93,21 @@ async function main() {
     process.on('SIGTERM', shutdown);
 }
 await main();
+function workspaceErrorResponse(type, requestId, relativePath, error) {
+    if (error instanceof WorkspaceFsError) {
+        return {
+            type,
+            requestId,
+            relativePath,
+            error: error.message,
+            errorCode: error.code,
+        };
+    }
+    return {
+        type,
+        requestId,
+        relativePath,
+        error: String(error?.message ?? error),
+        errorCode: 'io_error',
+    };
+}

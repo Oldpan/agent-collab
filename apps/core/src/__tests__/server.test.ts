@@ -37,7 +37,10 @@ beforeAll(async () => {
       agentType: body.agentType,
       workspacePath: body.workspacePath,
       title: body.title,
+      channelId: body.channelId,
       envVars: body.envVars,
+      nodeId: body.nodeId,
+      agentId: body.agentId,
     });
     reply.code(201);
     return conv;
@@ -163,6 +166,37 @@ describe('REST API', () => {
       .prepare('SELECT env_vars FROM conversations WHERE id = ?')
       .get(body.id) as { env_vars: string | null };
     expect(JSON.parse(row.env_vars!)).toEqual(envVars);
+  });
+
+  it('POST /api/conversations 应保留 agentId 并出现在 agent 会话列表里', async () => {
+    const agent = manager.createAgent({
+      name: 'Bob',
+      agentType: 'codex_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/bob',
+    });
+
+    const { status, body } = await fetchJson('/api/conversations', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        agentId: agent.agentId,
+        agentType: agent.agentType,
+        nodeId: agent.nodeId,
+        workspacePath: agent.workspacePath,
+      }),
+    });
+
+    expect(status).toBe(201);
+    expect(body.agentId).toBe(agent.agentId);
+
+    const row = db
+      .prepare('SELECT agent_id as agentId FROM conversations WHERE id = ?')
+      .get(body.id) as { agentId: string | null };
+    expect(row.agentId).toBe(agent.agentId);
+
+    const agentConversations = manager.listConversations({ agentId: agent.agentId });
+    expect(agentConversations.map((conv) => conv.id)).toContain(body.id);
   });
 
   it('GET /api/conversations 应列出已创建的会话', async () => {

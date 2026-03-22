@@ -30,4 +30,21 @@ describe('nodeStateReconciler', () => {
         expect(row.status).toBe('failed');
         db.close();
     });
+    it('启动时应为可唯一匹配的历史会话回填 agent_id', () => {
+        const db = createTestDb();
+        const now = Date.now();
+        db.prepare(`INSERT INTO agents(agent_id, name, agent_type, channel_id, system_prompt, memory, env_vars, node_id, workspace_path, created_at, updated_at)
+       VALUES(?, ?, ?, ?, '', '', NULL, ?, ?, ?, ?)`).run('agent-bob', 'Bob', 'codex_acp', 'default', 'node-1', '/tmp/bob', now, now);
+        db.prepare(`INSERT INTO sessions(session_key, agent_command, agent_args_json, acp_session_id, load_supported, cwd, created_at, updated_at)
+       VALUES(?, 'npx', '[]', NULL, 0, '/tmp/bob', ?, ?)`).run('session-2', now, now);
+        db.prepare(`INSERT INTO conversations(id, channel_id, title, agent_type, workspace_path, session_key, status, env_vars, node_id, agent_id, created_at, updated_at)
+       VALUES(?, 'default', 'Recovered thread', 'codex_acp', '/tmp/bob', 'session-2', 'idle', NULL, 'node-1', NULL, ?, ?)`).run('conv-2', now, now);
+        const result = reconcileNodeStateOnStartup(db);
+        const row = db
+            .prepare(`SELECT agent_id as agentId FROM conversations WHERE id = ?`)
+            .get('conv-2');
+        expect(result.backfilledConversationAgents).toBe(1);
+        expect(row.agentId).toBe('agent-bob');
+        db.close();
+    });
 });

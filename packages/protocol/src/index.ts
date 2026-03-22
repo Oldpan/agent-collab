@@ -189,12 +189,52 @@ export type NodePermissionRequestMsg = {
   toolKind?: string | null;
 };
 
+export type WorkspaceErrorCode =
+  | 'not_found'
+  | 'not_directory'
+  | 'not_file'
+  | 'path_outside_workspace'
+  | 'binary_file'
+  | 'file_too_large'
+  | 'io_error';
+
+export type AgentWorkspaceEntry = {
+  name: string;
+  path: string;
+  kind: 'directory' | 'file';
+  size: number | null;
+  modifiedAt: number | null;
+};
+
+export type WorkspaceListResponseMsg = {
+  type: 'workspace.list.response';
+  requestId: string;
+  relativePath: string;
+  entries?: AgentWorkspaceEntry[];
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
+export type WorkspaceReadResponseMsg = {
+  type: 'workspace.read.response';
+  requestId: string;
+  relativePath: string;
+  content?: string;
+  mimeType?: 'text/markdown' | 'text/plain';
+  size?: number;
+  modifiedAt?: number | null;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
 export type NodeToCore =
   | NodeRegisterMsg
   | NodeHeartbeatMsg
   | RunEventMsg
   | RunEndMsg
-  | NodePermissionRequestMsg;
+  | NodePermissionRequestMsg
+  | WorkspaceListResponseMsg
+  | WorkspaceReadResponseMsg;
 
 // Core → Node
 
@@ -228,7 +268,27 @@ export type NodePermissionResponseMsg = {
   decision: 'allow' | 'deny';
 };
 
-export type CoreToNode = NodeAckMsg | RunDispatchMsg | RunCancelMsg | NodePermissionResponseMsg;
+export type WorkspaceListRequestMsg = {
+  type: 'workspace.list.request';
+  requestId: string;
+  workspaceRoot: string;
+  relativePath: string;
+};
+
+export type WorkspaceReadRequestMsg = {
+  type: 'workspace.read.request';
+  requestId: string;
+  workspaceRoot: string;
+  relativePath: string;
+};
+
+export type CoreToNode =
+  | NodeAckMsg
+  | RunDispatchMsg
+  | RunCancelMsg
+  | NodePermissionResponseMsg
+  | WorkspaceListRequestMsg
+  | WorkspaceReadRequestMsg;
 
 // ─── REST API 类型 ───
 
@@ -253,6 +313,19 @@ export type CreateConversationRequest = {
   envVars?: Record<string, string>;
   nodeId?: string;
   agentId?: string;
+};
+
+export type AgentWorkspaceListResult = {
+  path: string;
+  entries: AgentWorkspaceEntry[];
+};
+
+export type AgentWorkspaceFileResult = {
+  path: string;
+  content: string;
+  mimeType: 'text/markdown' | 'text/plain';
+  size: number;
+  modifiedAt: number | null;
 };
 
 export type AgentInfo = {

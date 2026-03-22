@@ -3,6 +3,7 @@ import type { NodeToCore, ServerEvent } from '@agent-collab/protocol';
 import { log, finishRun } from '@agent-collab/runtime-acp';
 import type { Db } from '@agent-collab/runtime-acp';
 import type { NodeRegistry } from '../services/nodeRegistry.js';
+import type { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 
 /** Persist a ServerEvent from a remote run into core DB as a node/event entry */
 function appendNodeEvent(db: Db, runId: string, seq: number, event: ServerEvent): void {
@@ -21,6 +22,7 @@ export function handleNodeWebSocket(
   registry: NodeRegistry,
   broadcast: EventBroadcaster,
   db: Db,
+  workspaceBroker?: AgentWorkspaceBroker,
 ): void {
   let nodeId: string | null = null;
   // Sequence counter per runId for node/event persistence
@@ -133,6 +135,16 @@ export function handleNodeWebSocket(
         break;
       }
 
+      case 'workspace.list.response': {
+        workspaceBroker?.handleWorkspaceListResponse(msg);
+        break;
+      }
+
+      case 'workspace.read.response': {
+        workspaceBroker?.handleWorkspaceReadResponse(msg);
+        break;
+      }
+
       default: {
         log.warn('[node-ws] unknown message type', (msg as any).type);
       }
@@ -141,6 +153,7 @@ export function handleNodeWebSocket(
 
   socket.on('close', () => {
     if (nodeId) {
+      workspaceBroker?.rejectPendingForNode(nodeId);
       registry.unregister(nodeId);
       db.prepare(`UPDATE nodes SET status='offline', last_seen=? WHERE node_id=?`)
         .run(Date.now(), nodeId);

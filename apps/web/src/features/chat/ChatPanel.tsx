@@ -1,4 +1,5 @@
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
 import {
   Conversation,
   ConversationContent,
@@ -24,13 +25,16 @@ import {
   type ToolState,
 } from "@/components/ai-elements/tool";
 import { useConversationStream } from "@/hooks/useConversationStream";
+import { useEffect, useState } from "react";
 import { PromptComposer } from "./PromptComposer";
-import type { ConversationInfo } from "@agent-collab/protocol";
+import { AgentWorkspacePanel } from "./AgentWorkspacePanel";
+import type { AgentInfo, ConversationInfo } from "@agent-collab/protocol";
 import type { LiveMessage, LiveToolCall } from "@/hooks/types";
 import { cn } from "@/lib/utils";
 
 type ChatPanelProps = {
   conversation: ConversationInfo;
+  agent: AgentInfo | null;
 };
 
 /** Determine tool display state from LiveToolCall */
@@ -41,7 +45,8 @@ function getToolState(tc: LiveToolCall): ToolState {
 }
 
 /** Main chat panel: header + messages + composer */
-export function ChatPanel({ conversation }: ChatPanelProps) {
+export function ChatPanel({ conversation, agent }: ChatPanelProps) {
+  const [activeTab, setActiveTab] = useState<"chat" | "workspace">("chat");
   const {
     messages,
     status,
@@ -62,66 +67,97 @@ export function ChatPanel({ conversation }: ChatPanelProps) {
           ? "failed"
           : conversation.status;
 
+  useEffect(() => {
+    setActiveTab("chat");
+  }, [conversation.id]);
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
-      <div className="flex items-center gap-3 border-b border-border px-4 py-3">
-        <h2 className="text-sm font-semibold truncate flex-1">
-          {conversation.title || "Untitled"}
-        </h2>
-        <Badge variant="secondary" className="text-[11px]">
-          {conversation.agentType === "claude_acp" ? "Claude" : "Codex"}
-        </Badge>
-        <StatusDot status={displayStatus} />
+      <div className="border-b border-border px-4 py-3">
+        <div className="flex items-center gap-3">
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-sm font-semibold">
+              {agent?.name ?? conversation.title ?? "Untitled"}
+            </h2>
+            <div className="mt-1 text-xs text-muted-foreground">
+              {conversation.title || "Current thread"}
+            </div>
+          </div>
+          <Badge variant="secondary" className="text-[11px]">
+            {conversation.agentType === "claude_acp" ? "Claude" : "Codex"}
+          </Badge>
+          <StatusDot status={displayStatus} />
+        </div>
+        <div className="mt-3 flex items-center gap-2">
+          <Button
+            size="sm"
+            variant={activeTab === "chat" ? "default" : "outline"}
+            className="h-8 text-xs"
+            onClick={() => setActiveTab("chat")}
+          >
+            Chat
+          </Button>
+          <Button
+            size="sm"
+            variant={activeTab === "workspace" ? "default" : "outline"}
+            className="h-8 text-xs"
+            onClick={() => setActiveTab("workspace")}
+          >
+            Workspace
+          </Button>
+        </div>
       </div>
 
-      {/* Messages */}
-      <Conversation className="flex-1 min-h-0">
-        <ConversationContent>
-          {messages.length === 0 ? (
-            <ConversationEmptyState
-              title="Start the conversation"
-              description="Send a message to begin"
-            />
-          ) : (
-            messages.map((msg) => (
-              <MessageRow key={msg.id} message={msg} />
-            ))
-          )}
+      {activeTab === "workspace" ? (
+        <AgentWorkspacePanel agent={agent} />
+      ) : (
+        <>
+          <Conversation className="flex-1 min-h-0">
+            <ConversationContent>
+              {messages.length === 0 ? (
+                <ConversationEmptyState
+                  title="Start the conversation"
+                  description="Send a message to begin"
+                />
+              ) : (
+                messages.map((msg) => (
+                  <MessageRow key={msg.id} message={msg} />
+                ))
+              )}
 
-          {/* Pending approval */}
-          {pendingApproval && (
-            <div className="mt-2">
-              <Confirmation
-                toolName={pendingApproval.toolName}
-                toolArgs={pendingApproval.toolArgs}
-                onAllow={() => respondApproval(pendingApproval.requestId, "allow")}
-                onDeny={() => respondApproval(pendingApproval.requestId, "deny")}
-              />
-            </div>
-          )}
+              {pendingApproval && (
+                <div className="mt-2">
+                  <Confirmation
+                    toolName={pendingApproval.toolName}
+                    toolArgs={pendingApproval.toolArgs}
+                    onAllow={() => respondApproval(pendingApproval.requestId, "allow")}
+                    onDeny={() => respondApproval(pendingApproval.requestId, "deny")}
+                  />
+                </div>
+              )}
 
-          {/* Streaming indicator */}
-          {(status === "submitted" || status === "streaming" || status === "recovering" || status === "awaiting_approval") && (
-            <div className="flex items-center gap-2 py-2 text-muted-foreground text-sm">
-              <Loader size={14} />
-              <span>
-                {status === "submitted"
-                  ? "Thinking..."
-                  : status === "recovering"
-                    ? "Recovering session..."
-                  : status === "awaiting_approval"
-                    ? "Waiting for approval..."
-                    : "Streaming..."}
-              </span>
-            </div>
-          )}
-        </ConversationContent>
-        <ConversationScrollButton />
-      </Conversation>
+              {(status === "submitted" || status === "streaming" || status === "recovering" || status === "awaiting_approval") && (
+                <div className="flex items-center gap-2 py-2 text-muted-foreground text-sm">
+                  <Loader size={14} />
+                  <span>
+                    {status === "submitted"
+                      ? "Thinking..."
+                      : status === "recovering"
+                        ? "Recovering session..."
+                      : status === "awaiting_approval"
+                        ? "Waiting for approval..."
+                        : "Streaming..."}
+                  </span>
+                </div>
+              )}
+            </ConversationContent>
+            <ConversationScrollButton />
+          </Conversation>
 
-      {/* Composer */}
-      <PromptComposer status={status} onSend={sendPrompt} onCancel={cancel} />
+          <PromptComposer status={status} onSend={sendPrompt} onCancel={cancel} />
+        </>
+      )}
     </div>
   );
 }
