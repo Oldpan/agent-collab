@@ -199,7 +199,7 @@ export class ConversationManager {
 
     log.info('[conv-mgr] dispatching to node', { nodeId: row.nodeId, conversationId, runId });
 
-    this.nodeRegistry!.send(row.nodeId, {
+    const sent = this.nodeRegistry!.send(row.nodeId, {
       type: 'run.dispatch',
       runId,
       conversationId,
@@ -209,6 +209,13 @@ export class ConversationManager {
       prompt: promptText,
       sessionKey: row.sessionKey,
     });
+
+    if (!sent) {
+      // WebSocket closed between getNode check and send — mark the orphaned run as failed
+      finishRun(this.db, { runId, error: 'Node disconnected during dispatch' });
+      this.updateStatus(conversationId, 'idle');
+      throw new Error(`Node disconnected: ${row.nodeId}`);
+    }
   }
 
   // ─── Channel CRUD ───

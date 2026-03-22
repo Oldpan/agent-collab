@@ -127,62 +127,76 @@ function replayHistory(
     const turnId = `replay-${run.runId}`;
     send({ type: 'turn.begin', turnId });
 
-    // 读取该 run 的所有 session/update 事件
-    const events = db
+    // 读取 node/event（remote runs）— 直接回放 ServerEvent
+    const nodeEvents = db
       .prepare(
         `SELECT payload_json as payloadJson FROM events
-         WHERE run_id = ? AND method = 'session/update'
+         WHERE run_id = ? AND method = 'node/event'
          ORDER BY seq ASC`,
       )
       .all(run.runId) as Array<{ payloadJson: string }>;
 
-    // 合并 agent text、提取 tool calls
-    let agentText = '';
-    const toolCalls = new Map<string, { name: string; output?: string; error?: boolean }>();
-
-    for (const evt of events) {
-      try {
-        const payload = JSON.parse(evt.payloadJson);
-        const update = payload?.update;
-        if (!update) continue;
-
-        if (update.sessionUpdate === 'agent_message_chunk') {
-          agentText += update.content?.text ?? '';
+    if (nodeEvents.length > 0) {
+      for (const evt of nodeEvents) {
+        try {
+          send(JSON.parse(evt.payloadJson));
+        } catch {
+          // skip malformed
         }
+      }
+    } else {
+      // 本地 run：读取 session/update 事件并重新合并
+      const events = db
+        .prepare(
+          `SELECT payload_json as payloadJson FROM events
+           WHERE run_id = ? AND method = 'session/update'
+           ORDER BY seq ASC`,
+        )
+        .all(run.runId) as Array<{ payloadJson: string }>;
 
-        if (update.sessionUpdate === 'tool_call') {
-          const toolCallId = extractToolCallIdFromUpdate(update) ?? '';
-          const name = String(update.title ?? toolCallId ?? 'tool');
-          toolCalls.set(toolCallId, { name });
-        }
+      let agentText = '';
+      const toolCalls = new Map<string, { name: string; output?: string; error?: boolean }>();
 
-        if (update.sessionUpdate === 'tool_call_update') {
-          const toolCallId = extractToolCallIdFromUpdate(update) ?? '';
-          const existing = toolCalls.get(toolCallId);
-          // 检查是否完成
-          const status = `${update.status ?? update.state ?? update.outcome ?? ''}`.toLowerCase();
-          if (status.includes('done') || status.includes('complete') || status.includes('success') || status.includes('error') || status.includes('fail')) {
-            if (existing) {
-              existing.output = update.output ?? status;
-              existing.error = status.includes('error') || status.includes('fail');
+      for (const evt of events) {
+        try {
+          const payload = JSON.parse(evt.payloadJson);
+          const update = payload?.update;
+          if (!update) continue;
+
+          if (update.sessionUpdate === 'agent_message_chunk') {
+            agentText += update.content?.text ?? '';
+          }
+
+          if (update.sessionUpdate === 'tool_call') {
+            const toolCallId = extractToolCallIdFromUpdate(update) ?? '';
+            const name = String(update.title ?? toolCallId ?? 'tool');
+            toolCalls.set(toolCallId, { name });
+          }
+
+          if (update.sessionUpdate === 'tool_call_update') {
+            const toolCallId = extractToolCallIdFromUpdate(update) ?? '';
+            const existing = toolCalls.get(toolCallId);
+            const status = `${update.status ?? update.state ?? update.outcome ?? ''}`.toLowerCase();
+            if (status.includes('done') || status.includes('complete') || status.includes('success') || status.includes('error') || status.includes('fail')) {
+              if (existing) {
+                existing.output = update.output ?? status;
+                existing.error = status.includes('error') || status.includes('fail');
+              }
             }
           }
+        } catch {
+          // 跳过解析失败的事件
         }
-      } catch {
-        // 跳过解析失败的事件
       }
-    }
 
-    // 发送合并后的 content
-    if (agentText) {
-      send({ type: 'content.delta', text: agentText });
-    }
-
-    // 发送 tool calls
-    for (const [toolCallId, tc] of toolCalls) {
-      send({ type: 'tool.call', toolCallId, name: tc.name, input: null });
-      if (tc.output !== undefined) {
-        send({ type: 'tool.result', toolCallId, output: tc.output, error: tc.error });
+      if (agentText) {
+        send({ type: 'content.delta', text: agentText });
+      }
+      for (const [toolCallId, tc] of toolCalls) {
+        send({ type: 'tool.call', toolCallId, name: tc.name, input: null });
+        if (tc.output !== undefined) {
+          send({ type: 'tool.result', toolCallId, output: tc.output, error: tc.error });
+        }
       }
     }
 

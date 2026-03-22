@@ -1,8 +1,18 @@
 import type { WebSocket } from 'ws';
 import type { NodeToCore, ServerEvent } from '@agent-collab/protocol';
-import { log } from '@agent-collab/runtime-acp';
+import { log, finishRun } from '@agent-collab/runtime-acp';
 import type { Db } from '@agent-collab/runtime-acp';
 import type { NodeRegistry } from '../services/nodeRegistry.js';
+
+/** Persist a ServerEvent from a remote run into core DB as a node/event entry */
+function appendNodeEvent(db: Db, runId: string, seq: number, event: ServerEvent): void {
+  db.prepare(
+    'INSERT OR IGNORE INTO events(run_id, seq, method, payload_json, created_at) VALUES(?, ?, ?, ?, ?)',
+  ).run(runId, seq, 'node/event', JSON.stringify(event), Date.now());
+}
+
+/** Event types worth persisting for history replay */
+const REPLAY_EVENT_TYPES = new Set(['content.delta', 'tool.call', 'tool.result', 'thinking.delta']);
 
 type EventBroadcaster = (conversationId: string, event: ServerEvent) => void;
 
@@ -13,6 +23,8 @@ export function handleNodeWebSocket(
   db: Db,
 ): void {
   let nodeId: string | null = null;
+  // Sequence counter per runId for node/event persistence
+  const runSeq = new Map<string, number>();
 
   socket.on('message', (raw) => {
     let msg: NodeToCore;
@@ -47,11 +59,22 @@ export function handleNodeWebSocket(
       case 'run.event': {
         log.debug('[node-ws] run.event', { conversationId: msg.conversationId, eventType: msg.event.type });
         broadcast(msg.conversationId, msg.event);
+        // Persist replay-worthy events to core DB immediately
+        if (REPLAY_EVENT_TYPES.has(msg.event.type)) {
+          const seq = (runSeq.get(msg.runId) ?? 0) + 1;
+          runSeq.set(msg.runId, seq);
+          appendNodeEvent(db, msg.runId, seq, msg.event);
+        }
         break;
       }
 
       case 'run.end': {
         log.info('[node-ws] run.end', { runId: msg.runId, conversationId: msg.conversationId, error: msg.error ?? null });
+        runSeq.delete(msg.runId);
+        // Mark run as finished in core DB
+        finishRun(db, msg.error
+          ? { runId: msg.runId, error: msg.error }
+          : { runId: msg.runId, stopReason: msg.stopReason ?? 'end_turn' });
         // Update conversation status in DB
         db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
           .run('idle', Date.now(), msg.conversationId);

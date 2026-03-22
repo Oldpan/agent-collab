@@ -254,9 +254,17 @@ function ConversationItem({
             {conversation.agentType === "claude_acp" ? "Claude" : "Codex"}
           </Badge>
         </div>
-        <span className="text-xs text-muted-foreground">
-          {formatRelativeTime(conversation.updatedAt)}
-        </span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-muted-foreground">
+            {formatRelativeTime(conversation.updatedAt)}
+          </span>
+          <span
+            className="font-mono text-[10px] text-muted-foreground/60 truncate"
+            title={conversation.id}
+          >
+            {conversation.id.slice(0, 8)}
+          </span>
+        </div>
       </div>
 
       <button
