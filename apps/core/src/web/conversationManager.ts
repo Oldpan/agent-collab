@@ -15,6 +15,7 @@ import {
 } from '@agent-collab/runtime-acp';
 import type { Db, OutboundSink, UiMode } from '@agent-collab/runtime-acp';
 import type { AppConfig } from '../config.js';
+import type { NodeRegistry } from '../services/nodeRegistry.js';
 
 // Agent CLI presets
 const CLI_PRESETS: Record<AgentType, { command: string; args: string[] }> = {
@@ -32,6 +33,7 @@ export class ConversationManager {
   private readonly db: Db;
   private readonly config: AppConfig;
   private readonly toolAuth: ToolAuth;
+  private readonly nodeRegistry?: NodeRegistry;
 
   // Active runtimes keyed by sessionKey
   private readonly runtimesBySessionKey = new Map<
@@ -41,10 +43,11 @@ export class ConversationManager {
 
   private gcTimer: NodeJS.Timeout | null = null;
 
-  constructor(params: { db: Db; config: AppConfig }) {
+  constructor(params: { db: Db; config: AppConfig; nodeRegistry?: NodeRegistry }) {
     this.db = params.db;
     this.config = params.config;
     this.toolAuth = new ToolAuth(this.db);
+    this.nodeRegistry = params.nodeRegistry;
   }
 
   getDb(): Db {
@@ -81,6 +84,7 @@ export class ConversationManager {
     title?: string;
     channelId?: string;
     envVars?: Record<string, string>;
+    nodeId?: string;
   }): ConversationInfo {
     const id = randomUUID();
     const agentType: AgentType = params.agentType ?? 'claude_acp';
@@ -115,22 +119,22 @@ export class ConversationManager {
     // Create conversations row
     this.db
       .prepare(
-        `INSERT INTO conversations(id, channel_id, title, agent_type, workspace_path, session_key, status, env_vars, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?)`,
+        `INSERT INTO conversations(id, channel_id, title, agent_type, workspace_path, session_key, status, env_vars, node_id, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, ?)`,
       )
-      .run(id, channelId, title, agentType, workspacePath, sessionKey, envVarsJson, now, now);
+      .run(id, channelId, title, agentType, workspacePath, sessionKey, envVarsJson, params.nodeId ?? null, now, now);
 
-    return { id, channelId, title, agentType, workspacePath, status: 'idle', createdAt: now, updatedAt: now };
+    return { id, channelId, title, agentType, workspacePath, status: 'idle', createdAt: now, updatedAt: now, nodeId: params.nodeId ?? null };
   }
 
   listConversations(channelId?: string): ConversationInfo[] {
     const sql = channelId
       ? `SELECT id, channel_id as channelId, title, agent_type as agentType,
-                workspace_path as workspacePath, status,
+                workspace_path as workspacePath, status, node_id as nodeId,
                 created_at as createdAt, updated_at as updatedAt
          FROM conversations WHERE channel_id = ? ORDER BY updated_at DESC`
       : `SELECT id, channel_id as channelId, title, agent_type as agentType,
-                workspace_path as workspacePath, status,
+                workspace_path as workspacePath, status, node_id as nodeId,
                 created_at as createdAt, updated_at as updatedAt
          FROM conversations ORDER BY updated_at DESC`;
     const rows = channelId
@@ -143,7 +147,7 @@ export class ConversationManager {
     const row = this.db
       .prepare(
         `SELECT id, channel_id as channelId, title, agent_type as agentType,
-                workspace_path as workspacePath, status,
+                workspace_path as workspacePath, status, node_id as nodeId,
                 created_at as createdAt, updated_at as updatedAt
          FROM conversations WHERE id = ?`,
       )
@@ -169,6 +173,37 @@ export class ConversationManager {
     }
 
     this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
+  }
+
+  async dispatchToNode(conversationId: string, promptText: string): Promise<void> {
+    const row = this.db.prepare(
+      `SELECT session_key as sessionKey, agent_type as agentType,
+              workspace_path as workspacePath, env_vars as envVarsJson, node_id as nodeId
+       FROM conversations WHERE id = ?`
+    ).get(conversationId) as {
+      sessionKey: string; agentType: string; workspacePath: string | null;
+      envVarsJson: string | null; nodeId: string;
+    } | undefined;
+
+    if (!row) throw new Error(`Unknown conversation: ${conversationId}`);
+
+    const node = this.nodeRegistry?.getNode(row.nodeId);
+    if (!node) throw new Error(`Node not connected: ${row.nodeId}`);
+
+    const runId = randomUUID();
+    createRun(this.db, { runId, sessionKey: row.sessionKey, promptText });
+    this.updateStatus(conversationId, 'busy');
+
+    this.nodeRegistry!.send(row.nodeId, {
+      type: 'run.dispatch',
+      runId,
+      conversationId,
+      agentType: row.agentType,
+      workspacePath: row.workspacePath,
+      envVars: parseEnvVars(row.envVarsJson),
+      prompt: promptText,
+      sessionKey: row.sessionKey,
+    });
   }
 
   // ─── Channel CRUD ───
@@ -368,13 +403,22 @@ export class ConversationManager {
     requestId: string,
     decision: 'allow' | 'deny',
   ): Promise<{ ok: boolean; message: string }> {
-    const row = this.db
-      .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
-      .get(conversationId) as { sessionKey: string } | undefined;
+    const convRow = this.db
+      .prepare('SELECT session_key as sessionKey, node_id as nodeId FROM conversations WHERE id = ?')
+      .get(conversationId) as { sessionKey: string; nodeId: string | null } | undefined;
 
-    if (!row) return { ok: false, message: 'Unknown conversation.' };
+    if (!convRow) return { ok: false, message: 'Unknown conversation.' };
 
-    const entry = this.runtimesBySessionKey.get(row.sessionKey);
+    if (convRow.nodeId) {
+      const sent = this.nodeRegistry?.send(convRow.nodeId, {
+        type: 'permission.response',
+        requestId,
+        decision,
+      });
+      return sent ? { ok: true, message: '' } : { ok: false, message: 'Node not connected.' };
+    }
+
+    const entry = this.runtimesBySessionKey.get(convRow.sessionKey);
     if (!entry) return { ok: false, message: 'No active runtime. Send a message first.' };
 
     return entry.runtime.decidePermission({ decision, requestId, actorUserId: 'web_user' });

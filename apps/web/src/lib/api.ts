@@ -1,4 +1,4 @@
-import type { ConversationInfo, CreateConversationRequest, ServerEvent } from "@agent-collab/protocol";
+import type { ConversationInfo, CreateConversationRequest, ServerEvent, NodeInfoRest } from "@agent-collab/protocol";
 
 const API_BASE = "/api";
 
@@ -30,5 +30,11 @@ export async function deleteConversation(id: string): Promise<void> {
 export async function getHistory(id: string): Promise<ServerEvent[]> {
   const res = await fetch(`${API_BASE}/conversations/${id}/history`);
   if (!res.ok) throw new Error(`Failed to get history: ${res.statusText}`);
+  return res.json();
+}
+
+export async function listNodes(): Promise<NodeInfoRest[]> {
+  const res = await fetch(`${API_BASE}/nodes`);
+  if (!res.ok) throw new Error(`Failed to list nodes: ${res.statusText}`);
   return res.json();
 }

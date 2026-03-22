@@ -4,6 +4,7 @@ import { acquireProcessLock, openDb, migrate, log } from '@agent-collab/runtime-
 import { resolveGatewayHomeDir, loadConfig } from './config.js';
 import { ConversationManager } from './web/conversationManager.js';
 import { startServer } from './web/server.js';
+import { NodeRegistry } from './services/nodeRegistry.js';
 
 async function main(): Promise<void> {
   const gatewayHome = resolveGatewayHomeDir();
@@ -28,7 +29,8 @@ async function main(): Promise<void> {
   const db = openDb(config.dbPath);
   migrate(db);
 
-  const manager = new ConversationManager({ db, config });
+  const nodeRegistry = new NodeRegistry();
+  const manager = new ConversationManager({ db, config, nodeRegistry });
   manager.start();
 
   await startServer({
@@ -36,6 +38,7 @@ async function main(): Promise<void> {
     host: config.webHost,
     conversationManager: manager,
     db,
+    nodeRegistry,
   });
 
   log.info('agent-node started', {

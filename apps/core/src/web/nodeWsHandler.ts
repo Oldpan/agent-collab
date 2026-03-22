@@ -1,6 +1,7 @@
 import type { WebSocket } from 'ws';
 import type { NodeToCore, ServerEvent } from '@agent-collab/protocol';
 import { log } from '@agent-collab/runtime-acp';
+import type { Db } from '@agent-collab/runtime-acp';
 import type { NodeRegistry } from '../services/nodeRegistry.js';
 
 type EventBroadcaster = (conversationId: string, event: ServerEvent) => void;
@@ -9,6 +10,7 @@ export function handleNodeWebSocket(
   socket: WebSocket,
   registry: NodeRegistry,
   broadcast: EventBroadcaster,
+  db: Db,
 ): void {
   let nodeId: string | null = null;
 
@@ -48,6 +50,9 @@ export function handleNodeWebSocket(
       }
 
       case 'run.end': {
+        // Update conversation status in DB
+        db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
+          .run('idle', Date.now(), msg.conversationId);
         broadcast(msg.conversationId, {
           type: 'turn.end',
           turnId: msg.runId,

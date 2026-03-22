@@ -199,6 +199,7 @@ export type ConversationInfo = {
   status: 'idle' | 'busy' | 'error';
   createdAt: number;
   updatedAt: number;
+  nodeId?: string | null;
 };
 
 export type CreateConversationRequest = {
@@ -207,6 +208,7 @@ export type CreateConversationRequest = {
   title?: string;
   channelId?: string;
   envVars?: Record<string, string>;
+  nodeId?: string;
 };
 
 export type ChannelInfo = {

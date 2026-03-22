@@ -202,32 +202,42 @@ async function handleClientEvent(
 ): Promise<void> {
   switch (event.type) {
     case 'prompt': {
-      const sink = createSinkForConversation(conversationId);
+      const conv = manager.getConversation(conversationId);
 
-      // Signal turn begin
+      if (conv?.nodeId) {
+        // Remote: dispatch to node, events come back via run.event
+        broadcast(conversationId, {
+          type: 'conversation.status',
+          conversationId,
+          status: 'busy',
+        });
+        try {
+          await manager.dispatchToNode(conversationId, event.text);
+        } catch (error: any) {
+          broadcast(conversationId, { type: 'error', message: String(error?.message ?? error) });
+          broadcast(conversationId, {
+            type: 'conversation.status',
+            conversationId,
+            status: 'idle',
+          });
+        }
+        // Do NOT broadcast turn.end or idle status here — nodeWsHandler does it on run.end
+        break;
+      }
+
+      // Local path (existing behavior)
+      const sink = createSinkForConversation(conversationId);
       const turnId = `turn-${Date.now()}`;
       broadcast(conversationId, { type: 'turn.begin', turnId });
-      broadcast(conversationId, {
-        type: 'conversation.status',
-        conversationId,
-        status: 'busy',
-      });
-
+      broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'busy' });
       try {
         await manager.sendPrompt(conversationId, event.text, sink, event.attachments);
         broadcast(conversationId, { type: 'turn.end', turnId, stopReason: 'end_turn' });
       } catch (error: any) {
-        broadcast(conversationId, {
-          type: 'error',
-          message: String(error?.message ?? error),
-        });
+        broadcast(conversationId, { type: 'error', message: String(error?.message ?? error) });
         broadcast(conversationId, { type: 'turn.end', turnId, stopReason: 'error' });
       } finally {
-        broadcast(conversationId, {
-          type: 'conversation.status',
-          conversationId,
-          status: 'idle',
-        });
+        broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'idle' });
       }
       break;
     }

@@ -41,6 +41,7 @@ export async function startServer(params: {
       title: body.title,
       channelId: body.channelId,
       envVars: body.envVars,
+      nodeId: body.nodeId,
     });
     reply.code(201);
     return conv;
@@ -152,7 +153,7 @@ export async function startServer(params: {
     '/api/nodes/connect',
     { websocket: true },
     (socket) => {
-      handleNodeWebSocket(socket, nodeRegistry, broadcast);
+      handleNodeWebSocket(socket, nodeRegistry, broadcast, db);
     },
   );
 

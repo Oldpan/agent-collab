@@ -22,10 +22,10 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('schema_version 应为最新版本 9', () => {
+  it('schema_version 应为最新版本 10', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBe(9);
+    expect(row.version).toBe(10);
     db.close();
   });
 

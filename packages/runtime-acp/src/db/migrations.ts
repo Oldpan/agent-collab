@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 9;
+const LATEST_VERSION = 10;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -266,5 +266,10 @@ export function migrate(db: Db): void {
 
       UPDATE schema_version SET version = 9;
     `);
+  }
+
+  if (current < 10) {
+    db.exec(`ALTER TABLE conversations ADD COLUMN node_id TEXT NULL;`);
+    db.exec(`UPDATE schema_version SET version = 10;`);
   }
 }

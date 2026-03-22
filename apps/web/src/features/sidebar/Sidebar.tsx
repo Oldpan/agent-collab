@@ -3,8 +3,9 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { PlusIcon, TrashIcon, XIcon } from "lucide-react";
-import { useCallback, useState } from "react";
-import type { ConversationInfo, AgentType, CreateConversationRequest } from "@agent-collab/protocol";
+import { useCallback, useState, useEffect } from "react";
+import type { ConversationInfo, AgentType, CreateConversationRequest, NodeInfoRest } from "@agent-collab/protocol";
+import { listNodes } from "@/lib/api";
 
 type SidebarProps = {
   conversations: ConversationInfo[];
@@ -39,6 +40,13 @@ export function Sidebar({
   const [agentType, setAgentType] = useState<AgentType>("claude_acp");
   // 环境变量列表，每项为 [key, value]
   const [envPairs, setEnvPairs] = useState<[string, string][]>([]);
+  const [nodes, setNodes] = useState<NodeInfoRest[]>([]);
+  const [targetNodeId, setTargetNodeId] = useState<string | undefined>(undefined);
+
+  useEffect(() => {
+    if (!showCreateForm) return;
+    listNodes().then(setNodes).catch(() => setNodes([]));
+  }, [showCreateForm]);
 
   const addEnvPair = useCallback(() => {
     setEnvPairs((prev) => [...prev, ["", ""]]);
@@ -61,7 +69,6 @@ export function Sidebar({
   );
 
   const handleCreate = useCallback(() => {
-    // 将非空 key 的 env pairs 转为 Record
     const envVars: Record<string, string> = {};
     for (const [k, v] of envPairs) {
       const key = k.trim();
@@ -70,11 +77,12 @@ export function Sidebar({
     onCreate({
       agentType,
       envVars: Object.keys(envVars).length > 0 ? envVars : undefined,
+      nodeId: targetNodeId,
     });
-    // 重置表单
     setShowCreateForm(false);
     setEnvPairs([]);
-  }, [agentType, envPairs, onCreate]);
+    setTargetNodeId(undefined);
+  }, [agentType, envPairs, targetNodeId, onCreate]);
 
   return (
     <div className="flex h-full flex-col">
@@ -112,6 +120,23 @@ export function Sidebar({
             >
               Codex ACP
             </Button>
+          </div>
+
+          {/* 节点选择 */}
+          <div className="space-y-1">
+            <span className="text-xs text-muted-foreground">Target Node</span>
+            <select
+              className="w-full rounded border border-input bg-background px-1.5 py-1 text-xs"
+              value={targetNodeId ?? ""}
+              onChange={(e) => setTargetNodeId(e.target.value || undefined)}
+            >
+              <option value="">Local</option>
+              {nodes.map((n) => (
+                <option key={n.nodeId} value={n.nodeId}>
+                  {n.hostname} ({n.nodeId})
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* 环境变量编辑 */}
