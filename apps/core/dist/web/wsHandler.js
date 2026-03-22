@@ -95,55 +95,69 @@ function replayHistory(socket, conversationId, manager) {
         // 发送 turn
         const turnId = `replay-${run.runId}`;
         send({ type: 'turn.begin', turnId });
-        // 读取该 run 的所有 session/update 事件
-        const events = db
+        // 读取 node/event（remote runs）— 直接回放 ServerEvent
+        const nodeEvents = db
             .prepare(`SELECT payload_json as payloadJson FROM events
-         WHERE run_id = ? AND method = 'session/update'
+         WHERE run_id = ? AND method = 'node/event'
          ORDER BY seq ASC`)
             .all(run.runId);
-        // 合并 agent text、提取 tool calls
-        let agentText = '';
-        const toolCalls = new Map();
-        for (const evt of events) {
-            try {
-                const payload = JSON.parse(evt.payloadJson);
-                const update = payload?.update;
-                if (!update)
-                    continue;
-                if (update.sessionUpdate === 'agent_message_chunk') {
-                    agentText += update.content?.text ?? '';
+        if (nodeEvents.length > 0) {
+            for (const evt of nodeEvents) {
+                try {
+                    send(JSON.parse(evt.payloadJson));
                 }
-                if (update.sessionUpdate === 'tool_call') {
-                    const toolCallId = extractToolCallIdFromUpdate(update) ?? '';
-                    const name = String(update.title ?? toolCallId ?? 'tool');
-                    toolCalls.set(toolCallId, { name });
+                catch {
+                    // skip malformed
                 }
-                if (update.sessionUpdate === 'tool_call_update') {
-                    const toolCallId = extractToolCallIdFromUpdate(update) ?? '';
-                    const existing = toolCalls.get(toolCallId);
-                    // 检查是否完成
-                    const status = `${update.status ?? update.state ?? update.outcome ?? ''}`.toLowerCase();
-                    if (status.includes('done') || status.includes('complete') || status.includes('success') || status.includes('error') || status.includes('fail')) {
-                        if (existing) {
-                            existing.output = update.output ?? status;
-                            existing.error = status.includes('error') || status.includes('fail');
+            }
+        }
+        else {
+            // 本地 run：读取 session/update 事件并重新合并
+            const events = db
+                .prepare(`SELECT payload_json as payloadJson FROM events
+           WHERE run_id = ? AND method = 'session/update'
+           ORDER BY seq ASC`)
+                .all(run.runId);
+            let agentText = '';
+            const toolCalls = new Map();
+            for (const evt of events) {
+                try {
+                    const payload = JSON.parse(evt.payloadJson);
+                    const update = payload?.update;
+                    if (!update)
+                        continue;
+                    if (update.sessionUpdate === 'agent_message_chunk') {
+                        agentText += update.content?.text ?? '';
+                    }
+                    if (update.sessionUpdate === 'tool_call') {
+                        const toolCallId = extractToolCallIdFromUpdate(update) ?? '';
+                        const name = String(update.title ?? toolCallId ?? 'tool');
+                        toolCalls.set(toolCallId, { name });
+                    }
+                    if (update.sessionUpdate === 'tool_call_update') {
+                        const toolCallId = extractToolCallIdFromUpdate(update) ?? '';
+                        const existing = toolCalls.get(toolCallId);
+                        const status = `${update.status ?? update.state ?? update.outcome ?? ''}`.toLowerCase();
+                        if (status.includes('done') || status.includes('complete') || status.includes('success') || status.includes('error') || status.includes('fail')) {
+                            if (existing) {
+                                existing.output = update.output ?? status;
+                                existing.error = status.includes('error') || status.includes('fail');
+                            }
                         }
                     }
                 }
+                catch {
+                    // 跳过解析失败的事件
+                }
             }
-            catch {
-                // 跳过解析失败的事件
+            if (agentText) {
+                send({ type: 'content.delta', text: agentText });
             }
-        }
-        // 发送合并后的 content
-        if (agentText) {
-            send({ type: 'content.delta', text: agentText });
-        }
-        // 发送 tool calls
-        for (const [toolCallId, tc] of toolCalls) {
-            send({ type: 'tool.call', toolCallId, name: tc.name, input: null });
-            if (tc.output !== undefined) {
-                send({ type: 'tool.result', toolCallId, output: tc.output, error: tc.error });
+            for (const [toolCallId, tc] of toolCalls) {
+                send({ type: 'tool.call', toolCallId, name: tc.name, input: null });
+                if (tc.output !== undefined) {
+                    send({ type: 'tool.result', toolCallId, output: tc.output, error: tc.error });
+                }
             }
         }
         send({ type: 'turn.end', turnId, stopReason: run.stopReason ?? 'end_turn' });
@@ -156,32 +170,44 @@ function extractToolCallIdFromUpdate(update) {
 async function handleClientEvent(conversationId, event, manager) {
     switch (event.type) {
         case 'prompt': {
+            const conv = manager.getConversation(conversationId);
+            if (conv?.nodeId) {
+                // Remote: dispatch to node, events come back via run.event
+                log.info('[ws] prompt → remote node', { conversationId, nodeId: conv.nodeId });
+                broadcast(conversationId, {
+                    type: 'conversation.status',
+                    conversationId,
+                    status: 'busy',
+                });
+                try {
+                    await manager.dispatchToNode(conversationId, event.text);
+                }
+                catch (error) {
+                    broadcast(conversationId, { type: 'error', message: String(error?.message ?? error) });
+                    broadcast(conversationId, {
+                        type: 'conversation.status',
+                        conversationId,
+                        status: 'idle',
+                    });
+                }
+                // Do NOT broadcast turn.end or idle status here — nodeWsHandler does it on run.end
+                break;
+            }
+            // Local path (existing behavior)
             const sink = createSinkForConversation(conversationId);
-            // Signal turn begin
             const turnId = `turn-${Date.now()}`;
             broadcast(conversationId, { type: 'turn.begin', turnId });
-            broadcast(conversationId, {
-                type: 'conversation.status',
-                conversationId,
-                status: 'busy',
-            });
+            broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'busy' });
             try {
                 await manager.sendPrompt(conversationId, event.text, sink, event.attachments);
                 broadcast(conversationId, { type: 'turn.end', turnId, stopReason: 'end_turn' });
             }
             catch (error) {
-                broadcast(conversationId, {
-                    type: 'error',
-                    message: String(error?.message ?? error),
-                });
+                broadcast(conversationId, { type: 'error', message: String(error?.message ?? error) });
                 broadcast(conversationId, { type: 'turn.end', turnId, stopReason: 'error' });
             }
             finally {
-                broadcast(conversationId, {
-                    type: 'conversation.status',
-                    conversationId,
-                    status: 'idle',
-                });
+                broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'idle' });
             }
             break;
         }

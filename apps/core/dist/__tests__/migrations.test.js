@@ -18,10 +18,10 @@ describe('migrations', () => {
         expect(colNames).toContain('updated_at');
         db.close();
     });
-    it('schema_version 应为最新版本 9', () => {
+    it('schema_version 应为最新版本 12', () => {
         const db = createTestDb();
         const row = db.prepare('SELECT version FROM schema_version').get();
-        expect(row.version).toBe(9);
+        expect(row.version).toBe(12);
         db.close();
     });
     it('channels 表应存在且包含 default 记录', () => {
@@ -57,6 +57,7 @@ describe('migrations', () => {
         expect(tableNames).toContain('tool_policies');
         expect(tableNames).toContain('nodes');
         expect(tableNames).toContain('channels');
+        expect(tableNames).toContain('agents');
         db.close();
     });
 });

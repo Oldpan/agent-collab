@@ -98,6 +98,7 @@ export class Executor {
         promptText: prompt,
         sink,
         uiMode,
+        contextText: msg.contextText,
         actorUserId: 'node_user',
       });
       finishRun(this.db, { runId, stopReason: result.stopReason });

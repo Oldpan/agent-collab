@@ -17,6 +17,7 @@
   "dependencies": {
     "@agent-collab/protocol": "workspace:*",
     "@agent-collab/runtime-acp": "workspace:*",
+    "@agent-collab/memory": "workspace:*",
     "better-sqlite3": "^12.6.2",
     "dotenv": "^16.6.1",
     "fastify": "^5.3.3",

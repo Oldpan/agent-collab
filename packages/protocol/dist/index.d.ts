@@ -117,6 +117,7 @@ export type RunDispatchMsg = {
     envVars?: Record<string, string>;
     prompt: string;
     sessionKey: string;
+    contextText?: string;
 };
 export type RunCancelMsg = {
     type: 'run.cancel';
@@ -139,6 +140,7 @@ export type ConversationInfo = {
     createdAt: number;
     updatedAt: number;
     nodeId?: string | null;
+    agentId?: string | null;
 };
 export type CreateConversationRequest = {
     agentType?: AgentType;
@@ -147,6 +149,35 @@ export type CreateConversationRequest = {
     channelId?: string;
     envVars?: Record<string, string>;
     nodeId?: string;
+    agentId?: string;
+};
+export type AgentInfo = {
+    agentId: string;
+    name: string;
+    agentType: AgentType;
+    channelId: string;
+    systemPrompt: string;
+    memory: string;
+    envVars?: Record<string, string>;
+    nodeId?: string | null;
+    workspacePath?: string | null;
+    createdAt: number;
+    updatedAt: number;
+};
+export type CreateAgentRequest = {
+    name: string;
+    agentType?: AgentType;
+    channelId?: string;
+    systemPrompt?: string;
+    memory?: string;
+    envVars?: Record<string, string>;
+    nodeId?: string;
+    workspacePath?: string;
+};
+export type UpdateAgentRequest = {
+    name?: string;
+    systemPrompt?: string;
+    memory?: string;
 };
 export type ChannelInfo = {
     channelId: string;

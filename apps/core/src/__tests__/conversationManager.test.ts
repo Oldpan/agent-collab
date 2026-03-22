@@ -138,8 +138,8 @@ describe('ConversationManager', () => {
       const c1 = manager.createConversation({ title: 'In default', channelId: 'default' });
       const c2 = manager.createConversation({ title: 'In chan-a', channelId: chanA.channelId });
 
-      const inDefault = manager.listConversations('default');
-      const inChanA = manager.listConversations(chanA.channelId);
+      const inDefault = manager.listConversations({ channelId: 'default' });
+      const inChanA = manager.listConversations({ channelId: chanA.channelId });
 
       expect(inDefault.some((c) => c.id === c1.id)).toBe(true);
       expect(inDefault.some((c) => c.id === c2.id)).toBe(false);

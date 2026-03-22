@@ -1,5 +1,6 @@
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useState, useEffect } from "react";
 import { useConversations } from "@/hooks/useConversations";
+import { useAgents } from "@/hooks/useAgents";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { ChatPanel } from "@/features/chat/ChatPanel";
 import {
@@ -7,7 +8,13 @@ import {
   ResizablePanel,
   ResizableHandle,
 } from "@/components/ui/resizable";
-import type { CreateConversationRequest } from "@agent-collab/protocol";
+import type {
+  CreateConversationRequest,
+  CreateAgentRequest,
+  UpdateAgentRequest,
+  ChannelInfo,
+} from "@agent-collab/protocol";
+import * as api from "@/lib/api";
 
 export function App() {
   const {
@@ -19,19 +26,46 @@ export function App() {
     selectConversation,
   } = useConversations();
 
+  const { agents, createAgent, updateAgent, deleteAgent } = useAgents();
+
+  const [channels, setChannels] = useState<ChannelInfo[]>([]);
+
+  useEffect(() => {
+    api.listChannels().then(setChannels).catch(() => setChannels([]));
+  }, []);
+
   const selectedConversation = useMemo(
     () => conversations.find((c) => c.id === selectedId),
     [conversations, selectedId],
   );
 
-  const handleCreate = useCallback(
+  const handleCreateAgent = useCallback(
+    (req: CreateAgentRequest) => {
+      createAgent(req);
+    },
+    [createAgent],
+  );
+
+  const handleUpdateAgent = useCallback(
+    (id: string, req: UpdateAgentRequest) => updateAgent(id, req),
+    [updateAgent],
+  );
+
+  const handleDeleteAgent = useCallback(
+    (id: string) => {
+      deleteAgent(id);
+    },
+    [deleteAgent],
+  );
+
+  const handleCreateConversation = useCallback(
     (req: CreateConversationRequest) => {
       createConversation(req);
     },
     [createConversation],
   );
 
-  const handleDelete = useCallback(
+  const handleDeleteConversation = useCallback(
     (id: string) => {
       deleteConversation(id);
     },
@@ -49,11 +83,16 @@ export function App() {
           className="bg-sidebar text-sidebar-foreground"
         >
           <Sidebar
+            channels={channels}
+            agents={agents}
             conversations={conversations}
             selectedId={selectedId}
             onSelect={selectConversation}
-            onCreate={handleCreate}
-            onDelete={handleDelete}
+            onCreateAgent={handleCreateAgent}
+            onUpdateAgent={handleUpdateAgent}
+            onDeleteAgent={handleDeleteAgent}
+            onCreateConversation={handleCreateConversation}
+            onDeleteConversation={handleDeleteConversation}
           />
         </ResizablePanel>
 
@@ -71,7 +110,7 @@ export function App() {
                 </p>
                 {!loading && (
                   <p className="text-sm">
-                    Use the + button in the sidebar to start
+                    Create an agent in the sidebar to get started
                   </p>
                 )}
               </div>

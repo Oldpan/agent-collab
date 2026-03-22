@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 10;
+const LATEST_VERSION = 12;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -271,5 +271,32 @@ export function migrate(db: Db): void {
   if (current < 10) {
     db.exec(`ALTER TABLE conversations ADD COLUMN node_id TEXT NULL;`);
     db.exec(`UPDATE schema_version SET version = 10;`);
+  }
+
+  if (current < 11) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS agents (
+        agent_id       TEXT PRIMARY KEY,
+        name           TEXT NOT NULL,
+        agent_type     TEXT NOT NULL DEFAULT 'claude_acp',
+        system_prompt  TEXT NOT NULL DEFAULT '',
+        memory         TEXT NOT NULL DEFAULT '',
+        env_vars       TEXT,
+        node_id        TEXT,
+        workspace_path TEXT,
+        created_at     INTEGER NOT NULL,
+        updated_at     INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_agents_updated ON agents(updated_at DESC);
+
+      UPDATE schema_version SET version = 11;
+    `);
+    db.exec(`ALTER TABLE conversations ADD COLUMN agent_id TEXT REFERENCES agents(agent_id);`);
+  }
+
+  if (current < 12) {
+    db.exec(`ALTER TABLE agents ADD COLUMN channel_id TEXT NOT NULL DEFAULT 'default' REFERENCES channels(channel_id);`);
+    db.exec(`UPDATE schema_version SET version = 12;`);
   }
 }

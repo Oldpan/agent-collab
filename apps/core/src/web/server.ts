@@ -4,7 +4,7 @@ import fastifyWebSocket from '@fastify/websocket';
 
 import type { Db } from '@agent-collab/runtime-acp';
 import { log } from '@agent-collab/runtime-acp';
-import type { CreateConversationRequest, CreateChannelRequest } from '@agent-collab/protocol';
+import type { CreateConversationRequest, CreateChannelRequest, CreateAgentRequest, UpdateAgentRequest } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
 import { handleWebSocket, broadcast } from './wsHandler.js';
 import { handleNodeWebSocket } from './nodeWsHandler.js';
@@ -30,6 +30,49 @@ export async function startServer(params: {
   // List conversations
   app.get('/api/conversations', async () => {
     return conversationManager.listConversations();
+  });
+
+  // ─── Agent routes ───
+
+  app.get('/api/agents', async () => {
+    return conversationManager.listAgents();
+  });
+
+  app.post<{ Body: CreateAgentRequest }>('/api/agents', async (req, reply) => {
+    const body = (req.body ?? {}) as CreateAgentRequest;
+    if (!body.name) {
+      reply.code(400);
+      return { error: 'name is required' };
+    }
+    const agent = conversationManager.createAgent(body);
+    reply.code(201);
+    return agent;
+  });
+
+  app.get<{ Params: { id: string } }>('/api/agents/:id', async (req, reply) => {
+    const agent = conversationManager.getAgent(req.params.id);
+    if (!agent) { reply.code(404); return { error: 'Not found' }; }
+    return agent;
+  });
+
+  app.patch<{ Params: { id: string }; Body: UpdateAgentRequest }>('/api/agents/:id', async (req, reply) => {
+    const updated = conversationManager.updateAgent(req.params.id, req.body ?? {});
+    if (!updated) { reply.code(404); return { error: 'Not found' }; }
+    return updated;
+  });
+
+  app.delete<{ Params: { id: string } }>('/api/agents/:id', async (req, reply) => {
+    const agent = conversationManager.getAgent(req.params.id);
+    if (!agent) { reply.code(404); return { error: 'Not found' }; }
+    conversationManager.deleteAgent(req.params.id);
+    reply.code(204);
+    return;
+  });
+
+  app.get<{ Params: { id: string } }>('/api/agents/:id/conversations', async (req, reply) => {
+    const agent = conversationManager.getAgent(req.params.id);
+    if (!agent) { reply.code(404); return { error: 'Not found' }; }
+    return conversationManager.listConversations({ agentId: req.params.id });
   });
 
   // Create conversation
@@ -126,7 +169,7 @@ export async function startServer(params: {
       reply.code(404);
       return { error: 'Channel not found' };
     }
-    return conversationManager.listConversations(req.params.id);
+    return conversationManager.listConversations({ channelId: req.params.id });
   });
 
   // ─── Node REST routes ───
