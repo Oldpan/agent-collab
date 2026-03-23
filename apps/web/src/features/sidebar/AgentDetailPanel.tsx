@@ -12,21 +12,20 @@ type Props = {
 
 export function AgentDetailPanel({ agent, onUpdate, onClose }: Props) {
   const [name, setName] = useState(agent.name);
-  const [memory, setMemory] = useState(agent.memory);
   const [saving, setSaving] = useState(false);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
-      await onUpdate({ name, memory });
+      await onUpdate({ name });
       onClose();
     } finally {
       setSaving(false);
     }
-  }, [name, memory, onUpdate, onClose]);
+  }, [name, onUpdate, onClose]);
 
-  const claudeMemoryPath = agent.agentType === "claude_acp" && agent.workspacePath
-    ? `~/.claude/projects/${agent.workspacePath.replace(/\//g, "-")}/memory/MEMORY.md`
+  const workspaceMemoryPath = agent.workspacePath
+    ? `${agent.workspacePath}/MEMORY.md`
     : null;
 
   return (
@@ -48,23 +47,12 @@ export function AgentDetailPanel({ agent, onUpdate, onClose }: Props) {
         />
       </div>
 
-      {/* Platform Memory */}
-      <div className="space-y-0.5">
-        <label className="text-[10px] text-muted-foreground">Platform Memory</label>
-        <textarea
-          className="w-full rounded border border-input bg-background px-1.5 py-0.5 text-xs resize-none min-h-[60px]"
-          value={memory}
-          onChange={(e) => setMemory(e.target.value)}
-          placeholder="Key facts to remember across conversations..."
-        />
-      </div>
-
-      {/* Claude native memory path (read-only info) */}
-      {claudeMemoryPath && (
+      {/* Workspace local memory path (read-only info) */}
+      {workspaceMemoryPath && (
         <div className="rounded bg-muted/50 px-2 py-1 text-[10px] text-muted-foreground">
-          <span className="font-medium">Native memory: </span>
-          <span className={cn("font-mono break-all")}>{claudeMemoryPath}</span>
-          <span className="block mt-0.5 opacity-70">(managed by Claude Code, read-only)</span>
+          <span className="font-medium">Local memory: </span>
+          <span className={cn("font-mono break-all")}>{workspaceMemoryPath}</span>
+          <span className="block mt-0.5 opacity-70">(managed by Agent Collab)</span>
         </div>
       )}
 

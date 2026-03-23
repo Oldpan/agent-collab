@@ -6,7 +6,10 @@ export const RUNTIME_DRIVERS = {
         args: ['-y', '@zed-industries/claude-code-acp@latest'],
         supportsResume: true,
         supportsPushNotifications: true,
-        nativeMemoryBackend: 'claude',
+        nativeMemoryBackend: 'workspace',
+        defaultEnv: {
+            CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+        },
     },
     codex_acp: {
         agentType: 'codex_acp',

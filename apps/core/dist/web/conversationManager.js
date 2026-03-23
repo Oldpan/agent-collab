@@ -52,10 +52,10 @@ export class ConversationManager {
             ?? path.join(os.homedir(), '.agent-collab', 'agents', `${agentId}-${slugifyAgentName(params.name)}`);
         fs.mkdirSync(workspacePath, { recursive: true });
         this.db.prepare(`INSERT INTO agents(agent_id, name, agent_type, channel_id, system_prompt, memory, env_vars, node_id, workspace_path, created_at, updated_at)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(agentId, params.name, agentType, channelId, params.systemPrompt ?? '', params.memory ?? '', envVarsJson, params.nodeId ?? null, workspacePath, now, now);
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(agentId, params.name, agentType, channelId, params.systemPrompt ?? '', '', envVarsJson, params.nodeId ?? null, workspacePath, now, now);
         return {
             agentId, name: params.name, agentType, channelId,
-            systemPrompt: params.systemPrompt ?? '', memory: params.memory ?? '',
+            systemPrompt: params.systemPrompt ?? '',
             envVars: params.envVars, nodeId: params.nodeId ?? null,
             workspacePath, createdAt: now, updatedAt: now,
         };
@@ -63,12 +63,12 @@ export class ConversationManager {
     listAgents(channelId) {
         const sql = channelId
             ? `SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
-                system_prompt as systemPrompt, memory, env_vars as envVarsJson,
+                system_prompt as systemPrompt, env_vars as envVarsJson,
                 node_id as nodeId, workspace_path as workspacePath,
                 created_at as createdAt, updated_at as updatedAt
          FROM agents WHERE channel_id = ? ORDER BY updated_at DESC`
             : `SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
-                system_prompt as systemPrompt, memory, env_vars as envVarsJson,
+                system_prompt as systemPrompt, env_vars as envVarsJson,
                 node_id as nodeId, workspace_path as workspacePath,
                 created_at as createdAt, updated_at as updatedAt
          FROM agents ORDER BY updated_at DESC`;
@@ -79,7 +79,7 @@ export class ConversationManager {
     }
     getAgent(agentId) {
         const row = this.db.prepare(`SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
-              system_prompt as systemPrompt, memory, env_vars as envVarsJson,
+              system_prompt as systemPrompt, env_vars as envVarsJson,
               node_id as nodeId, workspace_path as workspacePath,
               created_at as createdAt, updated_at as updatedAt
        FROM agents WHERE agent_id = ?`).get(agentId);
@@ -92,9 +92,8 @@ export class ConversationManager {
         const now = Date.now();
         const name = req.name ?? existing.name;
         const systemPrompt = req.systemPrompt ?? existing.systemPrompt;
-        const memory = req.memory ?? existing.memory;
-        this.db.prepare(`UPDATE agents SET name = ?, system_prompt = ?, memory = ?, updated_at = ? WHERE agent_id = ?`).run(name, systemPrompt, memory, now, agentId);
-        return { ...existing, name, systemPrompt, memory, updatedAt: now };
+        this.db.prepare(`UPDATE agents SET name = ?, system_prompt = ?, updated_at = ? WHERE agent_id = ?`).run(name, systemPrompt, now, agentId);
+        return { ...existing, name, systemPrompt, updatedAt: now };
     }
     deleteAgent(agentId) {
         // Nullify agent_id on conversations before deleting the agent
@@ -264,7 +263,6 @@ function rowToAgentInfo(row) {
         agentType: row.agentType,
         channelId: row.channelId,
         systemPrompt: row.systemPrompt,
-        memory: row.memory,
         envVars: parseEnvVars(row.envVarsJson),
         nodeId: row.nodeId,
         workspacePath: row.workspacePath,

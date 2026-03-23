@@ -8,6 +8,7 @@ export type RuntimeDriverDefinition = {
     supportsResume: boolean;
     supportsPushNotifications: boolean;
     nativeMemoryBackend: 'claude' | 'workspace';
+    defaultEnv?: Record<string, string>;
 };
 export declare const RUNTIME_DRIVERS: Record<AgentType, RuntimeDriverDefinition>;
 export declare function getRuntimeDriver(agentType: AgentType): RuntimeDriverDefinition;
@@ -222,7 +223,6 @@ export type AgentInfo = {
     agentType: AgentType;
     channelId: string;
     systemPrompt: string;
-    memory: string;
     envVars?: Record<string, string>;
     nodeId?: string | null;
     workspacePath?: string | null;
@@ -234,7 +234,6 @@ export type CreateAgentRequest = {
     agentType?: AgentType;
     channelId?: string;
     systemPrompt?: string;
-    memory?: string;
     envVars?: Record<string, string>;
     nodeId?: string;
     workspacePath?: string;
@@ -242,7 +241,6 @@ export type CreateAgentRequest = {
 export type UpdateAgentRequest = {
     name?: string;
     systemPrompt?: string;
-    memory?: string;
 };
 export type ChannelInfo = {
     channelId: string;

@@ -30,6 +30,7 @@ export class ExecutionDispatcher {
         const runId = randomUUID();
         const hostKey = `conversation:${conversationId}:${row.agentType}`;
         const dispatchMode = this.getDispatchMode(row.sessionKey);
+        const driver = getRuntimeDriver(row.agentType);
         createRun(this.db, { runId, sessionKey: row.sessionKey, promptText });
         this.updateStatus(conversationId, 'active');
         let contextText = '';
@@ -38,7 +39,6 @@ export class ExecutionDispatcher {
             if (agent) {
                 contextText = await buildAgentContextText({
                     systemPrompt: agent.systemPrompt,
-                    memory: agent.memory,
                     agentType: agent.agentType,
                     workspacePath: row.workspacePath ?? this.config.workspaceRoot,
                 });
@@ -57,7 +57,10 @@ export class ExecutionDispatcher {
             conversationId,
             agentType: row.agentType,
             workspacePath: row.workspacePath,
-            envVars: parseEnvVars(row.envVarsJson),
+            envVars: {
+                ...(parseEnvVars(row.envVarsJson) ?? {}),
+                ...(driver.defaultEnv ?? {}),
+            },
             prompt: promptText,
             sessionKey: row.sessionKey,
             hostKey,

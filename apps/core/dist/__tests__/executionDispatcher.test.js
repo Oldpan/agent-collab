@@ -66,6 +66,7 @@ describe('ExecutionDispatcher', () => {
         if (!second || second.type !== 'run.dispatch')
             throw new Error('missing second dispatch');
         expect(second.dispatchMode).toBe('resume');
+        expect(second.envVars?.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
     });
     it('cancelConversationRun 应发送 run.cancel 到节点', () => {
         const conv = manager.createConversation({
