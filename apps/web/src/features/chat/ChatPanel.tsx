@@ -59,6 +59,8 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
   const displayStatus =
     status === "submitted" || status === "streaming"
       ? "active"
+      : status === "queued"
+        ? "queued"
       : status === "recovering"
         ? "recovering"
       : status === "awaiting_approval"
@@ -81,7 +83,7 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
               {agent?.name ?? conversation.title ?? "Untitled"}
             </h2>
             <div className="mt-1 text-xs text-muted-foreground">
-              {conversation.title || "Current thread"}
+              {conversation.isPrimaryThread ? "Main thread" : (conversation.title || "Branch thread")}
             </div>
           </div>
           <Badge variant="secondary" className="text-[11px]">
@@ -137,11 +139,13 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
                 </div>
               )}
 
-              {(status === "submitted" || status === "streaming" || status === "recovering" || status === "awaiting_approval") && (
+              {(status === "queued" || status === "submitted" || status === "streaming" || status === "recovering" || status === "awaiting_approval") && (
                 <div className="flex items-center gap-2 py-2 text-muted-foreground text-sm">
                   <Loader size={14} />
                   <span>
-                    {status === "submitted"
+                    {status === "queued"
+                      ? "Queued behind another thread..."
+                      : status === "submitted"
                       ? "Thinking..."
                       : status === "recovering"
                         ? "Recovering session..."
@@ -223,6 +227,7 @@ function StatusDot({ status }: { status: string }) {
       className={cn(
         "size-2 rounded-full shrink-0",
         status === "idle" && "bg-success",
+        status === "queued" && "bg-blue-500",
         status === "active" && "bg-warning",
         status === "recovering" && "bg-sky-500",
         status === "awaiting_approval" && "bg-amber-500",

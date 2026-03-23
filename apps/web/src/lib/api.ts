@@ -118,6 +118,14 @@ export async function listAgentConversations(agentId: string): Promise<Conversat
   return res.json();
 }
 
+export async function openAgentThread(agentId: string): Promise<ConversationInfo> {
+  const res = await fetch(`${API_BASE}/agents/${agentId}/open-thread`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`Failed to open agent thread: ${res.statusText}`);
+  return res.json();
+}
+
 export async function listAgentWorkspace(
   agentId: string,
   relativePath = "",

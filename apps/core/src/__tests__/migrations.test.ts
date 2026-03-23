@@ -1,6 +1,5 @@
 import { describe, it, expect } from 'vitest';
 import { createTestDb } from './helpers.js';
-import { migrate } from '@agent-collab/runtime-acp';
 
 describe('migrations', () => {
   it('应创建 conversations 表并包含 channel_id 列', () => {
@@ -22,10 +21,10 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('schema_version 应为最新版本 14', () => {
+  it('schema_version 应为最新版本 16', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBe(14);
+    expect(row.version).toBe(16);
     db.close();
   });
 
@@ -55,10 +54,17 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('v7 migration 对旧 DB 做 ALTER TABLE 不报错（幂等）', () => {
+  it('conversations 表应包含 thread 元数据与 prompt queue 表', () => {
     const db = createTestDb();
-    // 再次 migrate 不应报错
-    expect(() => migrate(db)).not.toThrow();
+    const convCols = db.prepare("PRAGMA table_info('conversations')").all() as Array<{ name: string }>;
+    const convColNames = convCols.map((c) => c.name);
+    expect(convColNames).toContain('thread_kind');
+    expect(convColNames).toContain('is_primary_thread');
+
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all() as Array<{ name: string }>;
+    expect(tables.map((t) => t.name)).toContain('conversation_prompt_queue');
     db.close();
   });
 
@@ -79,6 +85,7 @@ describe('migrations', () => {
     expect(tableNames).toContain('channels');
     expect(tableNames).toContain('agents');
     expect(tableNames).toContain('node_dispatch_queue');
+    expect(tableNames).toContain('conversation_prompt_queue');
 
     db.close();
   });

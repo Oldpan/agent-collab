@@ -140,6 +140,8 @@ export function useConversationStream(
         case "conversation.status": {
           if (event.status === "idle") {
             setStatus("idle");
+          } else if (event.status === "queued") {
+            setStatus("queued");
           } else if (event.status === "active") {
             setStatus((prev) => (prev === "streaming" ? prev : "submitted"));
           } else if (event.status === "recovering") {
@@ -240,7 +242,7 @@ export function useConversationStream(
     }
   }, []);
 
-  const sendPrompt = useCallback(
+    const sendPrompt = useCallback(
     (text: string) => {
       // Add user message to timeline
       const id = createId();

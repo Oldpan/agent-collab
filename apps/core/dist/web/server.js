@@ -71,6 +71,14 @@ export async function startServer(params) {
         }
         return conversationManager.listConversations({ agentId: req.params.id });
     });
+    app.post('/api/agents/:id/open-thread', async (req, reply) => {
+        const thread = conversationManager.openAgentThread(req.params.id);
+        if (!thread) {
+            reply.code(404);
+            return { error: 'Not found' };
+        }
+        return thread;
+    });
     app.get('/api/agents/:id/workspace', async (req, reply) => {
         try {
             return await workspaceService.listWorkspace(req.params.id, normalizeWorkspaceQueryPath(req.query.path));
@@ -105,6 +113,8 @@ export async function startServer(params) {
             workspacePath: body.workspacePath,
             title: body.title,
             channelId: body.channelId,
+            threadKind: body.threadKind,
+            isPrimaryThread: body.isPrimaryThread,
             envVars: body.envVars,
             nodeId: body.nodeId,
             agentId: body.agentId,
@@ -222,7 +232,7 @@ export async function startServer(params) {
     });
     // Agent-node WebSocket connection
     app.get('/api/nodes/connect', { websocket: true }, (socket) => {
-        handleNodeWebSocket(socket, nodeRegistry, broadcast, db, workspaceBroker);
+        handleNodeWebSocket(socket, nodeRegistry, broadcast, db, conversationManager, workspaceBroker);
     });
     await app.listen({ port, host });
     log.info(`Web server listening on ${host}:${port}`);

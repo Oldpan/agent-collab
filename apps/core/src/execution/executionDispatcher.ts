@@ -107,6 +107,34 @@ export class ExecutionDispatcher {
     return { runId, dispatchMode, hostKey };
   }
 
+  async submitPrompt(
+    conversationId: string,
+    promptText: string,
+  ): Promise<{ queued: boolean }> {
+    const row = this.db.prepare(
+      `SELECT agent_id as agentId
+       FROM conversations
+       WHERE id = ?`,
+    ).get(conversationId) as { agentId: string | null } | undefined;
+
+    if (!row) throw new Error(`Unknown conversation: ${conversationId}`);
+
+    if (!row.agentId) {
+      await this.dispatchPrompt(conversationId, promptText);
+      return { queued: false };
+    }
+
+    const blocking = this.findBlockingConversation(row.agentId, conversationId);
+    if (blocking) {
+      this.enqueuePrompt(row.agentId, conversationId, promptText);
+      this.updateStatus(conversationId, 'queued');
+      return { queued: true };
+    }
+
+    await this.dispatchPrompt(conversationId, promptText);
+    return { queued: false };
+  }
+
   async handleApproval(
     conversationId: string,
     requestId: string,
@@ -156,6 +184,48 @@ export class ExecutionDispatcher {
       : { ok: false, message: 'Node not connected.' };
   }
 
+  async handleConversationSettled(conversationId: string): Promise<void> {
+    const row = this.db.prepare(
+      `SELECT agent_id as agentId
+       FROM conversations
+       WHERE id = ?`,
+    ).get(conversationId) as { agentId: string | null } | undefined;
+
+    if (!row?.agentId) return;
+    if (this.findBlockingConversation(row.agentId)) return;
+
+    const next = this.db.prepare(
+      `SELECT queue_id as queueId, agent_id as agentId, conversation_id as conversationId, prompt_text as promptText
+       FROM conversation_prompt_queue
+       WHERE agent_id = ?
+       ORDER BY created_at ASC, queue_id ASC
+       LIMIT 1`,
+    ).get(row.agentId) as {
+      queueId: number;
+      agentId: string;
+      conversationId: string;
+      promptText: string;
+    } | undefined;
+
+    if (!next) return;
+
+    this.db.prepare('DELETE FROM conversation_prompt_queue WHERE queue_id = ?').run(next.queueId);
+    try {
+      await this.dispatchPrompt(next.conversationId, next.promptText);
+    } catch {
+      this.updateStatus(next.conversationId, 'failed');
+    }
+  }
+
+  clearQueuedPromptsForNode(nodeId: string): void {
+    this.db.prepare(
+      `DELETE FROM conversation_prompt_queue
+       WHERE conversation_id IN (
+         SELECT id FROM conversations WHERE node_id = ?
+       )`,
+    ).run(nodeId);
+  }
+
   ensureConversationSessionAgent(
     agentType: AgentInfo['agentType'],
   ): { command: string; args: string[] } {
@@ -174,6 +244,33 @@ export class ExecutionDispatcher {
     this.db
       .prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
       .run(status, Date.now(), conversationId);
+  }
+
+  private findBlockingConversation(
+    agentId: string,
+    excludeConversationId?: string,
+  ): { id: string; status: ConversationStatus } | null {
+    const row = this.db.prepare(
+      `SELECT id, status
+       FROM conversations
+       WHERE agent_id = ?
+         AND status IN ('active', 'recovering', 'awaiting_approval')
+         AND (? IS NULL OR id != ?)
+       ORDER BY updated_at ASC
+       LIMIT 1`,
+    ).get(agentId, excludeConversationId ?? null, excludeConversationId ?? null) as {
+      id: string;
+      status: ConversationStatus;
+    } | undefined;
+    return row ?? null;
+  }
+
+  private enqueuePrompt(agentId: string, conversationId: string, promptText: string): void {
+    const now = Date.now();
+    this.db.prepare(
+      `INSERT INTO conversation_prompt_queue(agent_id, conversation_id, prompt_text, created_at, updated_at)
+       VALUES(?, ?, ?, ?, ?)`,
+    ).run(agentId, conversationId, promptText, now, now);
   }
 }
 

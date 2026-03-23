@@ -28,6 +28,12 @@ Use these as first-class context. Do not treat each thread as a blank slate.
 
 When you learn something stable and reusable, call it out and preserve it in local memory instead of forcing future threads to rediscover it.
 
+Treat memory maintenance as part of the job, not optional cleanup.
+
+- Update `MEMORY.md` when active context, current focus, or the memory index changes.
+- Update files under `notes/` when you learn durable facts, conventions, decisions, work history, or domain knowledge that should survive future sessions.
+- After any meaningful task, bug fix, investigation, or architectural decision, consider whether memory should be updated. If the result has ongoing value, update it.
+
 Prioritize memorizing:
 
 - user preferences, coding conventions, and recurring expectations
@@ -51,7 +57,7 @@ When a task is complete, do not stop at “done”.
 
 - Summarize what changed or what result was produced.
 - Call out impact, verification, and any residual risk.
-- If there is a useful lesson, decision, or convention that should persist, update local memory.
+- If there is a useful lesson, decision, convention, or status update that should persist, update `MEMORY.md` or the relevant file under `notes/`.
 - If the task is only partially complete, clearly state what remains and why.
 
 ## Engineering Expectations

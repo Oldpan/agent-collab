@@ -221,9 +221,13 @@ async function handleClientEvent(
       }
 
       log.info('[ws] prompt → remote node', { conversationId, nodeId: conv.nodeId });
-      broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'active' });
       try {
-        await manager.dispatchToNode(conversationId, event.text);
+        const result = await manager.submitPrompt(conversationId, event.text);
+        if (result.queued) {
+          broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'queued' });
+        } else {
+          broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'active' });
+        }
       } catch (error: any) {
         broadcast(conversationId, { type: 'error', message: String(error?.message ?? error) });
         broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'idle' });

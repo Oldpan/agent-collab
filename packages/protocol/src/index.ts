@@ -1,7 +1,8 @@
 // ─── 服务端 → 客户端 事件 ───
 
 export type AgentType = 'claude_acp' | 'codex_acp';
-export type ConversationStatus = 'idle' | 'active' | 'recovering' | 'awaiting_approval' | 'failed';
+export type ConversationStatus = 'idle' | 'queued' | 'active' | 'recovering' | 'awaiting_approval' | 'failed';
+export type ThreadKind = 'direct' | 'branch';
 
 export type RuntimeDispatchMode = 'cold_start' | 'resume';
 
@@ -301,6 +302,8 @@ export type ConversationInfo = {
   channelId: string;
   title: string;
   agentType: AgentType;
+  threadKind: ThreadKind;
+  isPrimaryThread: boolean;
   workspacePath: string | null;
   status: ConversationStatus;
   createdAt: number;
@@ -314,6 +317,8 @@ export type CreateConversationRequest = {
   workspacePath?: string;
   title?: string;
   channelId?: string;
+  threadKind?: ThreadKind;
+  isPrimaryThread?: boolean;
   envVars?: Record<string, string>;
   nodeId?: string;
   agentId?: string;

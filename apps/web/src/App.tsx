@@ -21,6 +21,7 @@ export function App() {
     selectedId,
     loading,
     createConversation,
+    openAgentThread,
     deleteConversation,
     selectConversation,
   } = useConversations();
@@ -68,6 +69,13 @@ export function App() {
     [createConversation],
   );
 
+  const handleOpenAgentThread = useCallback(
+    (agentId: string) => {
+      openAgentThread(agentId);
+    },
+    [openAgentThread],
+  );
+
   const handleDeleteConversation = useCallback(
     (id: string) => {
       deleteConversation(id);
@@ -96,6 +104,7 @@ export function App() {
             onCreateAgent={handleCreateAgent}
             onUpdateAgent={handleUpdateAgent}
             onDeleteAgent={handleDeleteAgent}
+            onOpenAgentThread={handleOpenAgentThread}
             onCreateConversation={handleCreateConversation}
             onDeleteConversation={handleDeleteConversation}
           />

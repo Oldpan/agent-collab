@@ -26,6 +26,7 @@ type ConversationsState = {
   error: string | null;
   setConversations: (conversations: ConversationInfo[]) => void;
   addConversation: (conversation: ConversationInfo) => void;
+  upsertConversation: (conversation: ConversationInfo) => void;
   removeConversation: (id: string) => void;
   selectConversation: (id: string | null) => void;
   setLoading: (loading: boolean) => void;
@@ -51,6 +52,22 @@ const useConversationsStore = create<ConversationsState>((set) => ({
       writeStoredSelectedConversationId(conversation.id);
       return {
         conversations: [conversation, ...state.conversations],
+        selectedId: conversation.id,
+      };
+    }),
+  upsertConversation: (conversation) =>
+    set((state) => {
+      const existing = state.conversations.some((item) => item.id === conversation.id);
+      const conversations = existing
+        ? state.conversations.map((item) => (item.id === conversation.id ? conversation : item))
+        : [conversation, ...state.conversations];
+      conversations.sort((a, b) => {
+        if (a.isPrimaryThread !== b.isPrimaryThread) return a.isPrimaryThread ? -1 : 1;
+        return b.updatedAt - a.updatedAt;
+      });
+      writeStoredSelectedConversationId(conversation.id);
+      return {
+        conversations,
         selectedId: conversation.id,
       };
     }),
@@ -113,6 +130,20 @@ export function useConversations() {
     [],
   );
 
+  const openAgentThread = useCallback(
+    async (agentId: string) => {
+      try {
+        const conversation = await api.openAgentThread(agentId);
+        store.upsertConversation(conversation);
+        return conversation;
+      } catch (err) {
+        store.setError(err instanceof Error ? err.message : "Failed to open agent thread");
+        throw err;
+      }
+    },
+    [],
+  );
+
   const deleteConversation = useCallback(
     async (id: string) => {
       try {
@@ -141,6 +172,7 @@ export function useConversations() {
     loading: store.loading,
     error: store.error,
     createConversation,
+    openAgentThread,
     deleteConversation,
     selectConversation,
   };

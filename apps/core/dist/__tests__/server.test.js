@@ -30,12 +30,22 @@ beforeAll(async () => {
             workspacePath: body.workspacePath,
             title: body.title,
             channelId: body.channelId,
+            threadKind: body.threadKind,
+            isPrimaryThread: body.isPrimaryThread,
             envVars: body.envVars,
             nodeId: body.nodeId,
             agentId: body.agentId,
         });
         reply.code(201);
         return conv;
+    });
+    app.post('/api/agents/:id/open-thread', async (req, reply) => {
+        const thread = manager.openAgentThread(req.params.id);
+        if (!thread) {
+            reply.code(404);
+            return { error: 'Not found' };
+        }
+        return thread;
     });
     app.delete('/api/conversations/:id', async (req, reply) => {
         const conv = manager.getConversation(req.params.id);
@@ -159,6 +169,23 @@ describe('REST API', () => {
         expect(row.agentId).toBe(agent.agentId);
         const agentConversations = manager.listConversations({ agentId: agent.agentId });
         expect(agentConversations.map((conv) => conv.id)).toContain(body.id);
+    });
+    it('POST /api/agents/:id/open-thread 应复用同一个主 thread', async () => {
+        const agent = manager.createAgent({
+            name: 'Alice',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/alice',
+        });
+        const first = await fetchJson(`/api/agents/${agent.agentId}/open-thread`, { method: 'POST' });
+        const second = await fetchJson(`/api/agents/${agent.agentId}/open-thread`, { method: 'POST' });
+        expect(first.status).toBe(200);
+        expect(second.status).toBe(200);
+        expect(first.body.id).toBe(second.body.id);
+        expect(first.body.threadKind).toBe('direct');
+        expect(first.body.isPrimaryThread).toBe(true);
+        const rows = manager.listConversations({ agentId: agent.agentId });
+        expect(rows).toHaveLength(1);
     });
     it('GET /api/conversations 应列出已创建的会话', async () => {
         const { body } = await fetchJson('/api/conversations');

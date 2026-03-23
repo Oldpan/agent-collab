@@ -96,6 +96,7 @@ export class ConversationManager {
         return { ...existing, name, systemPrompt, updatedAt: now };
     }
     deleteAgent(agentId) {
+        this.db.prepare(`DELETE FROM conversation_prompt_queue WHERE agent_id = ?`).run(agentId);
         // Nullify agent_id on conversations before deleting the agent
         this.db.prepare(`UPDATE conversations SET agent_id = NULL WHERE agent_id = ?`).run(agentId);
         this.db.prepare(`DELETE FROM agents WHERE agent_id = ?`).run(agentId);
@@ -108,8 +109,10 @@ export class ConversationManager {
         const agentType = params.agentType ?? (agent?.agentType ?? 'claude_acp');
         const workspacePath = params.workspacePath ?? agent?.workspacePath ?? this.config.workspaceRoot;
         const title = params.title ?? '';
-        const channelId = params.channelId ?? 'default';
+        const channelId = params.channelId ?? agent?.channelId ?? 'default';
         const nodeId = params.nodeId ?? agent?.nodeId ?? null;
+        const threadKind = params.threadKind ?? 'direct';
+        const isPrimaryThread = params.isPrimaryThread ?? false;
         const envVarsJson = (() => {
             const ev = params.envVars ?? agent?.envVars;
             return ev && Object.keys(ev).length > 0 ? JSON.stringify(ev) : null;
@@ -130,44 +133,113 @@ export class ConversationManager {
         upsertBinding(this.db, { platform: 'web', chatId: channelId, threadId: id, userId: agentType }, sessionKey);
         // Create conversations row
         this.db
-            .prepare(`INSERT INTO conversations(id, channel_id, title, agent_type, workspace_path, session_key, status, env_vars, node_id, agent_id, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, ?, ?)`)
-            .run(id, channelId, title, agentType, workspacePath, sessionKey, envVarsJson, nodeId, params.agentId ?? null, now, now);
-        return { id, channelId, title, agentType, workspacePath, status: 'idle', createdAt: now, updatedAt: now, nodeId, agentId: params.agentId ?? null };
+            .prepare(`INSERT INTO conversations(id, channel_id, title, agent_type, workspace_path, session_key, status, thread_kind, is_primary_thread, env_vars, node_id, agent_id, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?)`)
+            .run(id, channelId, title, agentType, workspacePath, sessionKey, threadKind, isPrimaryThread ? 1 : 0, envVarsJson, nodeId, params.agentId ?? null, now, now);
+        return {
+            id,
+            channelId,
+            title,
+            agentType,
+            threadKind,
+            isPrimaryThread,
+            workspacePath,
+            status: 'idle',
+            createdAt: now,
+            updatedAt: now,
+            nodeId,
+            agentId: params.agentId ?? null,
+        };
+    }
+    openAgentThread(agentId) {
+        const agent = this.getAgent(agentId);
+        if (!agent)
+            return null;
+        const existing = this.db.prepare(`SELECT id, channel_id as channelId, title, agent_type as agentType,
+              thread_kind as threadKind, is_primary_thread as isPrimaryThread,
+              workspace_path as workspacePath, status, node_id as nodeId,
+              agent_id as agentId, created_at as createdAt, updated_at as updatedAt
+       FROM conversations
+       WHERE agent_id = ? AND is_primary_thread = 1
+       ORDER BY updated_at DESC
+       LIMIT 1`).get(agentId);
+        if (existing) {
+            return { ...existing, isPrimaryThread: !!existing.isPrimaryThread };
+        }
+        const fallback = this.db.prepare(`SELECT id, channel_id as channelId, title, agent_type as agentType,
+              thread_kind as threadKind, is_primary_thread as isPrimaryThread,
+              workspace_path as workspacePath, status, node_id as nodeId,
+              agent_id as agentId, created_at as createdAt, updated_at as updatedAt
+       FROM conversations
+       WHERE agent_id = ?
+       ORDER BY updated_at DESC, created_at DESC
+       LIMIT 1`).get(agentId);
+        if (fallback) {
+            this.db.prepare(`UPDATE conversations
+         SET thread_kind = 'direct', is_primary_thread = 1, updated_at = ?
+         WHERE id = ?`).run(Date.now(), fallback.id);
+            return { ...fallback, threadKind: 'direct', isPrimaryThread: true };
+        }
+        return this.createConversation({
+            agentId,
+            agentType: agent.agentType,
+            workspacePath: agent.workspacePath ?? undefined,
+            channelId: agent.channelId,
+            nodeId: agent.nodeId ?? undefined,
+            threadKind: 'direct',
+            isPrimaryThread: true,
+            title: '',
+        });
     }
     listConversations(filter) {
         const convSelect = `SELECT id, channel_id as channelId, title, agent_type as agentType,
+                thread_kind as threadKind, is_primary_thread as isPrimaryThread,
                 workspace_path as workspacePath, status, node_id as nodeId,
                 agent_id as agentId, created_at as createdAt, updated_at as updatedAt
          FROM conversations`;
+        const mapRows = (rows) => rows.map((row) => ({
+            ...row,
+            isPrimaryThread: !!row.isPrimaryThread,
+        }));
         if (filter?.channelId && filter?.agentId) {
-            return this.db.prepare(`${convSelect} WHERE channel_id = ? AND agent_id = ? ORDER BY updated_at DESC`)
-                .all(filter.channelId, filter.agentId);
+            return mapRows(this.db.prepare(`${convSelect} WHERE channel_id = ? AND agent_id = ? ORDER BY is_primary_thread DESC, updated_at DESC`)
+                .all(filter.channelId, filter.agentId));
         }
         if (filter?.channelId) {
-            return this.db.prepare(`${convSelect} WHERE channel_id = ? ORDER BY updated_at DESC`)
-                .all(filter.channelId);
+            return mapRows(this.db.prepare(`${convSelect} WHERE channel_id = ? ORDER BY updated_at DESC`)
+                .all(filter.channelId));
         }
         if (filter?.agentId) {
-            return this.db.prepare(`${convSelect} WHERE agent_id = ? ORDER BY updated_at DESC`)
-                .all(filter.agentId);
+            return mapRows(this.db.prepare(`${convSelect} WHERE agent_id = ? ORDER BY is_primary_thread DESC, updated_at DESC`)
+                .all(filter.agentId));
         }
-        return this.db.prepare(`${convSelect} ORDER BY updated_at DESC`).all();
+        return mapRows(this.db.prepare(`${convSelect} ORDER BY updated_at DESC`).all());
     }
     getConversation(id) {
         const row = this.db
             .prepare(`SELECT id, channel_id as channelId, title, agent_type as agentType,
+                thread_kind as threadKind, is_primary_thread as isPrimaryThread,
                 workspace_path as workspacePath, status, node_id as nodeId,
                 agent_id as agentId, created_at as createdAt, updated_at as updatedAt
          FROM conversations WHERE id = ?`)
             .get(id);
-        return row ?? null;
+        return row ? { ...row, isPrimaryThread: !!row.isPrimaryThread } : null;
     }
     deleteConversation(id) {
+        this.db.prepare('DELETE FROM conversation_prompt_queue WHERE conversation_id = ?').run(id);
         this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
     }
     async dispatchToNode(conversationId, promptText) {
         await this.executionDispatcher.dispatchPrompt(conversationId, promptText);
+    }
+    async submitPrompt(conversationId, promptText) {
+        return this.executionDispatcher.submitPrompt(conversationId, promptText);
+    }
+    async onConversationSettled(conversationId) {
+        await this.executionDispatcher.handleConversationSettled(conversationId);
+    }
+    clearQueuedPromptsForNode(nodeId) {
+        this.executionDispatcher.clearQueuedPromptsForNode(nodeId);
     }
     // ─── Channel CRUD ───
     createChannel(params) {

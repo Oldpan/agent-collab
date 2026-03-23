@@ -5,7 +5,7 @@ function appendNodeEvent(db, runId, seq, event) {
 }
 /** Event types worth persisting for history replay */
 const REPLAY_EVENT_TYPES = new Set(['content.delta', 'tool.call', 'tool.result', 'thinking.delta']);
-export function handleNodeWebSocket(socket, registry, broadcast, db, workspaceBroker) {
+export function handleNodeWebSocket(socket, registry, broadcast, db, manager, workspaceBroker) {
     let nodeId = null;
     // Sequence counter per runId for node/event persistence
     const runSeq = new Map();
@@ -87,6 +87,7 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, workspaceBr
                     conversationId: msg.conversationId,
                     status: msg.error ? 'failed' : 'idle',
                 });
+                void manager.onConversationSettled(msg.conversationId);
                 break;
             }
             case 'permission.request': {
@@ -123,6 +124,7 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, workspaceBr
         if (nodeId) {
             workspaceBroker?.rejectPendingForNode(nodeId);
             registry.unregister(nodeId);
+            manager.clearQueuedPromptsForNode(nodeId);
             db.prepare(`UPDATE nodes SET status='offline', last_seen=? WHERE node_id=?`)
                 .run(Date.now(), nodeId);
             const affected = db.prepare(`SELECT id FROM conversations WHERE node_id = ? AND status != 'idle'`).all(nodeId);

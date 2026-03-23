@@ -99,4 +99,42 @@ describe('ExecutionDispatcher', () => {
     expect(sent).toHaveLength(1);
     expect(sent[0].msg).toEqual({ type: 'run.cancel', runId: 'run-1' });
   });
+
+  it('同一 agent 的第二个 thread 提交时应进入 queued', async () => {
+    const agent = manager.createAgent({
+      name: 'Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/bob-test',
+    });
+    const primary = manager.openAgentThread(agent.agentId);
+    if (!primary) throw new Error('missing primary thread');
+    const branch = manager.createConversation({
+      agentId: agent.agentId,
+      agentType: agent.agentType,
+      nodeId: agent.nodeId ?? undefined,
+      workspacePath: agent.workspacePath ?? undefined,
+      channelId: agent.channelId,
+      threadKind: 'branch',
+      isPrimaryThread: false,
+      title: 'Branch',
+    });
+
+    await manager.submitPrompt(primary.id, 'first');
+    const queued = await manager.submitPrompt(branch.id, 'second');
+
+    expect(queued.queued).toBe(true);
+    const queuedRow = db.prepare(
+      'SELECT status FROM conversations WHERE id = ?'
+    ).get(branch.id) as { status: string };
+    expect(queuedRow.status).toBe('queued');
+
+    const queueEntry = db.prepare(
+      'SELECT conversation_id as conversationId, prompt_text as promptText FROM conversation_prompt_queue WHERE agent_id = ?'
+    ).get(agent.agentId) as { conversationId: string; promptText: string } | undefined;
+    expect(queueEntry).toEqual({
+      conversationId: branch.id,
+      promptText: 'second',
+    });
+  });
 });

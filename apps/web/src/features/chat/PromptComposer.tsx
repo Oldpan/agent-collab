@@ -29,7 +29,7 @@ export function PromptComposer({ status, onSend, onCancel }: PromptComposerProps
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        if (status !== "submitted" && status !== "streaming" && status !== "recovering" && status !== "awaiting_approval") {
+        if (status !== "queued" && status !== "submitted" && status !== "streaming" && status !== "recovering" && status !== "awaiting_approval") {
           handleSubmit();
         }
       }
@@ -45,10 +45,13 @@ export function PromptComposer({ status, onSend, onCancel }: PromptComposerProps
   }, []);
 
   const isBusy =
+    status === "queued" ||
     status === "submitted" ||
     status === "streaming" ||
     status === "recovering" ||
     status === "awaiting_approval";
+
+  const showCancel = status === "submitted" || status === "streaming" || status === "recovering" || status === "awaiting_approval";
 
   return (
     <div className="flex items-end gap-2 border-t border-border bg-background p-4">
@@ -68,7 +71,7 @@ export function PromptComposer({ status, onSend, onCancel }: PromptComposerProps
         rows={1}
       />
 
-      {isBusy ? (
+      {showCancel ? (
         <Button
           size="icon"
           variant="outline"
@@ -84,6 +87,7 @@ export function PromptComposer({ status, onSend, onCancel }: PromptComposerProps
           onClick={handleSubmit}
           className="shrink-0"
           title="Send"
+          disabled={isBusy}
         >
           <SendIcon className="size-4" />
         </Button>

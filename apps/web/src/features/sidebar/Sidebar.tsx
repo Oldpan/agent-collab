@@ -47,6 +47,7 @@ type SidebarProps = {
   onCreateAgent: (req: CreateAgentRequest) => void;
   onUpdateAgent: (id: string, req: UpdateAgentRequest) => Promise<void>;
   onDeleteAgent: (id: string) => void;
+  onOpenAgentThread: (agentId: string) => void;
   onCreateConversation: (req: CreateConversationRequest) => void;
   onDeleteConversation: (id: string) => void;
 };
@@ -79,6 +80,7 @@ export function Sidebar({
   machines, agents, conversations, selectedId,
   onSelect, onCreateMachine, onDeleteMachine,
   onCreateAgent, onUpdateAgent, onDeleteAgent,
+  onOpenAgentThread,
   onCreateConversation, onDeleteConversation,
 }: SidebarProps) {
   const [expandedMachines, setExpandedMachines] = useState<Set<string>>(
@@ -133,6 +135,9 @@ export function Sidebar({
     onCreateConversation({
       agentId,
       agentType: agent.agentType,
+      channelId: agent.channelId,
+      threadKind: "branch",
+      isPrimaryThread: false,
       nodeId: agent.nodeId ?? undefined,
       workspacePath: agent.workspacePath ?? undefined,
     });
@@ -319,7 +324,12 @@ export function Sidebar({
                     )}
 
                     {machineAgents.map((agent) => {
-                      const agentConvs = conversations.filter((c) => c.agentId === agent.agentId);
+                      const agentConvs = conversations
+                        .filter((c) => c.agentId === agent.agentId)
+                        .sort((a, b) => {
+                          if (a.isPrimaryThread !== b.isPrimaryThread) return a.isPrimaryThread ? -1 : 1;
+                          return b.updatedAt - a.updatedAt;
+                        });
                       const isAgentExpanded = expandedAgents.has(agent.agentId);
                       const isEditing = editingAgentId === agent.agentId;
 
@@ -331,6 +341,7 @@ export function Sidebar({
                             isExpanded={isAgentExpanded}
                             isEditing={isEditing}
                             onToggle={() => toggleAgent(agent.agentId)}
+                            onOpen={() => onOpenAgentThread(agent.agentId)}
                             onEdit={() => setEditingAgentId(isEditing ? null : agent.agentId)}
                             onDelete={() => onDeleteAgent(agent.agentId)}
                           />
@@ -390,11 +401,12 @@ type AgentRowProps = {
   isExpanded: boolean;
   isEditing: boolean;
   onToggle: () => void;
+  onOpen: () => void;
   onEdit: () => void;
   onDelete: () => void;
 };
 
-function AgentRow({ agent, conversationCount, isExpanded, isEditing, onToggle, onEdit, onDelete }: AgentRowProps) {
+function AgentRow({ agent, conversationCount, isExpanded, isEditing, onToggle, onOpen, onEdit, onDelete }: AgentRowProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const handleDelete = (e: React.MouseEvent) => {
@@ -408,20 +420,33 @@ function AgentRow({ agent, conversationCount, isExpanded, isEditing, onToggle, o
   };
 
   return (
-    <button
-      type="button"
-      className="group flex w-full items-center gap-1.5 rounded px-2 py-1.5 text-left hover:bg-accent/50 cursor-pointer"
-      onClick={onToggle}
-    >
-      {isExpanded
-        ? <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
-        : <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground" />
-      }
-      <span className="flex-1 min-w-0 truncate text-xs font-medium">{agent.name}</span>
-      <div className="flex items-center gap-1 shrink-0">
+    <div className="group flex items-center gap-1.5 rounded px-2 py-1.5 hover:bg-accent/50">
+      <button
+        type="button"
+        className="shrink-0 cursor-pointer"
+        onClick={onToggle}
+        title={isExpanded ? "Collapse threads" : "Expand threads"}
+      >
+        {isExpanded
+          ? <ChevronDownIcon className="size-3 text-muted-foreground" />
+          : <ChevronRightIcon className="size-3 text-muted-foreground" />
+        }
+      </button>
+      <button
+        type="button"
+        className="flex min-w-0 flex-1 items-center gap-1.5 text-left cursor-pointer"
+        onClick={onOpen}
+        title="Open main thread"
+      >
+        <span className="min-w-0 flex-1 truncate text-xs font-medium">{agent.name}</span>
         <Badge variant="secondary" className="text-[9px] px-1 py-0">
           {agent.agentType === "claude_acp" ? "Claude" : "Codex"}
         </Badge>
+        {conversationCount > 0 && (
+          <span className="text-[10px] text-muted-foreground">{conversationCount}</span>
+        )}
+      </button>
+      <div className="flex items-center gap-1 shrink-0">
         <button
           type="button"
           className={cn(
@@ -444,11 +469,8 @@ function AgentRow({ agent, conversationCount, isExpanded, isEditing, onToggle, o
         >
           <TrashIcon className="size-3" />
         </button>
-        {conversationCount > 0 && (
-          <span className="text-[10px] text-muted-foreground">{conversationCount}</span>
-        )}
       </div>
-    </button>
+    </div>
   );
 }
 
@@ -489,6 +511,11 @@ function ConversationItem({ conversation, isSelected, onSelect, onDelete }: Conv
           <span className="truncate text-xs">
             {conversation.title || "Untitled"}
           </span>
+          {conversation.isPrimaryThread && (
+            <Badge variant="outline" className="px-1 py-0 text-[8px] uppercase tracking-wide">
+              Main
+            </Badge>
+          )}
         </div>
         <div className="flex items-center gap-1.5">
           <span className="text-[10px] text-muted-foreground">

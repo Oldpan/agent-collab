@@ -27,6 +27,7 @@ export type PendingApproval = {
 /** Chat status state machine */
 export type ChatStatus =
   | "idle"
+  | "queued"
   | "submitted"
   | "streaming"
   | "recovering"

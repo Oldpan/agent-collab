@@ -34,7 +34,7 @@ describe('nodeWsHandler', () => {
         };
         handleNodeWebSocket(socket, registry, (_conversationId, event) => {
             events.push(event);
-        }, db);
+        }, db, manager);
         socket.emit('message', JSON.stringify({
             type: 'permission.request',
             runId: 'run-1',
@@ -71,7 +71,7 @@ describe('nodeWsHandler', () => {
         };
         handleNodeWebSocket(socket, registry, (_conversationId, event) => {
             events.push(event);
-        }, db);
+        }, db, manager);
         const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
             .get(conv.id);
         createRun(db, {
@@ -102,7 +102,7 @@ describe('nodeWsHandler', () => {
         };
         handleNodeWebSocket(socket, registry, (_conversationId, event) => {
             events.push(event);
-        }, db);
+        }, db, manager);
         socket.emit('message', JSON.stringify({
             type: 'run.event',
             runId: 'run-1',

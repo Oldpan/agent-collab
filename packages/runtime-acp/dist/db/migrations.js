@@ -1,4 +1,4 @@
-const LATEST_VERSION = 14;
+const LATEST_VERSION = 16;
 export function migrate(db) {
     db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -280,6 +280,55 @@ export function migrate(db) {
         ON node_dispatch_queue(state, created_at ASC);
 
       UPDATE schema_version SET version = 14;
+    `);
+    }
+    if (current < 15) {
+        const convCols = db.prepare("PRAGMA table_info('conversations')").all();
+        if (!convCols.some((c) => c.name === 'thread_kind')) {
+            db.exec(`ALTER TABLE conversations ADD COLUMN thread_kind TEXT NOT NULL DEFAULT 'direct';`);
+        }
+        if (!convCols.some((c) => c.name === 'is_primary_thread')) {
+            db.exec(`ALTER TABLE conversations ADD COLUMN is_primary_thread INTEGER NOT NULL DEFAULT 0;`);
+        }
+        db.exec(`UPDATE conversations SET thread_kind = 'direct' WHERE thread_kind IS NULL OR thread_kind = '';`);
+        db.exec(`UPDATE conversations SET is_primary_thread = 0 WHERE is_primary_thread IS NULL;`);
+        const rows = db.prepare(`SELECT id, agent_id as agentId
+       FROM conversations
+       WHERE agent_id IS NOT NULL
+       ORDER BY updated_at DESC, created_at DESC`).all();
+        const seen = new Set();
+        const promote = db.prepare(`UPDATE conversations SET thread_kind = 'direct', is_primary_thread = 1 WHERE id = ?`);
+        const demote = db.prepare(`UPDATE conversations SET thread_kind = 'branch', is_primary_thread = 0 WHERE id = ?`);
+        for (const row of rows) {
+            if (seen.has(row.agentId)) {
+                demote.run(row.id);
+            }
+            else {
+                promote.run(row.id);
+                seen.add(row.agentId);
+            }
+        }
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_conversations_agent_primary ON conversations(agent_id, is_primary_thread, updated_at DESC);`);
+        db.exec(`UPDATE schema_version SET version = 15;`);
+    }
+    if (current < 16) {
+        db.exec(`
+      CREATE TABLE IF NOT EXISTS conversation_prompt_queue (
+        queue_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id         TEXT NOT NULL,
+        conversation_id  TEXT NOT NULL,
+        prompt_text      TEXT NOT NULL,
+        created_at       INTEGER NOT NULL,
+        updated_at       INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_conversation_prompt_queue_agent
+        ON conversation_prompt_queue(agent_id, created_at ASC);
+
+      CREATE INDEX IF NOT EXISTS idx_conversation_prompt_queue_conversation
+        ON conversation_prompt_queue(conversation_id, created_at ASC);
+
+      UPDATE schema_version SET version = 16;
     `);
     }
 }

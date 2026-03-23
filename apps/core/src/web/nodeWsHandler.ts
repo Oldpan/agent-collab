@@ -4,6 +4,7 @@ import { log, finishRun } from '@agent-collab/runtime-acp';
 import type { Db } from '@agent-collab/runtime-acp';
 import type { NodeRegistry } from '../services/nodeRegistry.js';
 import type { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
+import type { ConversationManager } from './conversationManager.js';
 
 /** Persist a ServerEvent from a remote run into core DB as a node/event entry */
 function appendNodeEvent(db: Db, runId: string, seq: number, event: ServerEvent): void {
@@ -22,6 +23,7 @@ export function handleNodeWebSocket(
   registry: NodeRegistry,
   broadcast: EventBroadcaster,
   db: Db,
+  manager: ConversationManager,
   workspaceBroker?: AgentWorkspaceBroker,
 ): void {
   let nodeId: string | null = null;
@@ -114,6 +116,7 @@ export function handleNodeWebSocket(
           conversationId: msg.conversationId,
           status: msg.error ? 'failed' : 'idle',
         });
+        void manager.onConversationSettled(msg.conversationId);
         break;
       }
 
@@ -155,6 +158,7 @@ export function handleNodeWebSocket(
     if (nodeId) {
       workspaceBroker?.rejectPendingForNode(nodeId);
       registry.unregister(nodeId);
+      manager.clearQueuedPromptsForNode(nodeId);
       db.prepare(`UPDATE nodes SET status='offline', last_seen=? WHERE node_id=?`)
         .run(Date.now(), nodeId);
       const affected = db.prepare(
