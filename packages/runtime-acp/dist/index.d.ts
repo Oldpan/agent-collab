@@ -7,7 +7,7 @@ export type { JsonRpcRequest, JsonRpcResponse, JsonRpcNotification, JsonRpcMessa
 export type { InitializeParams, InitializeResult, NewSessionParams, NewSessionResult, PromptParams, PromptResult, ContentBlock, RequestPermissionParams, } from './acp/types.js';
 export { BindingRuntime } from './gateway/bindingRuntime.js';
 export type { RuntimeConfig } from './gateway/bindingRuntime.js';
-export { createSession, createRun, finishRun, getSession, getBinding, upsertBinding, updateAcpSessionId, updateLoadSupported, bindingKeyFromConversationKey, SHARED_CHAT_SCOPE_USER_ID, } from './gateway/sessionStore.js';
+export { createSession, createRun, finishRun, getSession, getBinding, upsertBinding, updateAcpSessionId, clearAcpSessionId, updateLoadSupported, bindingKeyFromConversationKey, SHARED_CHAT_SCOPE_USER_ID, } from './gateway/sessionStore.js';
 export type { Platform, ConversationKey, SessionBinding } from './gateway/sessionStore.js';
 export { ToolAuth, parseToolKind, TOOL_KINDS } from './gateway/toolAuth.js';
 export type { ToolKind } from './gateway/toolAuth.js';

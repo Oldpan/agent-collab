@@ -11,6 +11,7 @@ import { AcpClient, type PermissionRequest } from '../acp/client.js';
 import type { ContentBlock, InitializeResult } from '../acp/types.js';
 import {
   SHARED_CHAT_SCOPE_USER_ID,
+  clearAcpSessionId,
   updateAcpSessionId,
   updateLoadSupported,
 } from './sessionStore.js';
@@ -500,6 +501,71 @@ export class BindingRuntime {
     return true;
   }
 
+  private resetAcpSession(reason: string): void {
+    log.warn('Resetting ACP session id', {
+      bindingKey: this.bindingKey,
+      sessionKey: this.sessionKey,
+      reason,
+      previousSessionId: this.acpSessionId,
+    });
+    this.acpSessionId = null;
+    clearAcpSessionId(this.db, this.sessionKey);
+  }
+
+  private async promptOnce(params: {
+    runId: string;
+    promptText: string;
+    promptResources?: Array<{ uri: string; mimeType?: string }>;
+    sink: OutboundSink;
+    uiMode: UiMode;
+    contextText?: string;
+    actorUserId?: string;
+  }): Promise<{ stopReason: string; lastSeq: number; isFreshSession: boolean }> {
+    const isFreshSession = !this.acpSessionId;
+    const sessionId = await this.ensureSessionId();
+
+    const run = {
+      runId: params.runId,
+      sessionKey: this.sessionKey,
+      createdAtMs: Date.now(),
+    };
+
+    const blocks: ContentBlock[] = [];
+
+    if (isFreshSession && params.contextText?.trim()) {
+      blocks.push({ type: 'text', text: params.contextText });
+    }
+
+    if (params.promptText.trim()) {
+      blocks.push({ type: 'text', text: params.promptText });
+    }
+
+    for (const [index, resource] of (params.promptResources ?? []).entries()) {
+      blocks.push({
+        type: 'resource_link',
+        uri: resource.uri,
+        name: deriveResourceName(resource.uri, index),
+        mimeType: resource.mimeType,
+      });
+    }
+
+    if (blocks.length === 0) {
+      blocks.push({ type: 'text', text: params.promptText });
+    }
+
+    const result = await this.client.prompt(run, {
+      sessionId,
+      prompt: blocks,
+    });
+
+    await this.flushSinkWriteQueue();
+    return {
+      stopReason: result.stopReason,
+      lastSeq: this.currentRunLastSeq,
+      isFreshSession,
+    };
+  }
+
   prompt(params: {
     runId: string;
     promptText: string;
@@ -510,8 +576,7 @@ export class BindingRuntime {
     actorUserId?: string;
   }): Promise<{ stopReason: string; lastSeq: number }> {
     const next = this.queue.then(async () => {
-      const isFreshSession = !this.acpSessionId;
-      const sessionId = await this.ensureSessionId();
+      const hadSession = Boolean(this.acpSessionId);
 
       this.currentRunId = params.runId;
       this.currentRunLastSeq = 0;
@@ -523,42 +588,23 @@ export class BindingRuntime {
       this.toolCallTextBreaks = new Set<string>();
 
       try {
-        const run = {
-          runId: params.runId,
-          sessionKey: this.sessionKey,
-          createdAtMs: Date.now(),
-        };
+        try {
+          const result = await this.promptOnce(params);
+          return { stopReason: result.stopReason, lastSeq: result.lastSeq };
+        } catch (error: any) {
+          const shouldRetry =
+            hadSession &&
+            this.currentRunLastSeq === 0 &&
+            isRecoverableResumeError(error);
 
-        const blocks: ContentBlock[] = [];
+          if (!shouldRetry) {
+            throw error;
+          }
 
-        if (isFreshSession && params.contextText?.trim()) {
-          blocks.push({ type: 'text', text: params.contextText });
+          this.resetAcpSession(String(error?.message ?? error));
+          const recovered = await this.promptOnce(params);
+          return { stopReason: recovered.stopReason, lastSeq: recovered.lastSeq };
         }
-
-        if (params.promptText.trim()) {
-          blocks.push({ type: 'text', text: params.promptText });
-        }
-
-        for (const [index, resource] of (params.promptResources ?? []).entries()) {
-          blocks.push({
-            type: 'resource_link',
-            uri: resource.uri,
-            name: deriveResourceName(resource.uri, index),
-            mimeType: resource.mimeType,
-          });
-        }
-
-        if (blocks.length === 0) {
-          blocks.push({ type: 'text', text: params.promptText });
-        }
-
-        const result = await this.client.prompt(run, {
-          sessionId,
-          prompt: blocks,
-        });
-
-        await this.flushSinkWriteQueue();
-        return { stopReason: result.stopReason, lastSeq: this.currentRunLastSeq };
       } finally {
         await this.flushSinkWriteQueue();
         this.activeSink = null;
@@ -654,6 +700,24 @@ export class BindingRuntime {
 
     return kind === 'tool_call';
   }
+}
+
+function isRecoverableResumeError(error: unknown): boolean {
+  const message = String((error as { message?: unknown } | null)?.message ?? error ?? '')
+    .toLowerCase();
+
+  return (
+    message.includes('tls handshake eof') ||
+    message.includes('falling back from websockets to https transport') ||
+    message.includes('stream disconnected before completion') ||
+    message.includes('session not found') ||
+    message.includes('unknown session') ||
+    message.includes('invalid session') ||
+    message.includes('internal error (code -32603)') ||
+    message.includes('acp agent exited') ||
+    message.includes('acp client closed') ||
+    message.includes('transport')
+  );
 }
 
 function toToolKind(kind: unknown): ToolKind | null {

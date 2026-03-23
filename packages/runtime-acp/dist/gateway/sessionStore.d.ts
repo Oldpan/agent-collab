@@ -25,6 +25,7 @@ export declare function createSession(db: Db, params: {
     loadSupported: boolean;
 }): void;
 export declare function updateAcpSessionId(db: Db, sessionKey: string, acpSessionId: string): void;
+export declare function clearAcpSessionId(db: Db, sessionKey: string): void;
 export declare function updateLoadSupported(db: Db, sessionKey: string, loadSupported: boolean): void;
 export declare function updateSessionCwd(db: Db, sessionKey: string, cwd: string): void;
 export declare function updateSessionAgentConfig(db: Db, params: {

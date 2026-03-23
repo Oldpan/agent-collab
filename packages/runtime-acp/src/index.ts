@@ -36,6 +36,7 @@ export {
   getBinding,
   upsertBinding,
   updateAcpSessionId,
+  clearAcpSessionId,
   updateLoadSupported,
   bindingKeyFromConversationKey,
   SHARED_CHAT_SCOPE_USER_ID,

@@ -51,6 +51,10 @@ export function updateAcpSessionId(db, sessionKey, acpSessionId) {
     const now = Date.now();
     db.prepare('UPDATE sessions SET acp_session_id = ?, updated_at = ? WHERE session_key = ?').run(acpSessionId, now, sessionKey);
 }
+export function clearAcpSessionId(db, sessionKey) {
+    const now = Date.now();
+    db.prepare('UPDATE sessions SET acp_session_id = NULL, updated_at = ? WHERE session_key = ?').run(now, sessionKey);
+}
 export function updateLoadSupported(db, sessionKey, loadSupported) {
     const now = Date.now();
     db.prepare('UPDATE sessions SET load_supported = ?, updated_at = ? WHERE session_key = ?').run(loadSupported ? 1 : 0, now, sessionKey);

@@ -4,7 +4,7 @@ export { spawnAcpAgent } from './acp/stdio.js';
 export { isRequest, isResponse, isNotification, } from './acp/jsonrpc.js';
 // Gateway / runtime layer
 export { BindingRuntime } from './gateway/bindingRuntime.js';
-export { createSession, createRun, finishRun, getSession, getBinding, upsertBinding, updateAcpSessionId, updateLoadSupported, bindingKeyFromConversationKey, SHARED_CHAT_SCOPE_USER_ID, } from './gateway/sessionStore.js';
+export { createSession, createRun, finishRun, getSession, getBinding, upsertBinding, updateAcpSessionId, clearAcpSessionId, updateLoadSupported, bindingKeyFromConversationKey, SHARED_CHAT_SCOPE_USER_ID, } from './gateway/sessionStore.js';
 export { ToolAuth, parseToolKind, TOOL_KINDS } from './gateway/toolAuth.js';
 export { buildReplayContextFromRecentRuns } from './gateway/history.js';
 // Database layer

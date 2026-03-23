@@ -128,6 +128,13 @@ export function updateAcpSessionId(
   ).run(acpSessionId, now, sessionKey);
 }
 
+export function clearAcpSessionId(db: Db, sessionKey: string): void {
+  const now = Date.now();
+  db.prepare(
+    'UPDATE sessions SET acp_session_id = NULL, updated_at = ? WHERE session_key = ?',
+  ).run(now, sessionKey);
+}
+
 export function updateLoadSupported(
   db: Db,
   sessionKey: string,
