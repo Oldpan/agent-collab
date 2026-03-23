@@ -3,7 +3,7 @@ import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import {
-  PlusIcon, TrashIcon, XIcon, ChevronRightIcon, ChevronDownIcon, PencilIcon,
+  PlusIcon, TrashIcon, XIcon, ChevronRightIcon, ChevronDownIcon, PencilIcon, Rows3Icon,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type {
@@ -41,7 +41,9 @@ type SidebarProps = {
   agents: AgentInfo[];
   conversations: ConversationInfo[];
   selectedId: string | null;
+  selectedView: "chat" | "sessions";
   onSelect: (id: string) => void;
+  onOpenSessions: () => void;
   onCreateMachine: (req: CreateMachineRequest) => Promise<MachineInfo>;
   onDeleteMachine: (id: string) => void;
   onCreateAgent: (req: CreateAgentRequest) => void;
@@ -78,7 +80,9 @@ function StatusDot({ status }: { status: MachineInfo["status"] }) {
 
 export function Sidebar({
   machines, agents, conversations, selectedId,
+  selectedView,
   onSelect, onCreateMachine, onDeleteMachine,
+  onOpenSessions,
   onCreateAgent, onUpdateAgent, onDeleteAgent,
   onOpenAgentThread,
   onCreateConversation, onDeleteConversation,
@@ -188,14 +192,24 @@ export function Sidebar({
         <h1 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
           Machines &amp; Agents
         </h1>
-        <Button
-          size="icon-xs"
-          variant="ghost"
-          title="Add machine"
-          onClick={() => setShowCreateMachine((v) => !v)}
-        >
-          <PlusIcon className="size-3" />
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            size="icon-xs"
+            variant={selectedView === "sessions" ? "secondary" : "ghost"}
+            title="Open session manager"
+            onClick={onOpenSessions}
+          >
+            <Rows3Icon className="size-3" />
+          </Button>
+          <Button
+            size="icon-xs"
+            variant="ghost"
+            title="Add machine"
+            onClick={() => setShowCreateMachine((v) => !v)}
+          >
+            <PlusIcon className="size-3" />
+          </Button>
+        </div>
       </div>
 
       {/* Create machine panel */}

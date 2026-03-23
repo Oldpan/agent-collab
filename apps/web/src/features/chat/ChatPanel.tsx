@@ -40,7 +40,7 @@ type ChatPanelProps = {
 /** Determine tool display state from LiveToolCall */
 function getToolState(tc: LiveToolCall): ToolState {
   if (tc.error) return "error";
-  if (tc.output !== undefined) return "result";
+  if (tc.completed || tc.output !== undefined) return "result";
   return "calling";
 }
 

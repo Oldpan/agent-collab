@@ -57,6 +57,14 @@ export function useConversationStream(
     );
   }, []);
 
+  const finalizeCurrentToolCalls = useCallback(() => {
+    if (currentToolCallsRef.current.length === 0) return;
+    currentToolCallsRef.current = currentToolCallsRef.current.map((tc) =>
+      tc.completed ? tc : { ...tc, completed: true },
+    );
+    updateCurrentMessage();
+  }, [updateCurrentMessage]);
+
   // Process a single server event
   const processEvent = useCallback(
     (event: ServerEvent, ws: WebSocket) => {
@@ -92,14 +100,32 @@ export function useConversationStream(
         }
 
         case "tool.call": {
-          currentToolCallsRef.current = [
-            ...currentToolCallsRef.current,
-            {
-              id: event.toolCallId,
-              name: event.name,
-              input: event.input,
-            },
-          ];
+          const existingIndex = currentToolCallsRef.current.findIndex(
+            (tc) => tc.id === event.toolCallId,
+          );
+
+          if (existingIndex >= 0) {
+            currentToolCallsRef.current = currentToolCallsRef.current.map((tc, index) =>
+              index === existingIndex
+                ? {
+                    ...tc,
+                    name: event.name,
+                    input: event.input,
+                    completed: false,
+                  }
+                : tc,
+            );
+          } else {
+            currentToolCallsRef.current = [
+              ...currentToolCallsRef.current,
+              {
+                id: event.toolCallId,
+                name: event.name,
+                input: event.input,
+                completed: false,
+              },
+            ];
+          }
           updateCurrentMessage();
           break;
         }
@@ -107,7 +133,7 @@ export function useConversationStream(
         case "tool.result": {
           currentToolCallsRef.current = currentToolCallsRef.current.map((tc) =>
             tc.id === event.toolCallId
-              ? { ...tc, output: event.output, error: event.error }
+              ? { ...tc, completed: true, output: event.output, error: event.error }
               : tc,
           );
           updateCurrentMessage();
@@ -124,6 +150,7 @@ export function useConversationStream(
         }
 
         case "turn.end": {
+          finalizeCurrentToolCalls();
           const msgId = currentMsgIdRef.current;
           if (msgId) {
             setMessages((prev) =>
@@ -155,6 +182,7 @@ export function useConversationStream(
         }
 
         case "error": {
+          finalizeCurrentToolCalls();
           setStatus("error");
           break;
         }
@@ -175,7 +203,7 @@ export function useConversationStream(
         }
       }
     },
-    [updateCurrentMessage],
+    [finalizeCurrentToolCalls, updateCurrentMessage],
   );
 
   // Connect / disconnect WebSocket on conversationId change
@@ -215,6 +243,7 @@ export function useConversationStream(
 
     ws.onclose = () => {
       if (wsRef.current !== ws) return;
+      finalizeCurrentToolCalls();
       // Mark any streaming message as done
       const msgId = currentMsgIdRef.current;
       if (msgId) {
@@ -232,7 +261,7 @@ export function useConversationStream(
         wsRef.current = null;
       }
     };
-  }, [conversationId, processEvent]);
+  }, [conversationId, finalizeCurrentToolCalls, processEvent]);
 
   // Send helpers
   const sendEvent = useCallback((event: ClientEvent) => {

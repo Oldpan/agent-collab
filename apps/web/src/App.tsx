@@ -1,9 +1,10 @@
-import { useMemo, useCallback } from "react";
+import { useMemo, useCallback, useState } from "react";
 import { useConversations } from "@/hooks/useConversations";
 import { useAgents } from "@/hooks/useAgents";
 import { useMachines } from "@/hooks/useMachines";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { ChatPanel } from "@/features/chat/ChatPanel";
+import { SessionManagerPanel } from "@/features/sessions/SessionManagerPanel";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -16,6 +17,7 @@ import type {
 } from "@agent-collab/protocol";
 
 export function App() {
+  const [viewMode, setViewMode] = useState<"chat" | "sessions">("chat");
   const {
     conversations,
     selectedId,
@@ -65,6 +67,7 @@ export function App() {
   const handleCreateConversation = useCallback(
     (req: CreateConversationRequest) => {
       createConversation(req);
+      setViewMode("chat");
     },
     [createConversation],
   );
@@ -72,6 +75,7 @@ export function App() {
   const handleOpenAgentThread = useCallback(
     (agentId: string) => {
       openAgentThread(agentId);
+      setViewMode("chat");
     },
     [openAgentThread],
   );
@@ -82,6 +86,18 @@ export function App() {
     },
     [deleteConversation],
   );
+
+  const handleSelectConversation = useCallback(
+    (id: string) => {
+      selectConversation(id);
+      setViewMode("chat");
+    },
+    [selectConversation],
+  );
+
+  const handleOpenSessions = useCallback(() => {
+    setViewMode("sessions");
+  }, []);
 
   return (
     <div className="flex h-full bg-background text-foreground">
@@ -98,7 +114,9 @@ export function App() {
             agents={agents}
             conversations={conversations}
             selectedId={selectedId}
-            onSelect={selectConversation}
+            selectedView={viewMode}
+            onSelect={handleSelectConversation}
+            onOpenSessions={handleOpenSessions}
             onCreateMachine={createMachine}
             onDeleteMachine={deleteMachine}
             onCreateAgent={handleCreateAgent}
@@ -114,7 +132,14 @@ export function App() {
 
         {/* Chat area */}
         <ResizablePanel defaultSize={75} minSize={50}>
-          {selectedConversation ? (
+          {viewMode === "sessions" ? (
+            <SessionManagerPanel
+              conversations={conversations}
+              agents={agents}
+              selectedId={selectedId}
+              onOpenSession={handleSelectConversation}
+            />
+          ) : selectedConversation ? (
             <ChatPanel conversation={selectedConversation} agent={selectedAgent} />
           ) : (
             <div className="flex h-full items-center justify-center text-muted-foreground">

@@ -297,7 +297,7 @@ export class AcpClient {
                             ? ' (code ' + String(res.error.code) + ')'
                             : '';
                         const data = res.error?.data !== undefined
-                            ? '; data=' + String(res.error.data)
+                            ? '; data=' + formatJsonRpcErrorData(res.error.data)
                             : '';
                         reject(new Error(String(res.error.message) + code + data));
                         return;
@@ -476,6 +476,16 @@ export class AcpClient {
             return;
         state.child.kill('SIGKILL');
         this.terminals.delete(params.terminalId);
+    }
+}
+function formatJsonRpcErrorData(value) {
+    if (typeof value === 'string')
+        return value;
+    try {
+        return JSON.stringify(value);
+    }
+    catch {
+        return String(value);
     }
 }
 function buildLocalPermissionRequest(params) {

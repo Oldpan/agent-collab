@@ -13,6 +13,7 @@ export type LiveToolCall = {
   id: string;
   name: string;
   input: unknown;
+  completed?: boolean;
   output?: string;
   error?: boolean;
 };
