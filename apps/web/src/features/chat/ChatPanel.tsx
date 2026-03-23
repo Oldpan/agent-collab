@@ -212,9 +212,13 @@ function MessageRow({
   const cardTone = isUser
     ? "bg-white/90 border-violet-200/80"
     : "bg-[#fffdf7]/92 border-amber-200/80";
+  const rowAlign = isUser ? "justify-end" : "justify-start";
+  const contentAlign = isUser ? "items-end text-right" : "items-start text-left";
+  const metaAlign = isUser ? "justify-end" : "justify-between";
+  const infoAlign = isUser ? "justify-end" : "justify-start";
 
   const body = isUser ? (
-    <UserMessageContent className="rounded-lg border border-violet-200/80 bg-violet-50/85 px-3 py-2.5 shadow-sm">
+    <UserMessageContent className="w-fit max-w-full self-end rounded-lg border border-violet-200/80 bg-violet-50/85 px-3 py-2.5 shadow-sm">
       {message.text}
     </UserMessageContent>
   ) : (
@@ -237,11 +241,13 @@ function MessageRow({
       from={message.role}
       className="border-b border-stone-300/80 bg-white/55 px-4 py-3 last:border-b-0"
     >
-      <div className="flex items-start gap-2.5">
-        <ChatAvatar role={message.role} agent={agent} user={userIdentity} size={36} className="mt-0.5" />
-        <div className="min-w-0 flex-1">
-          <div className="mb-1.5 flex items-start justify-between gap-3">
-            <div className="min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1">
+      <div className={cn("flex items-start gap-2.5", rowAlign)}>
+        {!isUser && (
+          <ChatAvatar role={message.role} agent={agent} user={userIdentity} size={36} className="mt-0.5" />
+        )}
+        <div className={cn("flex min-w-0 max-w-[min(760px,82%)] flex-col", contentAlign)}>
+          <div className={cn("mb-1.5 flex w-full items-start gap-3", metaAlign)}>
+            <div className={cn("min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1", infoAlign)}>
               <span className="text-sm font-semibold tracking-tight">{displayName}</span>
               <span className="rounded-sm border border-border/70 bg-background/75 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
                 {displayRole}
@@ -265,6 +271,9 @@ function MessageRow({
 
           {body}
         </div>
+        {isUser && (
+          <ChatAvatar role={message.role} agent={agent} user={userIdentity} size={36} className="mt-0.5" />
+        )}
       </div>
     </Message>
   );
