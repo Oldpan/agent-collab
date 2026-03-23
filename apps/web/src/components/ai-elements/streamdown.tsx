@@ -81,7 +81,10 @@ const StreamdownCode = ({ className, children, node, ...props }: StreamdownCodeP
   if (isInline) {
     return (
       <code
-        className={cn("rounded bg-secondary px-1 py-0.5 font-mono text-xs", className)}
+        className={cn(
+          "rounded-sm border border-zinc-900 bg-[#ffe78a] px-1 py-0.5 font-mono text-[0.8em] font-medium text-zinc-950",
+          className,
+        )}
         data-streamdown="inline-code"
         {...props}
       >

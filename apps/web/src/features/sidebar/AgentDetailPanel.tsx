@@ -31,19 +31,19 @@ export function AgentDetailPanel({ agent, onUpdate, onClose }: Props) {
     : null;
 
   return (
-    <div className="border-t border-sidebar-border px-3 py-2 space-y-2 bg-sidebar-accent/30">
+    <div className="space-y-2 border-t border-black/10 bg-[#fff0ae] px-3 py-2">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-sidebar-foreground">Edit Agent</span>
-        <Button size="icon-xs" variant="ghost" onClick={onClose}>
+        <span className="text-xs font-medium text-zinc-950">Edit Agent</span>
+        <Button size="icon-xs" variant="outline" className="rounded-sm border-2 border-zinc-900 bg-white hover:bg-[#fff1a9]" onClick={onClose}>
           <XIcon className="size-3" />
         </Button>
       </div>
 
       {/* Name */}
       <div className="space-y-0.5">
-        <label className="text-[10px] text-muted-foreground">Name</label>
+        <label className="text-[10px] text-zinc-500">Name</label>
         <input
-          className="w-full rounded border border-input bg-background px-1.5 py-0.5 text-xs"
+          className="w-full rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs"
           value={name}
           onChange={(e) => setName(e.target.value)}
         />
@@ -51,7 +51,7 @@ export function AgentDetailPanel({ agent, onUpdate, onClose }: Props) {
 
       {/* Workspace local memory path (read-only info) */}
       {workspaceMemoryPath && (
-        <div className="rounded bg-muted/50 px-2 py-1 text-[10px] text-muted-foreground">
+        <div className="rounded-sm border-2 border-zinc-900 bg-[#fff8d8] px-2 py-1 text-[10px] text-zinc-600">
           <span className="font-medium">Local memory: </span>
           <span className={cn("font-mono break-all")}>{workspaceMemoryPath}</span>
           <span className="block mt-0.5 opacity-70">(managed by Agent Collab)</span>
@@ -66,7 +66,7 @@ export function AgentDetailPanel({ agent, onUpdate, onClose }: Props) {
 
       <Button
         size="sm"
-        className="w-full text-xs"
+        className="w-full rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-xs text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
         onClick={handleSave}
         disabled={saving || !name.trim()}
       >

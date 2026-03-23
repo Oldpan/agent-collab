@@ -54,15 +54,15 @@ export function PromptComposer({ status, onSend, onCancel }: PromptComposerProps
   const showCancel = status === "submitted" || status === "streaming" || status === "recovering" || status === "awaiting_approval";
 
   return (
-    <div className="flex items-end gap-2 border-t border-border bg-background p-4">
+    <div className="border-t border-black/10 bg-[#fff8ca] px-4 py-3 shadow-[0_-10px_24px_-18px_rgba(0,0,0,0.35)]">
+      <div className="flex items-end gap-2 rounded-md border-2 border-zinc-900 bg-[#fffbe6] p-2 shadow-[4px_4px_0_0_rgba(0,0,0,0.12)]">
       <textarea
         ref={textareaRef}
         className={cn(
-          "flex-1 resize-none rounded-lg border border-input bg-transparent px-3 py-2 text-sm",
-          "placeholder:text-muted-foreground",
-          "focus:outline-none focus:ring-2 focus:ring-ring/50 focus:border-ring",
+          "min-h-[40px] max-h-[200px] flex-1 resize-none rounded-sm border border-transparent bg-transparent px-3 py-2 text-sm text-zinc-900",
+          "placeholder:text-zinc-400",
+          "focus:outline-none",
           "disabled:cursor-not-allowed disabled:opacity-50",
-          "min-h-[40px] max-h-[200px]",
         )}
         placeholder="Send a message... (Shift+Enter for newline)"
         disabled={isBusy}
@@ -76,7 +76,7 @@ export function PromptComposer({ status, onSend, onCancel }: PromptComposerProps
           size="icon"
           variant="outline"
           onClick={onCancel}
-          className="shrink-0"
+          className="shrink-0 rounded-sm border-2 border-zinc-900 bg-white text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff0a8]"
           title="Cancel"
         >
           <SquareIcon className="size-4" />
@@ -85,13 +85,14 @@ export function PromptComposer({ status, onSend, onCancel }: PromptComposerProps
         <Button
           size="icon"
           onClick={handleSubmit}
-          className="shrink-0"
+          className="shrink-0 rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
           title="Send"
           disabled={isBusy}
         >
           <SendIcon className="size-4" />
         </Button>
       )}
+      </div>
     </div>
   );
 }

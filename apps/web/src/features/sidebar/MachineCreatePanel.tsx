@@ -54,12 +54,12 @@ export function MachineCreatePanel({ onClose, onCreate }: Props) {
   }, [connectionCommand]);
 
   return (
-    <div className="border-t border-sidebar-border px-3 py-2 space-y-2 bg-sidebar-accent/30">
+    <div className="space-y-2 border-t border-black/10 bg-[#fff0ae] px-3 py-2">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-medium text-sidebar-foreground">
+        <span className="text-xs font-medium text-zinc-950">
           {created ? "Machine Created" : "New Machine"}
         </span>
-        <Button size="icon-xs" variant="ghost" onClick={onClose}>
+        <Button size="icon-xs" variant="outline" className="rounded-sm border-2 border-zinc-900 bg-white hover:bg-[#fff1a9]" onClick={onClose}>
           <XIcon className="size-3" />
         </Button>
       </div>
@@ -67,9 +67,9 @@ export function MachineCreatePanel({ onClose, onCreate }: Props) {
       {!created ? (
         <>
           <div className="space-y-0.5">
-            <label className="text-[10px] text-muted-foreground">Name</label>
+            <label className="text-[10px] text-zinc-500">Name</label>
             <input
-              className="w-full rounded border border-input bg-background px-1.5 py-0.5 text-xs"
+              className="w-full rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs"
               placeholder="e.g. my-gpu-box"
               value={name}
               onChange={(e) => setName(e.target.value)}
@@ -78,14 +78,14 @@ export function MachineCreatePanel({ onClose, onCreate }: Props) {
           </div>
 
           <div className="space-y-1">
-            <label className="text-[10px] text-muted-foreground">
+            <label className="text-[10px] text-zinc-500">
               API Key hints (shown in command)
             </label>
             <div className="flex flex-wrap gap-1">
               {envVarKeys.map((key) => (
                 <span
                   key={key}
-                  className="inline-flex items-center gap-0.5 rounded bg-muted px-1.5 py-0.5 text-[10px] font-mono"
+                  className="inline-flex items-center gap-0.5 rounded-sm border border-zinc-900 bg-[#fff8d8] px-1.5 py-0.5 text-[10px] font-mono"
                 >
                   {key}
                   <button
@@ -99,13 +99,13 @@ export function MachineCreatePanel({ onClose, onCreate }: Props) {
             </div>
             <div className="flex gap-1">
               <input
-                className="flex-1 rounded border border-input bg-background px-1.5 py-0.5 text-xs font-mono"
+                className="flex-1 rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs font-mono"
                 placeholder="ADD_KEY"
                 value={envKey}
                 onChange={(e) => setEnvKey(e.target.value.toUpperCase())}
                 onKeyDown={(e) => e.key === "Enter" && addEnvKey()}
               />
-              <Button size="icon-xs" variant="outline" onClick={addEnvKey}>
+              <Button size="icon-xs" variant="outline" className="rounded-sm border-2 border-zinc-900 bg-white hover:bg-[#fff1a9]" onClick={addEnvKey}>
                 <PlusIcon className="size-3" />
               </Button>
             </div>
@@ -113,7 +113,7 @@ export function MachineCreatePanel({ onClose, onCreate }: Props) {
 
           <Button
             size="sm"
-            className="w-full text-xs"
+            className="w-full rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-xs text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
             onClick={handleCreate}
             disabled={creating || !name.trim()}
           >
@@ -122,8 +122,8 @@ export function MachineCreatePanel({ onClose, onCreate }: Props) {
         </>
       ) : (
         <>
-          <div className="rounded bg-muted/60 p-2 space-y-1">
-            <div className="text-[10px] text-muted-foreground mb-1">
+          <div className="space-y-1 rounded-sm border-2 border-zinc-900 bg-[#fff8d8] p-2 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]">
+            <div className="mb-1 text-[10px] text-zinc-500">
               Run this command on <span className="font-semibold">{created.name}</span>:
             </div>
             <pre className="text-[10px] font-mono whitespace-pre-wrap break-all text-foreground leading-relaxed">
@@ -132,7 +132,7 @@ export function MachineCreatePanel({ onClose, onCreate }: Props) {
             <Button
               size="sm"
               variant="outline"
-              className="w-full text-xs mt-1"
+              className="mt-1 w-full rounded-sm border-2 border-zinc-900 bg-white text-xs hover:bg-[#fff1a9]"
               onClick={handleCopy}
             >
               {copied ? (
@@ -142,7 +142,7 @@ export function MachineCreatePanel({ onClose, onCreate }: Props) {
               )}
             </Button>
           </div>
-          <p className="text-[10px] text-muted-foreground text-center">
+          <p className="text-center text-[10px] text-zinc-500">
             Machine will show <span className="text-green-500 font-medium">online</span> once this runs.
           </p>
         </>

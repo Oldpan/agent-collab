@@ -152,16 +152,22 @@ export function Sidebar({
   }, [agents, conversations, selectedId]);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col bg-[linear-gradient(180deg,#ffe98d_0%,#ffd45e_100%)]">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-sidebar-border px-3 py-3">
-        <h1 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+      <div className="flex items-center justify-between border-b border-black/10 bg-[#ffe48a] px-3 py-3 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.45)]">
+        <h1 className="text-xs font-semibold uppercase tracking-wider text-zinc-600">
           Machines &amp; Agents
         </h1>
         <div className="flex items-center gap-1">
           <Button
             size="icon-xs"
-            variant={selectedView === "sessions" ? "secondary" : "ghost"}
+            variant="outline"
+            className={cn(
+              "rounded-sm border-2 border-zinc-900 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+              selectedView === "sessions"
+                ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]"
+                : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+            )}
             title="Open session manager"
             onClick={onOpenSessions}
           >
@@ -169,7 +175,8 @@ export function Sidebar({
           </Button>
           <Button
             size="icon-xs"
-            variant="ghost"
+            variant="outline"
+            className="rounded-sm border-2 border-zinc-900 bg-[#fff9d8] text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff1a9]"
             title="Add machine"
             onClick={() => setShowCreateMachine((v) => !v)}
           >
@@ -191,9 +198,9 @@ export function Sidebar({
       )}
 
       <ScrollArea className="flex-1">
-        <div className="flex flex-col p-1.5 gap-0.5">
+        <div className="flex flex-col gap-1 p-2">
           {machines.length === 0 && (
-            <p className="px-3 py-4 text-[10px] text-muted-foreground text-center">
+            <p className="rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-3 py-4 text-center text-[10px] text-zinc-500 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]">
               No machines yet — click + to add one
             </p>
           )}
@@ -211,44 +218,44 @@ export function Sidebar({
                 {/* Machine row */}
                 <button
                   type="button"
-                  className="group flex w-full items-center gap-1.5 rounded px-2 py-1 text-left hover:bg-accent/50 cursor-pointer"
+                  className="group flex w-full items-center gap-1.5 rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-2.5 py-1.5 text-left shadow-[3px_3px_0_0_rgba(0,0,0,0.1)] transition-colors hover:bg-[#fff1a9] cursor-pointer"
                   onClick={() => toggleMachine(machine.nodeId)}
                 >
                   {isExpanded
-                    ? <ChevronDownIcon className="size-3 shrink-0 text-muted-foreground" />
-                    : <ChevronRightIcon className="size-3 shrink-0 text-muted-foreground" />
+                    ? <ChevronDownIcon className="size-3 shrink-0 text-zinc-500" />
+                    : <ChevronRightIcon className="size-3 shrink-0 text-zinc-500" />
                   }
                   <StatusDot status={machine.status} />
-                  <span className="flex-1 text-xs font-medium truncate">{machine.name}</span>
+                  <span className="flex-1 truncate text-xs font-medium">{machine.name}</span>
                   <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
                     <button
                       type="button"
-                      className="p-0.5 rounded hover:bg-accent cursor-pointer"
+                      className="rounded-sm p-0.5 hover:bg-[#ffe27a] cursor-pointer"
                       title="Add agent to this machine"
                       onClick={(e) => openCreateAgentForm(machine.nodeId, e)}
                     >
-                      <PlusIcon className="size-3 text-muted-foreground" />
+                      <PlusIcon className="size-3 text-zinc-500" />
                     </button>
                     <button
                       type="button"
-                      className="p-0.5 rounded hover:bg-accent cursor-pointer"
+                      className="rounded-sm p-0.5 hover:bg-[#ffe27a] cursor-pointer"
                       title="Delete machine"
                       onClick={(e) => { e.stopPropagation(); onDeleteMachine(machine.nodeId); }}
                     >
-                      <TrashIcon className="size-3 text-muted-foreground hover:text-destructive" />
+                      <TrashIcon className="size-3 text-zinc-500 hover:text-destructive" />
                     </button>
                   </div>
                 </button>
 
                 {/* Machine content */}
                 {isExpanded && (
-                  <div className="ml-3 flex flex-col gap-0.5">
+                  <div className="ml-3 mt-1 flex flex-col gap-1">
                     {/* Create agent form */}
                     {createAgentInMachine === machine.nodeId && (
-                      <div className="border border-sidebar-border rounded p-2 space-y-1.5 my-1 bg-sidebar-accent/20">
+                      <div className="my-1 space-y-1.5 rounded-md border-2 border-zinc-900 bg-[#fff8d8] p-2 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]">
                         <input
                           autoFocus
-                          className="w-full rounded border border-input bg-background px-1.5 py-0.5 text-xs placeholder:text-muted-foreground"
+                          className="w-full rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs placeholder:text-zinc-400"
                           placeholder="Agent name"
                           value={newAgentName}
                           onChange={(e) => setNewAgentName(e.target.value)}
@@ -263,10 +270,10 @@ export function Sidebar({
                               key={t}
                               type="button"
                               className={cn(
-                                "flex-1 rounded px-1 py-0.5 text-[10px] border cursor-pointer",
+                                "flex-1 rounded-sm border-2 px-1 py-0.5 text-[10px] cursor-pointer",
                                 newAgentType === t
-                                  ? "bg-primary text-primary-foreground border-primary"
-                                  : "border-input hover:bg-accent",
+                                  ? "border-zinc-900 bg-[#ffd54a] text-zinc-950"
+                                  : "border-zinc-900 bg-white text-zinc-700 hover:bg-[#fff1a9]",
                               )}
                               onClick={() => setNewAgentType(t)}
                             >
@@ -275,7 +282,7 @@ export function Sidebar({
                           ))}
                         </div>
                         <textarea
-                          className="w-full rounded border border-input bg-background px-1.5 py-0.5 text-xs resize-none min-h-[40px] placeholder:text-muted-foreground"
+                          className="min-h-[40px] w-full resize-none rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs placeholder:text-zinc-400"
                           placeholder="System prompt (optional)"
                           value={newAgentSystemPrompt}
                           onChange={(e) => setNewAgentSystemPrompt(e.target.value)}
@@ -288,7 +295,7 @@ export function Sidebar({
                         <div className="flex gap-1">
                           <Button
                             size="sm"
-                            className="flex-1 text-xs h-6"
+                            className="h-6 flex-1 rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-xs text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
                             onClick={handleCreateAgent}
                             disabled={!newAgentName.trim()}
                           >
@@ -296,8 +303,8 @@ export function Sidebar({
                           </Button>
                           <Button
                             size="sm"
-                            variant="ghost"
-                            className="text-xs h-6 px-2"
+                            variant="outline"
+                            className="h-6 rounded-sm border-2 border-zinc-900 bg-white px-2 text-xs text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#fff1a9]"
                             onClick={() => {
                               setCreateAgentInMachine(null);
                               setNewAgentEnvVars(undefined);
@@ -310,7 +317,7 @@ export function Sidebar({
                     )}
 
                     {machineAgents.length === 0 && createAgentInMachine !== machine.nodeId && (
-                      <p className="px-2 py-2 text-[10px] text-muted-foreground">
+                      <p className="rounded-md border-2 border-dashed border-zinc-900/40 bg-[#fff8d8] px-2 py-2 text-[10px] text-zinc-500">
                         No agents — click + to create one
                       </p>
                     )}
@@ -381,8 +388,8 @@ function AgentRow({ agent, isEditing, isSelected, updatedAt, onOpen, onEdit, onD
 
   return (
     <div className={cn(
-      "group flex items-center gap-1.5 rounded px-2 py-1.5",
-      isSelected ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
+      "group flex items-center gap-1.5 rounded-md border-2 border-zinc-900 px-2 py-1.5 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]",
+      isSelected ? "bg-[#ffd54a] text-zinc-950" : "bg-[#fff8d8] hover:bg-[#fff1a9]",
     )}>
       <button
         type="button"
@@ -392,7 +399,7 @@ function AgentRow({ agent, isEditing, isSelected, updatedAt, onOpen, onEdit, onD
       >
         <div className="min-w-0 flex-1">
           <div className="truncate text-xs font-medium">{agent.name}</div>
-          <div className="text-[10px] text-muted-foreground">
+          <div className="text-[10px] text-zinc-500">
             {formatRelativeTime(updatedAt)}
           </div>
         </div>
@@ -402,7 +409,7 @@ function AgentRow({ agent, isEditing, isSelected, updatedAt, onOpen, onEdit, onD
           type="button"
           className={cn(
             "p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer",
-            isEditing ? "opacity-100 text-primary" : "text-muted-foreground hover:text-foreground",
+            isEditing ? "opacity-100 text-zinc-950" : "text-zinc-500 hover:text-zinc-950",
           )}
           onClick={(e) => { e.stopPropagation(); onEdit(); }}
           title="Edit agent"
@@ -413,7 +420,7 @@ function AgentRow({ agent, isEditing, isSelected, updatedAt, onOpen, onEdit, onD
           type="button"
           className={cn(
             "p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer",
-            confirmDelete ? "opacity-100 text-destructive" : "text-muted-foreground hover:text-destructive",
+            confirmDelete ? "opacity-100 text-destructive" : "text-zinc-500 hover:text-destructive",
           )}
           onClick={handleDelete}
           title={confirmDelete ? "Click again to confirm" : "Delete agent"}

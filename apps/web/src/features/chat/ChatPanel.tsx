@@ -89,15 +89,15 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
   }, [conversation.id]);
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col bg-[linear-gradient(180deg,#fffad0_0%,#ffefb0_100%)]">
       {/* Header */}
-      <div className="border-b border-border px-4 py-3">
+      <div className="border-b border-black/10 bg-[#fff8ca] px-4 py-3 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.45)]">
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-sm font-semibold">
+            <h2 className="truncate text-sm font-semibold tracking-tight text-zinc-950">
               {agent?.name ?? "Agent"}
             </h2>
-            <div className="mt-1 text-xs text-muted-foreground">
+            <div className="mt-1 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
               {conversation.isPrimaryThread ? "Private chat" : "Channel branch"}
             </div>
           </div>
@@ -107,7 +107,10 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
           <Button
             size="sm"
             variant={activeTab === "chat" ? "default" : "outline"}
-            className="h-8 text-xs"
+            className={cn(
+              "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+              activeTab === "chat" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+            )}
             onClick={() => setActiveTab("chat")}
           >
             Chat
@@ -115,7 +118,10 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
           <Button
             size="sm"
             variant={activeTab === "workspace" ? "default" : "outline"}
-            className="h-8 text-xs"
+            className={cn(
+              "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+              activeTab === "workspace" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+            )}
             onClick={() => setActiveTab("workspace")}
           >
             Workspace
@@ -123,7 +129,10 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
           <Button
             size="sm"
             variant={activeTab === "profile" ? "default" : "outline"}
-            className="h-8 text-xs"
+            className={cn(
+              "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+              activeTab === "profile" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+            )}
             onClick={() => setActiveTab("profile")}
           >
             Profile
@@ -137,8 +146,8 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
         <AgentProfilePanel agent={agent} />
       ) : (
         <>
-          <Conversation className="min-h-0 flex-1 bg-[linear-gradient(180deg,rgba(255,253,247,0.96)_0%,rgba(255,249,236,0.92)_100%)]">
-            <ConversationContent className="p-0">
+          <Conversation className="min-h-0 flex-1 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.55),transparent_28%),linear-gradient(180deg,#fffad2_0%,#ffefbb_100%)]">
+            <ConversationContent className="px-3 py-4">
               {messages.length === 0 ? (
                 <ConversationEmptyState
                   title="Start the conversation"
@@ -157,7 +166,7 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
               )}
 
               {pendingApproval && (
-                <div className="mx-4 mt-2 mb-4 rounded-xl border border-amber-200 bg-amber-50/90 p-3 shadow-sm">
+                <div className="mx-1 mt-2 mb-3 rounded-md border-2 border-zinc-900 bg-[#fff7d1] p-3 shadow-[4px_4px_0_0_rgba(0,0,0,0.12)]">
                   <Confirmation
                     toolName={pendingApproval.toolName}
                     toolArgs={pendingApproval.toolArgs}
@@ -168,7 +177,7 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
               )}
 
               {(status === "queued" || status === "submitted" || status === "streaming" || status === "recovering" || status === "awaiting_approval") && (
-                <div className="flex items-center gap-2 py-2 text-muted-foreground text-sm">
+                <div className="mx-1 mt-2 mb-3 flex items-center gap-2 rounded-md border-2 border-zinc-900 bg-white px-3 py-2 text-sm text-zinc-600 shadow-[4px_4px_0_0_rgba(0,0,0,0.1)]">
                   <Loader size={14} />
                   <span>
                     {status === "queued"
@@ -210,19 +219,19 @@ function MessageRow({
   const displayName = isUser ? userName : (agent?.name ?? "Agent");
   const displayRole = isUser ? "Owner" : "Agent";
   const cardTone = isUser
-    ? "bg-white/90 border-violet-200/80"
-    : "bg-[#fffdf7]/92 border-amber-200/80";
+    ? "border-zinc-900 bg-[#d8efff] text-zinc-950 shadow-[4px_4px_0_0_rgba(47,116,193,0.18)]"
+    : "border-zinc-900 bg-[#d8f8c8] text-zinc-950 shadow-[4px_4px_0_0_rgba(51,128,44,0.18)]";
   const rowAlign = isUser ? "justify-end" : "justify-start";
   const contentAlign = isUser ? "items-end text-right" : "items-start text-left";
   const metaAlign = isUser ? "justify-end" : "justify-between";
   const infoAlign = isUser ? "justify-end" : "justify-start";
 
   const body = isUser ? (
-    <UserMessageContent className="w-fit max-w-full self-end rounded-lg border border-violet-200/80 bg-violet-50/85 px-3 py-2.5 shadow-sm">
+    <UserMessageContent className={cn("w-fit max-w-full self-end rounded-md border-2 px-3 py-2.5", cardTone)}>
       {message.text}
     </UserMessageContent>
   ) : (
-    <MessageContent className={cn("rounded-lg border px-3 py-2.5 shadow-sm", cardTone)}>
+    <MessageContent className={cn("rounded-md border-2 px-3 py-2.5", cardTone)}>
       {/* Thinking */}
       {message.thinking && <ThinkingDisclosure thinking={message.thinking} />}
 
@@ -239,25 +248,25 @@ function MessageRow({
   return (
     <Message
       from={message.role}
-      className="border-b border-stone-300/80 bg-white/55 px-4 py-3 last:border-b-0"
+      className="bg-transparent px-1 py-2.5"
     >
       <div className={cn("flex items-start gap-2.5", rowAlign)}>
         {!isUser && (
-          <ChatAvatar role={message.role} agent={agent} user={userIdentity} size={36} className="mt-0.5" />
+          <ChatAvatar role={message.role} agent={agent} user={userIdentity} size={38} className="mt-0.5" />
         )}
         <div className={cn("flex min-w-0 max-w-[min(760px,82%)] flex-col", contentAlign)}>
           <div className={cn("mb-1.5 flex w-full items-start gap-3", metaAlign)}>
             <div className={cn("min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1", infoAlign)}>
-              <span className="text-sm font-semibold tracking-tight">{displayName}</span>
-              <span className="rounded-sm border border-border/70 bg-background/75 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+              <span className="text-[15px] font-semibold tracking-tight text-zinc-950">{displayName}</span>
+              <span className="rounded-sm border border-zinc-900 bg-white/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-500">
                 {displayRole}
               </span>
               {!isUser && agent && (
-                <span className="text-[11px] text-muted-foreground">
-                  {agent.agentType === "claude_acp" ? "Claude" : "Codex"}
+                <span className="text-[11px] font-medium text-zinc-500">
+                  {agent.agentType === "claude_acp" ? "Claude Code" : "Codex"}
                 </span>
               )}
-              <span className="text-[11px] text-muted-foreground/90">
+              <span className="text-[11px] font-medium text-zinc-500">
                 {messageTimeFormatter.format(message.createdAt)}
               </span>
             </div>
@@ -272,7 +281,7 @@ function MessageRow({
           {body}
         </div>
         {isUser && (
-          <ChatAvatar role={message.role} agent={agent} user={userIdentity} size={36} className="mt-0.5" />
+          <ChatAvatar role={message.role} agent={agent} user={userIdentity} size={38} className="mt-0.5" />
         )}
       </div>
     </Message>
@@ -281,13 +290,13 @@ function MessageRow({
 
 function ThinkingDisclosure({ thinking }: { thinking: string }) {
   return (
-    <Collapsible className="mb-2 rounded-md border border-amber-200/80 bg-amber-50/55">
-      <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] font-medium text-muted-foreground transition-colors hover:bg-amber-100/70 data-[state=open]:border-b data-[state=open]:border-amber-200/80">
+    <Collapsible className="mb-2 rounded-md border-2 border-zinc-900 bg-[#fff6cc]">
+      <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] font-medium text-zinc-600 transition-colors hover:bg-[#ffefad] data-[state=open]:border-b-2 data-[state=open]:border-zinc-900">
         <ChevronRightIcon className="size-3 shrink-0 transition-transform data-[state=open]:rotate-90" />
         <span>Reasoning</span>
       </CollapsibleTrigger>
       <CollapsibleContent className="px-2.5 py-2">
-        <div className="border-l-2 border-amber-300 pl-2.5 text-xs italic text-muted-foreground whitespace-pre-wrap break-words">
+        <div className="border-l-2 border-zinc-900 pl-2.5 text-xs italic text-zinc-600 whitespace-pre-wrap break-words">
           {thinking}
         </div>
       </CollapsibleContent>
