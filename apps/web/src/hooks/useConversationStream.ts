@@ -82,7 +82,7 @@ export function useConversationStream(
           setStatus("streaming");
           setMessages((prev) => [
             ...prev,
-            { id, role: "assistant", text: "", isStreaming: true },
+            { id, role: "assistant", text: "", createdAt: Date.now(), isStreaming: true },
           ]);
           break;
         }
@@ -192,7 +192,13 @@ export function useConversationStream(
           const umId = createId();
           setMessages((prev) => [
             ...prev,
-            { id: umId, role: "user", text: (event as any).text ?? "", isStreaming: false },
+            {
+              id: umId,
+              role: "user",
+              text: (event as any).text ?? "",
+              createdAt: Date.now(),
+              isStreaming: false,
+            },
           ]);
           break;
         }
@@ -277,7 +283,7 @@ export function useConversationStream(
       const id = createId();
       setMessages((prev) => [
         ...prev,
-        { id, role: "user", text, isStreaming: false },
+        { id, role: "user", text, createdAt: Date.now(), isStreaming: false },
       ]);
       setStatus("submitted");
       sendEvent({ type: "prompt", text });

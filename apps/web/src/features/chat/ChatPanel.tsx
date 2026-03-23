@@ -25,9 +25,10 @@ import {
   type ToolState,
 } from "@/components/ai-elements/tool";
 import { useConversationStream } from "@/hooks/useConversationStream";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { PromptComposer } from "./PromptComposer";
 import { AgentWorkspacePanel } from "./AgentWorkspacePanel";
+import { ChatAvatar, readStoredUserIdentity } from "./ChatAvatar";
 import type { AgentInfo, ConversationInfo } from "@agent-collab/protocol";
 import type { LiveMessage, LiveToolCall } from "@/hooks/types";
 import { cn } from "@/lib/utils";
@@ -44,9 +45,17 @@ function getToolState(tc: LiveToolCall): ToolState {
   return "calling";
 }
 
+const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+});
+
 /** Main chat panel: header + messages + composer */
 export function ChatPanel({ conversation, agent }: ChatPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "workspace">("chat");
+  const userIdentity = useMemo(() => readStoredUserIdentity(), []);
   const {
     messages,
     status,
@@ -115,8 +124,8 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
         <AgentWorkspacePanel agent={agent} />
       ) : (
         <>
-          <Conversation className="flex-1 min-h-0">
-            <ConversationContent>
+          <Conversation className="min-h-0 flex-1 bg-[linear-gradient(180deg,rgba(255,253,247,0.96)_0%,rgba(255,249,236,0.92)_100%)]">
+            <ConversationContent className="p-0">
               {messages.length === 0 ? (
                 <ConversationEmptyState
                   title="Start the conversation"
@@ -124,12 +133,18 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
                 />
               ) : (
                 messages.map((msg) => (
-                  <MessageRow key={msg.id} message={msg} />
+                  <MessageRow
+                    key={msg.id}
+                    message={msg}
+                    agent={agent}
+                    userName={userIdentity.name}
+                    userIdentity={userIdentity}
+                  />
                 ))
               )}
 
               {pendingApproval && (
-                <div className="mt-2">
+                <div className="mx-4 mt-2 mb-4 rounded-xl border border-amber-200 bg-amber-50/90 p-3 shadow-sm">
                   <Confirmation
                     toolName={pendingApproval.toolName}
                     toolArgs={pendingApproval.toolArgs}
@@ -167,40 +182,81 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
 }
 
 /** Render a single user or assistant message */
-function MessageRow({ message }: { message: LiveMessage }) {
-  if (message.role === "user") {
-    return (
-      <Message from="user" className="mb-4">
-        <UserMessageContent>{message.text}</UserMessageContent>
-      </Message>
-    );
-  }
+function MessageRow({
+  message,
+  agent,
+  userName,
+  userIdentity,
+}: {
+  message: LiveMessage;
+  agent: AgentInfo | null;
+  userName: string;
+  userIdentity: { name: string; avatarUrl: string | null };
+}) {
+  const isUser = message.role === "user";
+  const displayName = isUser ? userName : (agent?.name ?? "Agent");
+  const displayRole = isUser ? "Owner" : "Agent";
+  const cardTone = isUser
+    ? "bg-white/90 border-violet-200/80"
+    : "bg-[#fffdf7]/92 border-amber-200/80";
+
+  const body = isUser ? (
+    <UserMessageContent className="rounded-lg border border-violet-200/80 bg-violet-50/85 px-3 py-2.5 shadow-sm">
+      {message.text}
+    </UserMessageContent>
+  ) : (
+    <MessageContent className={cn("rounded-lg border px-3 py-2.5 shadow-sm", cardTone)}>
+      {/* Thinking */}
+      {message.thinking && (
+        <div className="mb-1.5 border-l-2 border-amber-300 pl-2.5 text-xs italic text-muted-foreground">
+          {message.thinking}
+        </div>
+      )}
+
+      {/* Tool calls */}
+      {message.toolCalls?.map((tc) => (
+        <ToolCallRow key={tc.id} toolCall={tc} />
+      ))}
+
+      {/* Text content */}
+      {message.text && <MessageResponse>{message.text}</MessageResponse>}
+    </MessageContent>
+  );
 
   return (
-    <Message from="assistant" className="mb-4">
-      <MessageContent>
-        {/* Thinking */}
-        {message.thinking && (
-          <div className="text-xs text-muted-foreground italic mb-2 border-l-2 border-muted pl-3">
-            {message.thinking}
+    <Message
+      from={message.role}
+      className="border-b border-stone-300/80 bg-white/55 px-4 py-3 last:border-b-0"
+    >
+      <div className="flex items-start gap-2.5">
+        <ChatAvatar role={message.role} agent={agent} user={userIdentity} size={36} className="mt-0.5" />
+        <div className="min-w-0 flex-1">
+          <div className="mb-1.5 flex items-start justify-between gap-3">
+            <div className="min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1">
+              <span className="text-sm font-semibold tracking-tight">{displayName}</span>
+              <span className="rounded-sm border border-border/70 bg-background/75 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                {displayRole}
+              </span>
+              {!isUser && agent && (
+                <span className="text-[11px] text-muted-foreground">
+                  {agent.agentType === "claude_acp" ? "Claude" : "Codex"}
+                </span>
+              )}
+              <span className="text-[11px] text-muted-foreground/90">
+                {messageTimeFormatter.format(message.createdAt)}
+              </span>
+            </div>
+
+            {!message.isStreaming && message.text && (
+              <MessageActions className="ml-0 shrink-0 opacity-0 transition-opacity group-hover:opacity-100">
+                <MessageCopyButton content={message.text} />
+              </MessageActions>
+            )}
           </div>
-        )}
 
-        {/* Tool calls */}
-        {message.toolCalls?.map((tc) => (
-          <ToolCallRow key={tc.id} toolCall={tc} />
-        ))}
-
-        {/* Text content */}
-        {message.text && <MessageResponse>{message.text}</MessageResponse>}
-      </MessageContent>
-
-      {/* Actions */}
-      {!message.isStreaming && message.text && (
-        <MessageActions>
-          <MessageCopyButton content={message.text} />
-        </MessageActions>
-      )}
+          {body}
+        </div>
+      </div>
     </Message>
   );
 }

@@ -3,6 +3,7 @@ export type LiveMessage = {
   id: string;
   role: "user" | "assistant";
   text: string;
+  createdAt: number;
   thinking?: string;
   toolCalls?: LiveToolCall[];
   isStreaming: boolean;
