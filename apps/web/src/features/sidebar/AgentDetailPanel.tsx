@@ -3,6 +3,7 @@ import { Button } from "@/components/ui/button";
 import { XIcon, SaveIcon } from "lucide-react";
 import type { AgentInfo, UpdateAgentRequest } from "@agent-collab/protocol";
 import { cn } from "@/lib/utils";
+import { AgentEnvVarsEditor } from "./AgentEnvVarsEditor";
 
 type Props = {
   agent: AgentInfo;
@@ -12,17 +13,18 @@ type Props = {
 
 export function AgentDetailPanel({ agent, onUpdate, onClose }: Props) {
   const [name, setName] = useState(agent.name);
+  const [envVars, setEnvVars] = useState<Record<string, string> | undefined>(agent.envVars);
   const [saving, setSaving] = useState(false);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
-      await onUpdate({ name });
+      await onUpdate({ name, envVars });
       onClose();
     } finally {
       setSaving(false);
     }
-  }, [name, onUpdate, onClose]);
+  }, [envVars, name, onUpdate, onClose]);
 
   const workspaceMemoryPath = agent.workspacePath
     ? `${agent.workspacePath}/MEMORY.md`
@@ -55,6 +57,12 @@ export function AgentDetailPanel({ agent, onUpdate, onClose }: Props) {
           <span className="block mt-0.5 opacity-70">(managed by Agent Collab)</span>
         </div>
       )}
+
+      <AgentEnvVarsEditor
+        editorKey={agent.agentId}
+        value={envVars}
+        onChange={setEnvVars}
+      />
 
       <Button
         size="sm"

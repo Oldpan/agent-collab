@@ -21,6 +21,10 @@ export class NodeSink implements OutboundSink {
     this.emitEvent({ type: 'content.delta', text });
   }
 
+  async sendThinkingText(text: string): Promise<void> {
+    this.emitEvent({ type: 'thinking.delta', text });
+  }
+
   async requestPermission(req: PermissionUiRequest): Promise<void> {
     this.send({
       type: 'permission.request',

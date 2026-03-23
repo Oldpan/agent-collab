@@ -161,6 +161,47 @@ describe('ConversationManager', () => {
   // ─── envVars ───
 
   describe('envVars', () => {
+    it('创建 agent 时传入 envVars 应存入 DB', () => {
+      const agent = manager.createAgent({
+        name: 'Env Agent',
+        envVars: { https_proxy: 'http://127.0.0.1:7893', ANTHROPIC_MODEL: 'GLM-4.7' },
+      });
+
+      const row = db
+        .prepare('SELECT env_vars FROM agents WHERE agent_id = ?')
+        .get(agent.agentId) as { env_vars: string | null };
+
+      expect(JSON.parse(row.env_vars!)).toEqual({
+        https_proxy: 'http://127.0.0.1:7893',
+        ANTHROPIC_MODEL: 'GLM-4.7',
+      });
+    });
+
+    it('更新 agent 时应覆盖 envVars', () => {
+      const agent = manager.createAgent({
+        name: 'Update Env Agent',
+        envVars: { OLD_KEY: 'old' },
+      });
+
+      const updated = manager.updateAgent(agent.agentId, {
+        envVars: { ANTHROPIC_AUTH_TOKEN: 'secret', ANTHROPIC_MODEL: 'GLM-4.7' },
+      });
+
+      expect(updated?.envVars).toEqual({
+        ANTHROPIC_AUTH_TOKEN: 'secret',
+        ANTHROPIC_MODEL: 'GLM-4.7',
+      });
+
+      const row = db
+        .prepare('SELECT env_vars FROM agents WHERE agent_id = ?')
+        .get(agent.agentId) as { env_vars: string | null };
+
+      expect(JSON.parse(row.env_vars!)).toEqual({
+        ANTHROPIC_AUTH_TOKEN: 'secret',
+        ANTHROPIC_MODEL: 'GLM-4.7',
+      });
+    });
+
     it('创建时传入 envVars 应存入 DB', () => {
       const conv = manager.createConversation({
         title: 'With Env',

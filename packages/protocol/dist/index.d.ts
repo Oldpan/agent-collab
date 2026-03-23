@@ -246,6 +246,7 @@ export type CreateAgentRequest = {
 export type UpdateAgentRequest = {
     name?: string;
     systemPrompt?: string;
+    envVars?: Record<string, string>;
 };
 export type ChannelInfo = {
     channelId: string;

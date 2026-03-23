@@ -1,6 +1,11 @@
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible";
+import {
   Conversation,
   ConversationContent,
   ConversationEmptyState,
@@ -25,6 +30,7 @@ import {
   type ToolState,
 } from "@/components/ai-elements/tool";
 import { useConversationStream } from "@/hooks/useConversationStream";
+import { ChevronRightIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { PromptComposer } from "./PromptComposer";
 import { AgentWorkspacePanel } from "./AgentWorkspacePanel";
@@ -207,11 +213,7 @@ function MessageRow({
   ) : (
     <MessageContent className={cn("rounded-lg border px-3 py-2.5 shadow-sm", cardTone)}>
       {/* Thinking */}
-      {message.thinking && (
-        <div className="mb-1.5 border-l-2 border-amber-300 pl-2.5 text-xs italic text-muted-foreground">
-          {message.thinking}
-        </div>
-      )}
+      {message.thinking && <ThinkingDisclosure thinking={message.thinking} />}
 
       {/* Tool calls */}
       {message.toolCalls?.map((tc) => (
@@ -258,6 +260,22 @@ function MessageRow({
         </div>
       </div>
     </Message>
+  );
+}
+
+function ThinkingDisclosure({ thinking }: { thinking: string }) {
+  return (
+    <Collapsible className="mb-2 rounded-md border border-amber-200/80 bg-amber-50/55">
+      <CollapsibleTrigger className="flex w-full items-center gap-1.5 px-2.5 py-1.5 text-left text-[11px] font-medium text-muted-foreground transition-colors hover:bg-amber-100/70 data-[state=open]:border-b data-[state=open]:border-amber-200/80">
+        <ChevronRightIcon className="size-3 shrink-0 transition-transform data-[state=open]:rotate-90" />
+        <span>Reasoning</span>
+      </CollapsibleTrigger>
+      <CollapsibleContent className="px-2.5 py-2">
+        <div className="border-l-2 border-amber-300 pl-2.5 text-xs italic text-muted-foreground whitespace-pre-wrap break-words">
+          {thinking}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 

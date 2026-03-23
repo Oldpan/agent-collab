@@ -13,6 +13,7 @@ import type {
 } from "@agent-collab/protocol";
 import { AgentDetailPanel } from "./AgentDetailPanel";
 import { MachineCreatePanel } from "./MachineCreatePanel";
+import { AgentEnvVarsEditor } from "./AgentEnvVarsEditor";
 import defaultSystemPrompt from "@/prompts/default-system-prompt.md?raw";
 
 const EXPANDED_MACHINES_STORAGE_KEY = "agent-collab:expanded-machines";
@@ -101,6 +102,7 @@ export function Sidebar({
   const [newAgentName, setNewAgentName] = useState("");
   const [newAgentType, setNewAgentType] = useState<AgentType>("claude_acp");
   const [newAgentSystemPrompt, setNewAgentSystemPrompt] = useState(defaultSystemPrompt);
+  const [newAgentEnvVars, setNewAgentEnvVars] = useState<Record<string, string> | undefined>();
 
   const toggleMachine = (nodeId: string) => {
     setExpandedMachines((prev) => {
@@ -126,12 +128,14 @@ export function Sidebar({
       name: newAgentName.trim(),
       agentType: newAgentType,
       systemPrompt: newAgentSystemPrompt.trim() || undefined,
+      envVars: newAgentEnvVars,
       nodeId: createAgentInMachine,
     });
     setCreateAgentInMachine(null);
     setNewAgentName("");
     setNewAgentSystemPrompt(defaultSystemPrompt);
-  }, [newAgentName, newAgentType, newAgentSystemPrompt, createAgentInMachine, onCreateAgent]);
+    setNewAgentEnvVars(undefined);
+  }, [newAgentName, newAgentType, newAgentSystemPrompt, newAgentEnvVars, createAgentInMachine, onCreateAgent]);
 
   const handleCreateConversation = useCallback((agentId: string) => {
     const agent = agents.find((a) => a.agentId === agentId);
@@ -152,6 +156,7 @@ export function Sidebar({
     setCreateAgentInMachine(nodeId);
     setNewAgentName("");
     setNewAgentSystemPrompt(defaultSystemPrompt);
+    setNewAgentEnvVars(undefined);
     setExpandedMachines((prev) => {
       const next = new Set(prev).add(nodeId);
       writeStoredSet(EXPANDED_MACHINES_STORAGE_KEY, next);
@@ -310,6 +315,11 @@ export function Sidebar({
                           value={newAgentSystemPrompt}
                           onChange={(e) => setNewAgentSystemPrompt(e.target.value)}
                         />
+                        <AgentEnvVarsEditor
+                          editorKey={`${machine.nodeId}:${newAgentType}:${createAgentInMachine ?? "closed"}`}
+                          value={newAgentEnvVars}
+                          onChange={setNewAgentEnvVars}
+                        />
                         <div className="flex gap-1">
                           <Button
                             size="sm"
@@ -323,7 +333,10 @@ export function Sidebar({
                             size="sm"
                             variant="ghost"
                             className="text-xs h-6 px-2"
-                            onClick={() => setCreateAgentInMachine(null)}
+                            onClick={() => {
+                              setCreateAgentInMachine(null);
+                              setNewAgentEnvVars(undefined);
+                            }}
                           >
                             <XIcon className="size-3" />
                           </Button>

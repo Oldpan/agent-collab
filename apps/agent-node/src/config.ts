@@ -17,7 +17,7 @@ export type AgentNodeConfig = RuntimeConfig & {
 };
 
 export function loadConfig(): AgentNodeConfig {
-  const coreUrl = process.env.CORE_URL ?? 'ws://localhost:3000';
+  const coreUrl = process.env.CORE_URL ?? 'ws://localhost:3100';
   const hostname = process.env.NODE_HOSTNAME ?? os.hostname();
   const workspaceRoot = process.env.WORKSPACE_ROOT ?? os.tmpdir();
   const dbPath =

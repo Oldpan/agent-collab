@@ -101,6 +101,17 @@ export class BindingRuntime {
               }
             }
 
+            if (update?.sessionUpdate === 'agent_thought_chunk') {
+              const block = update?.content;
+              const text = block?.text ?? '';
+              if (!text) return;
+              if (sink.sendThinkingText) {
+                await sink.sendThinkingText(text);
+              } else {
+                await sink.sendText(text);
+              }
+            }
+
             if (
               update?.sessionUpdate === 'tool_call' ||
               update?.sessionUpdate === 'tool_call_update'

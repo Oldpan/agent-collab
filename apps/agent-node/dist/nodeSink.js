@@ -16,6 +16,9 @@ export class NodeSink {
     async sendText(text) {
         this.emitEvent({ type: 'content.delta', text });
     }
+    async sendThinkingText(text) {
+        this.emitEvent({ type: 'thinking.delta', text });
+    }
     async requestPermission(req) {
         this.send({
             type: 'permission.request',

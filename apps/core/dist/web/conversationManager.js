@@ -92,8 +92,14 @@ export class ConversationManager {
         const now = Date.now();
         const name = req.name ?? existing.name;
         const systemPrompt = req.systemPrompt ?? existing.systemPrompt;
-        this.db.prepare(`UPDATE agents SET name = ?, system_prompt = ?, updated_at = ? WHERE agent_id = ?`).run(name, systemPrompt, now, agentId);
-        return { ...existing, name, systemPrompt, updatedAt: now };
+        const envVars = req.envVars ?? existing.envVars;
+        const envVarsJson = envVars && Object.keys(envVars).length > 0
+            ? JSON.stringify(envVars)
+            : null;
+        this.db.prepare(`UPDATE agents
+       SET name = ?, system_prompt = ?, env_vars = ?, updated_at = ?
+       WHERE agent_id = ?`).run(name, systemPrompt, envVarsJson, now, agentId);
+        return { ...existing, name, systemPrompt, envVars, updatedAt: now };
     }
     deleteAgent(agentId) {
         this.db.prepare(`DELETE FROM conversation_prompt_queue WHERE agent_id = ?`).run(agentId);

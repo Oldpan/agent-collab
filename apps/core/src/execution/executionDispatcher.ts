@@ -62,9 +62,11 @@ export class ExecutionDispatcher {
     this.updateStatus(conversationId, 'active');
 
     let contextText = '';
+    let agentEnvVars: Record<string, string> | undefined;
     if (row.agentId) {
       const agent = this.getAgentById(row.agentId);
       if (agent) {
+        agentEnvVars = agent.envVars;
         contextText = await buildAgentContextText({
           systemPrompt: agent.systemPrompt,
           agentType: agent.agentType,
@@ -88,6 +90,7 @@ export class ExecutionDispatcher {
       agentType: row.agentType,
       workspacePath: row.workspacePath,
       envVars: {
+        ...(agentEnvVars ?? {}),
         ...(parseEnvVars(row.envVarsJson) ?? {}),
         ...(driver.defaultEnv ?? {}),
       },

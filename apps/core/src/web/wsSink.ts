@@ -21,6 +21,10 @@ export class WsSink implements OutboundSink {
     this.broadcast({ type: 'content.delta', text });
   }
 
+  async sendThinkingText(text: string): Promise<void> {
+    this.broadcast({ type: 'thinking.delta', text });
+  }
+
   async requestPermission(req: PermissionUiRequest): Promise<void> {
     this.broadcast({
       type: 'approval.request',

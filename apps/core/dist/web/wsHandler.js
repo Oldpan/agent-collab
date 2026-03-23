@@ -114,6 +114,7 @@ function replayHistory(socket, conversationId, manager) {
            ORDER BY seq ASC`)
                 .all(run.runId);
             let agentText = '';
+            let thinkingText = '';
             const toolCalls = new Map();
             for (const evt of events) {
                 try {
@@ -123,6 +124,9 @@ function replayHistory(socket, conversationId, manager) {
                         continue;
                     if (update.sessionUpdate === 'agent_message_chunk') {
                         agentText += update.content?.text ?? '';
+                    }
+                    if (update.sessionUpdate === 'agent_thought_chunk') {
+                        thinkingText += update.content?.text ?? '';
                     }
                     if (update.sessionUpdate === 'tool_call') {
                         const toolCallId = extractToolCallIdFromUpdate(update) ?? '';
@@ -147,6 +151,9 @@ function replayHistory(socket, conversationId, manager) {
             }
             if (agentText) {
                 send({ type: 'content.delta', text: agentText });
+            }
+            if (thinkingText) {
+                send({ type: 'thinking.delta', text: thinkingText });
             }
             for (const [toolCallId, tc] of toolCalls) {
                 send({ type: 'tool.call', toolCallId, name: tc.name, input: null });

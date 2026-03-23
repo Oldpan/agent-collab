@@ -29,6 +29,7 @@ export type UiEvent = {
 };
 export type OutboundSink = {
     sendAgentText?: (text: string) => Promise<void>;
+    sendThinkingText?: (text: string) => Promise<void>;
     sendText: (text: string) => Promise<void>;
     breakTextStream?: () => Promise<void>;
     flush?: () => Promise<void>;

@@ -79,6 +79,39 @@ describe('ExecutionDispatcher', () => {
     expect(second.envVars?.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
   });
 
+  it('dispatchToNode 应合并 agent envVars、conversation envVars 和 driver 默认 env', async () => {
+    const agent = manager.createAgent({
+      name: 'Merged Env Agent',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/merged-env-agent',
+      envVars: {
+        https_proxy: 'http://127.0.0.1:7893',
+        ANTHROPIC_MODEL: 'GLM-4.7',
+      },
+    });
+    const conv = manager.createConversation({
+      agentId: agent.agentId,
+      title: 'Merged Env Test',
+      envVars: {
+        ANTHROPIC_MODEL: 'GLM-4.7-override',
+        CUSTOM_ONLY: '1',
+      },
+    });
+
+    await manager.dispatchToNode(conv.id, 'hello');
+
+    expect(sent).toHaveLength(1);
+    const dispatch = sent[0]?.msg;
+    if (!dispatch || dispatch.type !== 'run.dispatch') throw new Error('missing dispatch');
+    expect(dispatch.envVars).toMatchObject({
+      https_proxy: 'http://127.0.0.1:7893',
+      ANTHROPIC_MODEL: 'GLM-4.7-override',
+      CUSTOM_ONLY: '1',
+      CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+    });
+  });
+
   it('cancelConversationRun 应发送 run.cancel 到节点', () => {
     const conv = manager.createConversation({
       title: 'Cancel Test',

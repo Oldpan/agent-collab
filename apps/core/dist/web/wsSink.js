@@ -14,6 +14,9 @@ export class WsSink {
     async sendText(text) {
         this.broadcast({ type: 'content.delta', text });
     }
+    async sendThinkingText(text) {
+        this.broadcast({ type: 'thinking.delta', text });
+    }
     async requestPermission(req) {
         this.broadcast({
             type: 'approval.request',

@@ -150,6 +150,7 @@ function replayHistory(
         .all(run.runId) as Array<{ payloadJson: string }>;
 
       let agentText = '';
+      let thinkingText = '';
       const toolCalls = new Map<string, { name: string; output?: string; error?: boolean }>();
 
       for (const evt of events) {
@@ -160,6 +161,10 @@ function replayHistory(
 
           if (update.sessionUpdate === 'agent_message_chunk') {
             agentText += update.content?.text ?? '';
+          }
+
+          if (update.sessionUpdate === 'agent_thought_chunk') {
+            thinkingText += update.content?.text ?? '';
           }
 
           if (update.sessionUpdate === 'tool_call') {
@@ -186,6 +191,9 @@ function replayHistory(
 
       if (agentText) {
         send({ type: 'content.delta', text: agentText });
+      }
+      if (thinkingText) {
+        send({ type: 'thinking.delta', text: thinkingText });
       }
       for (const [toolCallId, tc] of toolCalls) {
         send({ type: 'tool.call', toolCallId, name: tc.name, input: null });
