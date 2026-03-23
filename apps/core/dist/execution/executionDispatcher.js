@@ -35,10 +35,12 @@ export class ExecutionDispatcher {
         this.updateStatus(conversationId, 'active');
         let contextText = '';
         let agentEnvVars;
+        let disabledToolKinds;
         if (row.agentId) {
             const agent = this.getAgentById(row.agentId);
             if (agent) {
                 agentEnvVars = agent.envVars;
+                disabledToolKinds = agent.disabledToolKinds;
                 contextText = await buildAgentContextText({
                     systemPrompt: agent.systemPrompt,
                     agentType: agent.agentType,
@@ -64,6 +66,7 @@ export class ExecutionDispatcher {
                 ...(parseEnvVars(row.envVarsJson) ?? {}),
                 ...(driver.defaultEnv ?? {}),
             },
+            disabledToolKinds,
             prompt: promptText,
             sessionKey: row.sessionKey,
             hostKey,

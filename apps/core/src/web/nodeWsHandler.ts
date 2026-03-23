@@ -148,6 +148,11 @@ export function handleNodeWebSocket(
         break;
       }
 
+      case 'workspace.reset.response': {
+        workspaceBroker?.handleWorkspaceResetResponse(msg);
+        break;
+      }
+
       default: {
         log.warn('[node-ws] unknown message type', (msg as any).type);
       }

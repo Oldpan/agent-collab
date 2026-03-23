@@ -89,9 +89,9 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
   }, [conversation.id]);
 
   return (
-    <div className="flex h-full flex-col bg-[linear-gradient(180deg,#fffad0_0%,#ffefb0_100%)]">
+    <div className="flex h-full flex-col bg-[linear-gradient(180deg,#fffdf0_0%,#fff4c8_100%)]">
       {/* Header */}
-      <div className="border-b border-black/10 bg-[#fff8ca] px-4 py-3 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.45)]">
+      <div className="border-b border-black/10 bg-[#fffbe3] px-4 py-3 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.45)]">
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold tracking-tight text-zinc-950">
@@ -146,7 +146,7 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
         <AgentProfilePanel agent={agent} />
       ) : (
         <>
-          <Conversation className="min-h-0 flex-1 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.55),transparent_28%),linear-gradient(180deg,#fffad2_0%,#ffefbb_100%)]">
+          <Conversation className="min-h-0 flex-1 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.7),transparent_28%),linear-gradient(180deg,#fffdf2_0%,#fff5d1_100%)]">
             <ConversationContent className="px-3 py-4">
               {messages.length === 0 ? (
                 <ConversationEmptyState

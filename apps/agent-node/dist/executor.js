@@ -2,6 +2,7 @@ import { ToolAuth, createSession, getSession, upsertBinding, log, } from '@agent
 import { getRuntimeDriver } from '@agent-collab/protocol';
 import { AgentHost } from './agentHost.js';
 import { enqueueDispatch, listPendingDispatches, removeDispatch, updateDispatchState, } from './dispatchQueueStore.js';
+import path from 'node:path';
 export class Executor {
     db;
     config;
@@ -72,6 +73,7 @@ export class Executor {
                 agentCommand: driver.command,
                 agentArgs: driver.args,
                 env: msg.envVars,
+                disabledToolKinds: msg.disabledToolKinds,
                 send: this.send,
                 hooks: {
                     onRunStart: (dispatchMsg) => {
@@ -142,6 +144,27 @@ export class Executor {
                 return true;
         }
         return false;
+    }
+    resetWorkspace(workspaceRoot) {
+        const resolvedRoot = path.resolve(workspaceRoot);
+        for (const [hostKey, host] of this.hosts.entries()) {
+            if (path.resolve(host.getWorkspaceRoot()) !== resolvedRoot)
+                continue;
+            const currentRunId = host.getCurrentRunId();
+            if (currentRunId) {
+                this.runToHost.delete(currentRunId);
+                removeDispatch(this.db, currentRunId);
+            }
+            host.close();
+            this.hosts.delete(hostKey);
+        }
+        for (const pending of listPendingDispatches(this.db)) {
+            const pendingRoot = path.resolve(pending.payload.workspacePath ?? this.config.workspaceRoot);
+            if (pendingRoot !== resolvedRoot)
+                continue;
+            this.runToHost.delete(pending.runId);
+            removeDispatch(this.db, pending.runId);
+        }
     }
     close() {
         for (const host of this.hosts.values()) {

@@ -17,6 +17,7 @@ export function AgentProfilePanel({ agent }: AgentProfilePanelProps) {
   }
 
   const envKeys = Object.keys(agent.envVars ?? {}).sort((a, b) => a.localeCompare(b));
+  const disabledToolKinds = [...(agent.disabledToolKinds ?? [])].sort((a, b) => a.localeCompare(b));
   const memoryPath = agent.workspacePath ? `${agent.workspacePath}/MEMORY.md` : null;
 
   return (
@@ -46,6 +47,20 @@ export function AgentProfilePanel({ agent }: AgentProfilePanelProps) {
               {envKeys.map((key) => (
                 <Badge key={key} variant="outline" className="font-mono text-[11px]">
                   {key}
+                </Badge>
+              ))}
+            </div>
+          )}
+        </ProfileSection>
+
+        <ProfileSection title="Disabled Permissions">
+          {disabledToolKinds.length === 0 ? (
+            <div className="text-sm text-muted-foreground">None. This agent currently runs with full tool access.</div>
+          ) : (
+            <div className="flex flex-wrap gap-2">
+              {disabledToolKinds.map((kind) => (
+                <Badge key={kind} variant="outline" className="font-mono text-[11px]">
+                  {kind}
                 </Badge>
               ))}
             </div>

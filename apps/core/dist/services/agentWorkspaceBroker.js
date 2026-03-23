@@ -61,6 +61,32 @@ export class AgentWorkspaceBroker {
             }
         });
     }
+    resetWorkspace(nodeId, workspaceRoot) {
+        const requestId = randomUUID();
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.pending.delete(requestId);
+                reject(new Error('Workspace reset timed out.'));
+            }, this.timeoutMs);
+            this.pending.set(requestId, {
+                kind: 'reset',
+                nodeId,
+                resolve,
+                reject,
+                timer,
+            });
+            const sent = this.nodeRegistry.send(nodeId, {
+                type: 'workspace.reset.request',
+                requestId,
+                workspaceRoot,
+            });
+            if (!sent) {
+                clearTimeout(timer);
+                this.pending.delete(requestId);
+                reject(new Error('Agent node is offline.'));
+            }
+        });
+    }
     handleWorkspaceListResponse(msg) {
         const pending = this.pending.get(msg.requestId);
         if (!pending || pending.kind !== 'list')
@@ -93,6 +119,18 @@ export class AgentWorkspaceBroker {
             size: msg.size,
             modifiedAt: msg.modifiedAt ?? null,
         });
+    }
+    handleWorkspaceResetResponse(msg) {
+        const pending = this.pending.get(msg.requestId);
+        if (!pending || pending.kind !== 'reset')
+            return;
+        this.pending.delete(msg.requestId);
+        clearTimeout(pending.timer);
+        if (msg.error || !msg.ok) {
+            pending.reject(new Error(this.formatErrorMessage(msg.errorCode, msg.error)));
+            return;
+        }
+        pending.resolve();
     }
     rejectPendingForNode(nodeId) {
         for (const [requestId, pending] of this.pending.entries()) {

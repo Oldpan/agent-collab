@@ -55,6 +55,26 @@ describe('WsSink', () => {
             input: '/tmp/file.txt',
         });
     });
+    it('sendUi failed tool 结果应广播 error=true 的 tool.result', async () => {
+        const events = [];
+        const sink = new WsSink((e) => events.push(e));
+        await sink.sendUi({
+            kind: 'tool',
+            mode: 'verbose',
+            toolCallId: 'tc-2',
+            title: 'Read MEMORY.md',
+            detail: 'error: resource not found',
+            stage: 'complete',
+            status: 'failed',
+        });
+        expect(events).toHaveLength(1);
+        expect(events[0]).toEqual({
+            type: 'tool.result',
+            toolCallId: 'tc-2',
+            output: 'error: resource not found',
+            error: true,
+        });
+    });
     it('sendUi plan 事件应广播 content.delta', async () => {
         const events = [];
         const sink = new WsSink((e) => events.push(e));

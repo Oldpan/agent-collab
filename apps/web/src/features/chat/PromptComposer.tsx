@@ -54,8 +54,8 @@ export function PromptComposer({ status, onSend, onCancel }: PromptComposerProps
   const showCancel = status === "submitted" || status === "streaming" || status === "recovering" || status === "awaiting_approval";
 
   return (
-    <div className="border-t border-black/10 bg-[#fff8ca] px-4 py-3 shadow-[0_-10px_24px_-18px_rgba(0,0,0,0.35)]">
-      <div className="flex items-end gap-2 rounded-md border-2 border-zinc-900 bg-[#fffbe6] p-2 shadow-[4px_4px_0_0_rgba(0,0,0,0.12)]">
+    <div className="border-t border-black/10 bg-[#fffbe3] px-4 py-3 shadow-[0_-10px_24px_-18px_rgba(0,0,0,0.35)]">
+      <div className="flex items-end gap-2 rounded-md border-2 border-zinc-900 bg-[#fffdf4] p-2 shadow-[4px_4px_0_0_rgba(0,0,0,0.12)]">
       <textarea
         ref={textareaRef}
         className={cn(

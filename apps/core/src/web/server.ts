@@ -92,6 +92,44 @@ export async function startServer(params: {
     return thread;
   });
 
+  app.post<{ Params: { id: string } }>('/api/agents/:id/reset', async (req, reply) => {
+    const agent = conversationManager.getAgent(req.params.id);
+    if (!agent) {
+      reply.code(404);
+      return { error: 'Not found' };
+    }
+    if (!agent.nodeId) {
+      reply.code(409);
+      return { error: 'Agent is not assigned to a remote node.' };
+    }
+    if (!agent.workspacePath) {
+      reply.code(409);
+      return { error: 'Agent has no workspace configured.' };
+    }
+
+    try {
+      await workspaceBroker.resetWorkspace(agent.nodeId, agent.workspacePath);
+    } catch (error) {
+      reply.code(409);
+      return { error: String((error as Error)?.message ?? error) };
+    }
+
+    const conversations = conversationManager.resetAgent(req.params.id);
+    for (const conversation of conversations) {
+      broadcast(conversation.id, { type: 'history.reset' });
+      broadcast(conversation.id, {
+        type: 'conversation.status',
+        conversationId: conversation.id,
+        status: 'idle',
+      });
+    }
+
+    return {
+      ok: true,
+      conversations,
+    };
+  });
+
   app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/agents/:id/workspace', async (req, reply) => {
     try {
       return await workspaceService.listWorkspace(req.params.id, normalizeWorkspaceQueryPath(req.query.path));

@@ -15,11 +15,12 @@ import {
   removeDispatch,
   updateDispatchState,
 } from './dispatchQueueStore.js';
+import path from 'node:path';
 
 type SendFn = (msg: NodeToCore) => void;
 type HostInstance = Pick<
   AgentHost,
-  'dispatch' | 'cancelRun' | 'handlePermissionResponse' | 'close' | 'getState' | 'getCurrentRunId' | 'getLastError'
+  'dispatch' | 'cancelRun' | 'handlePermissionResponse' | 'close' | 'getState' | 'getCurrentRunId' | 'getLastError' | 'getWorkspaceRoot'
 >;
 type CreateHostFn = (params: ConstructorParameters<typeof AgentHost>[0]) => HostInstance;
 
@@ -104,6 +105,7 @@ export class Executor {
         agentCommand: driver.command,
         agentArgs: driver.args,
         env: msg.envVars,
+        disabledToolKinds: msg.disabledToolKinds,
         send: this.send,
         hooks: {
           onRunStart: (dispatchMsg) => {
@@ -182,6 +184,28 @@ export class Executor {
       if (handled) return true;
     }
     return false;
+  }
+
+  resetWorkspace(workspaceRoot: string): void {
+    const resolvedRoot = path.resolve(workspaceRoot);
+
+    for (const [hostKey, host] of this.hosts.entries()) {
+      if (path.resolve(host.getWorkspaceRoot()) !== resolvedRoot) continue;
+      const currentRunId = host.getCurrentRunId();
+      if (currentRunId) {
+        this.runToHost.delete(currentRunId);
+        removeDispatch(this.db, currentRunId);
+      }
+      host.close();
+      this.hosts.delete(hostKey);
+    }
+
+    for (const pending of listPendingDispatches(this.db)) {
+      const pendingRoot = path.resolve(pending.payload.workspacePath ?? this.config.workspaceRoot);
+      if (pendingRoot !== resolvedRoot) continue;
+      this.runToHost.delete(pending.runId);
+      removeDispatch(this.db, pending.runId);
+    }
   }
 
   close(): void {

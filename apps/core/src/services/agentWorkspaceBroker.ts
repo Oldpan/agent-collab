@@ -5,6 +5,7 @@ import type {
   AgentWorkspaceListResult,
   WorkspaceListResponseMsg,
   WorkspaceReadResponseMsg,
+  WorkspaceResetResponseMsg,
 } from '@agent-collab/protocol';
 import type { NodeRegistry } from './nodeRegistry.js';
 
@@ -22,6 +23,13 @@ type PendingRequest =
     reject: (error: Error) => void;
     timer: NodeJS.Timeout;
     kind: 'read';
+  }
+  | {
+    nodeId: string;
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timer: NodeJS.Timeout;
+    kind: 'reset';
   };
 
 export class AgentWorkspaceBroker {
@@ -104,6 +112,39 @@ export class AgentWorkspaceBroker {
     });
   }
 
+  resetWorkspace(
+    nodeId: string,
+    workspaceRoot: string,
+  ): Promise<void> {
+    const requestId = randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(requestId);
+        reject(new Error('Workspace reset timed out.'));
+      }, this.timeoutMs);
+
+      this.pending.set(requestId, {
+        kind: 'reset',
+        nodeId,
+        resolve,
+        reject,
+        timer,
+      });
+
+      const sent = this.nodeRegistry.send(nodeId, {
+        type: 'workspace.reset.request',
+        requestId,
+        workspaceRoot,
+      });
+
+      if (!sent) {
+        clearTimeout(timer);
+        this.pending.delete(requestId);
+        reject(new Error('Agent node is offline.'));
+      }
+    });
+  }
+
   handleWorkspaceListResponse(msg: WorkspaceListResponseMsg): void {
     const pending = this.pending.get(msg.requestId);
     if (!pending || pending.kind !== 'list') return;
@@ -139,6 +180,20 @@ export class AgentWorkspaceBroker {
       size: msg.size,
       modifiedAt: msg.modifiedAt ?? null,
     });
+  }
+
+  handleWorkspaceResetResponse(msg: WorkspaceResetResponseMsg): void {
+    const pending = this.pending.get(msg.requestId);
+    if (!pending || pending.kind !== 'reset') return;
+    this.pending.delete(msg.requestId);
+    clearTimeout(pending.timer);
+
+    if (msg.error || !msg.ok) {
+      pending.reject(new Error(this.formatErrorMessage(msg.errorCode, msg.error)));
+      return;
+    }
+
+    pending.resolve();
   }
 
   rejectPendingForNode(nodeId: string): void {

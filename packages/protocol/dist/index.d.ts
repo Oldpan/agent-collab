@@ -1,6 +1,7 @@
 export type AgentType = 'claude_acp' | 'codex_acp';
 export type ConversationStatus = 'idle' | 'queued' | 'active' | 'recovering' | 'awaiting_approval' | 'failed';
 export type ThreadKind = 'direct' | 'branch';
+export type AgentPermissionKind = 'read' | 'edit' | 'delete' | 'move' | 'search' | 'execute' | 'think' | 'fetch' | 'switch_mode' | 'other';
 export type RuntimeDispatchMode = 'cold_start' | 'resume';
 export type RuntimeDriverDefinition = {
     agentType: AgentType;
@@ -62,11 +63,14 @@ export type ErrorEvent = {
 export type HistoryCompleteEvent = {
     type: 'history.complete';
 };
+export type HistoryResetEvent = {
+    type: 'history.reset';
+};
 export type HistoryUserMessageEvent = {
     type: 'history.user_message';
     text: string;
 };
-export type ServerEvent = ConversationStatusEvent | TurnBeginEvent | TurnEndEvent | ContentDeltaEvent | ThinkingDeltaEvent | ToolCallEvent | ToolResultEvent | ApprovalRequestEvent | ErrorEvent | HistoryCompleteEvent | HistoryUserMessageEvent;
+export type ServerEvent = ConversationStatusEvent | TurnBeginEvent | TurnEndEvent | ContentDeltaEvent | ThinkingDeltaEvent | ToolCallEvent | ToolResultEvent | ApprovalRequestEvent | ErrorEvent | HistoryCompleteEvent | HistoryResetEvent | HistoryUserMessageEvent;
 export type FileRef = {
     uri: string;
     mimeType?: string;
@@ -146,7 +150,20 @@ export type WorkspaceReadResponseMsg = {
     error?: string;
     errorCode?: WorkspaceErrorCode;
 };
-export type NodeToCore = NodeRegisterMsg | NodeHeartbeatMsg | RunEventMsg | RunEndMsg | NodePermissionRequestMsg | WorkspaceListResponseMsg | WorkspaceReadResponseMsg;
+export type WorkspaceResetRequestMsg = {
+    type: 'workspace.reset.request';
+    requestId: string;
+    workspaceRoot: string;
+};
+export type WorkspaceResetResponseMsg = {
+    type: 'workspace.reset.response';
+    requestId: string;
+    workspaceRoot: string;
+    ok?: boolean;
+    error?: string;
+    errorCode?: WorkspaceErrorCode;
+};
+export type NodeToCore = NodeRegisterMsg | NodeHeartbeatMsg | RunEventMsg | RunEndMsg | NodePermissionRequestMsg | WorkspaceListResponseMsg | WorkspaceReadResponseMsg | WorkspaceResetResponseMsg;
 export type NodeAckMsg = {
     type: 'node.ack';
     nodeId: string;
@@ -158,6 +175,7 @@ export type RunDispatchMsg = {
     agentType: AgentType;
     workspacePath: string | null;
     envVars?: Record<string, string>;
+    disabledToolKinds?: AgentPermissionKind[];
     prompt: string;
     sessionKey: string;
     hostKey: string;
@@ -185,7 +203,7 @@ export type WorkspaceReadRequestMsg = {
     workspaceRoot: string;
     relativePath: string;
 };
-export type CoreToNode = NodeAckMsg | RunDispatchMsg | RunCancelMsg | NodePermissionResponseMsg | WorkspaceListRequestMsg | WorkspaceReadRequestMsg;
+export type CoreToNode = NodeAckMsg | RunDispatchMsg | RunCancelMsg | NodePermissionResponseMsg | WorkspaceListRequestMsg | WorkspaceReadRequestMsg | WorkspaceResetRequestMsg;
 export type ConversationInfo = {
     id: string;
     channelId: string;
@@ -229,6 +247,7 @@ export type AgentInfo = {
     channelId: string;
     systemPrompt: string;
     envVars?: Record<string, string>;
+    disabledToolKinds?: AgentPermissionKind[];
     nodeId?: string | null;
     workspacePath?: string | null;
     createdAt: number;
@@ -240,6 +259,7 @@ export type CreateAgentRequest = {
     channelId?: string;
     systemPrompt?: string;
     envVars?: Record<string, string>;
+    disabledToolKinds?: AgentPermissionKind[];
     nodeId?: string;
     workspacePath?: string;
 };
@@ -247,6 +267,7 @@ export type UpdateAgentRequest = {
     name?: string;
     systemPrompt?: string;
     envVars?: Record<string, string>;
+    disabledToolKinds?: AgentPermissionKind[];
 };
 export type ChannelInfo = {
     channelId: string;

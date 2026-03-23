@@ -40,11 +40,12 @@ export class NodeSink implements OutboundSink {
   async sendUi(event: UiEvent): Promise<void> {
     if (event.kind === 'tool') {
       if (event.stage === 'complete') {
+        const isError = event.status === 'error' || event.status === 'failed';
         this.emitEvent({
           type: 'tool.result',
           toolCallId: event.toolCallId ?? '',
           output: event.detail ?? event.status ?? 'done',
-          error: event.status === 'error',
+          error: isError,
         });
       } else {
         this.emitEvent({

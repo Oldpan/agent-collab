@@ -13,6 +13,7 @@ import type {
 import { AgentDetailPanel } from "./AgentDetailPanel";
 import { MachineCreatePanel } from "./MachineCreatePanel";
 import { AgentEnvVarsEditor } from "./AgentEnvVarsEditor";
+import { AgentPermissionSettings } from "./AgentPermissionSettings";
 import defaultSystemPrompt from "@/prompts/default-system-prompt.md?raw";
 
 const EXPANDED_MACHINES_STORAGE_KEY = "agent-collab:expanded-machines";
@@ -46,6 +47,7 @@ type SidebarProps = {
   onDeleteMachine: (id: string) => void;
   onCreateAgent: (req: CreateAgentRequest) => void;
   onUpdateAgent: (id: string, req: UpdateAgentRequest) => Promise<void>;
+  onResetAgent: (id: string) => Promise<void>;
   onDeleteAgent: (id: string) => void;
   onOpenAgentThread: (agentId: string) => void;
 };
@@ -80,6 +82,7 @@ export function Sidebar({
   onCreateMachine, onDeleteMachine,
   onOpenSessions,
   onCreateAgent, onUpdateAgent, onDeleteAgent,
+  onResetAgent,
   onOpenAgentThread,
 }: SidebarProps) {
   const [expandedMachines, setExpandedMachines] = useState<Set<string>>(
@@ -94,6 +97,7 @@ export function Sidebar({
   const [newAgentType, setNewAgentType] = useState<AgentType>("claude_acp");
   const [newAgentSystemPrompt, setNewAgentSystemPrompt] = useState(defaultSystemPrompt);
   const [newAgentEnvVars, setNewAgentEnvVars] = useState<Record<string, string> | undefined>();
+  const [newAgentDisabledToolKinds, setNewAgentDisabledToolKinds] = useState<CreateAgentRequest["disabledToolKinds"]>();
 
   const toggleMachine = (nodeId: string) => {
     setExpandedMachines((prev) => {
@@ -111,13 +115,15 @@ export function Sidebar({
       agentType: newAgentType,
       systemPrompt: newAgentSystemPrompt.trim() || undefined,
       envVars: newAgentEnvVars,
+      disabledToolKinds: newAgentDisabledToolKinds,
       nodeId: createAgentInMachine,
     });
     setCreateAgentInMachine(null);
     setNewAgentName("");
     setNewAgentSystemPrompt(defaultSystemPrompt);
     setNewAgentEnvVars(undefined);
-  }, [newAgentName, newAgentType, newAgentSystemPrompt, newAgentEnvVars, createAgentInMachine, onCreateAgent]);
+    setNewAgentDisabledToolKinds(undefined);
+  }, [newAgentName, newAgentType, newAgentSystemPrompt, newAgentEnvVars, newAgentDisabledToolKinds, createAgentInMachine, onCreateAgent]);
 
   const openCreateAgentForm = (nodeId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -125,6 +131,7 @@ export function Sidebar({
     setNewAgentName("");
     setNewAgentSystemPrompt(defaultSystemPrompt);
     setNewAgentEnvVars(undefined);
+    setNewAgentDisabledToolKinds(undefined);
     setExpandedMachines((prev) => {
       const next = new Set(prev).add(nodeId);
       writeStoredSet(EXPANDED_MACHINES_STORAGE_KEY, next);
@@ -152,7 +159,7 @@ export function Sidebar({
   }, [agents, conversations, selectedId]);
 
   return (
-    <div className="flex h-full flex-col bg-[linear-gradient(180deg,#ffe98d_0%,#ffd45e_100%)]">
+    <div className="flex h-full flex-col bg-[linear-gradient(180deg,#ffe06d_0%,#ffca43_100%)]">
       {/* Header */}
       <div className="flex items-center justify-between border-b border-black/10 bg-[#ffe48a] px-3 py-3 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.45)]">
         <h1 className="text-xs font-semibold uppercase tracking-wider text-zinc-600">
@@ -292,6 +299,10 @@ export function Sidebar({
                           value={newAgentEnvVars}
                           onChange={setNewAgentEnvVars}
                         />
+                        <AgentPermissionSettings
+                          value={newAgentDisabledToolKinds}
+                          onChange={setNewAgentDisabledToolKinds}
+                        />
                         <div className="flex gap-1">
                           <Button
                             size="sm"
@@ -308,6 +319,7 @@ export function Sidebar({
                             onClick={() => {
                               setCreateAgentInMachine(null);
                               setNewAgentEnvVars(undefined);
+                              setNewAgentDisabledToolKinds(undefined);
                             }}
                           >
                             <XIcon className="size-3" />
@@ -344,6 +356,7 @@ export function Sidebar({
                             <AgentDetailPanel
                               agent={agent}
                               onUpdate={(req) => onUpdateAgent(agent.agentId, req)}
+                              onReset={() => onResetAgent(agent.agentId)}
                               onClose={() => setEditingAgentId(null)}
                             />
                           )}

@@ -91,6 +91,8 @@ export class AcpClient {
   private readonly agentCommand: string;
   private readonly agentArgs: string[];
   private readonly toolAuth: ToolAuth | null;
+  private readonly defaultAllowTools: boolean;
+  private readonly disabledToolKinds: ReadonlySet<ToolKind>;
 
   private readonly rpc: StdioProcess;
   private nextId = 1;
@@ -116,6 +118,8 @@ export class AcpClient {
     agentCommand: string;
     agentArgs: string[];
     toolAuth?: ToolAuth;
+    defaultAllowTools?: boolean;
+    disabledToolKinds?: ToolKind[];
     events?: AcpClientEvents;
     rpc?: StdioProcess;
     env?: Record<string, string>;
@@ -125,6 +129,8 @@ export class AcpClient {
     this.agentCommand = params.agentCommand;
     this.agentArgs = params.agentArgs;
     this.toolAuth = params.toolAuth ?? null;
+    this.defaultAllowTools = params.defaultAllowTools ?? false;
+    this.disabledToolKinds = new Set(params.disabledToolKinds ?? []);
     this.events = params.events ?? {};
 
     this.rpc =
@@ -581,6 +587,14 @@ export class AcpClient {
       throw new Error(
         `Tool call not allowed outside prompt turn (kind=${kind})`,
       );
+    }
+
+    if (this.disabledToolKinds.has(kind)) {
+      throw new Error(`Tool call denied by agent settings: ${kind} disabled.`);
+    }
+
+    if (this.defaultAllowTools) {
+      return;
     }
 
     // If auth is not wired, default deny (secure by default).

@@ -7,7 +7,7 @@ export interface RuntimeConfig {
 }
 import { type PermissionRequest } from '../acp/client.js';
 import type { InitializeResult } from '../acp/types.js';
-import { ToolAuth } from './toolAuth.js';
+import { ToolAuth, type ToolKind } from './toolAuth.js';
 export declare class BindingRuntime {
     private readonly db;
     private readonly config;
@@ -32,6 +32,7 @@ export declare class BindingRuntime {
     private readonly agentCommand;
     private readonly agentArgs;
     private readonly env?;
+    private readonly disabledToolKinds;
     constructor(params: {
         db: Db;
         config: RuntimeConfig;
@@ -42,6 +43,7 @@ export declare class BindingRuntime {
         agentCommand?: string;
         agentArgs?: string[];
         env?: Record<string, string>;
+        disabledToolKinds?: ToolKind[];
         acpRpc?: import('../acp/stdio.js').StdioProcess;
     });
     close(): void;

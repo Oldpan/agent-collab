@@ -71,6 +71,17 @@ export function useConversationStream(
       // Session identity guard: ignore stale WebSocket callbacks
       if (wsRef.current !== ws) return;
 
+      if ((event as { type: string }).type === "history.reset") {
+        setMessages([]);
+        setPendingApproval(null);
+        textRef.current = "";
+        thinkingRef.current = "";
+        currentToolCallsRef.current = [];
+        currentMsgIdRef.current = null;
+        setStatus("idle");
+        return;
+      }
+
       switch (event.type) {
         case "turn.begin": {
           // Start a new assistant message

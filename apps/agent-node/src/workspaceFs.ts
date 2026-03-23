@@ -95,6 +95,22 @@ export function readWorkspaceFile(
   };
 }
 
+export function resetWorkspaceDirectory(workspaceRoot: string): void {
+  const resolvedRoot = path.resolve(workspaceRoot);
+  if (resolvedRoot === path.parse(resolvedRoot).root) {
+    throw new WorkspaceFsError('io_error', 'Refusing to reset filesystem root.');
+  }
+
+  fs.mkdirSync(resolvedRoot, { recursive: true });
+
+  for (const entry of fs.readdirSync(resolvedRoot, { withFileTypes: true })) {
+    const target = path.join(resolvedRoot, entry.name);
+    fs.rmSync(target, { recursive: true, force: true });
+  }
+
+  ensureWorkspaceScaffold(resolvedRoot);
+}
+
 function resolveRelativeWorkspacePath(workspaceRoot: string, relativePath: string): string {
   const normalized = normalizeRelativePath(relativePath);
   const absoluteRequested = normalized

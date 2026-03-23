@@ -3,6 +3,17 @@
 export type AgentType = 'claude_acp' | 'codex_acp';
 export type ConversationStatus = 'idle' | 'queued' | 'active' | 'recovering' | 'awaiting_approval' | 'failed';
 export type ThreadKind = 'direct' | 'branch';
+export type AgentPermissionKind =
+  | 'read'
+  | 'edit'
+  | 'delete'
+  | 'move'
+  | 'search'
+  | 'execute'
+  | 'think'
+  | 'fetch'
+  | 'switch_mode'
+  | 'other';
 
 export type RuntimeDispatchMode = 'cold_start' | 'resume';
 
@@ -104,6 +115,10 @@ export type HistoryCompleteEvent = {
   type: 'history.complete';
 };
 
+export type HistoryResetEvent = {
+  type: 'history.reset';
+};
+
 // 历史回放：用户消息
 export type HistoryUserMessageEvent = {
   type: 'history.user_message';
@@ -121,6 +136,7 @@ export type ServerEvent =
   | ApprovalRequestEvent
   | ErrorEvent
   | HistoryCompleteEvent
+  | HistoryResetEvent
   | HistoryUserMessageEvent;
 
 // ─── 客户端 → 服务端 事件 ───
@@ -232,6 +248,21 @@ export type WorkspaceReadResponseMsg = {
   errorCode?: WorkspaceErrorCode;
 };
 
+export type WorkspaceResetRequestMsg = {
+  type: 'workspace.reset.request';
+  requestId: string;
+  workspaceRoot: string;
+};
+
+export type WorkspaceResetResponseMsg = {
+  type: 'workspace.reset.response';
+  requestId: string;
+  workspaceRoot: string;
+  ok?: boolean;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
 export type NodeToCore =
   | NodeRegisterMsg
   | NodeHeartbeatMsg
@@ -239,7 +270,8 @@ export type NodeToCore =
   | RunEndMsg
   | NodePermissionRequestMsg
   | WorkspaceListResponseMsg
-  | WorkspaceReadResponseMsg;
+  | WorkspaceReadResponseMsg
+  | WorkspaceResetResponseMsg;
 
 // Core → Node
 
@@ -255,6 +287,7 @@ export type RunDispatchMsg = {
   agentType: AgentType;
   workspacePath: string | null;
   envVars?: Record<string, string>;
+  disabledToolKinds?: AgentPermissionKind[];
   prompt: string;
   sessionKey: string;
   hostKey: string;
@@ -293,7 +326,8 @@ export type CoreToNode =
   | RunCancelMsg
   | NodePermissionResponseMsg
   | WorkspaceListRequestMsg
-  | WorkspaceReadRequestMsg;
+  | WorkspaceReadRequestMsg
+  | WorkspaceResetRequestMsg;
 
 // ─── REST API 类型 ───
 
@@ -344,6 +378,7 @@ export type AgentInfo = {
   channelId: string;
   systemPrompt: string;
   envVars?: Record<string, string>;
+  disabledToolKinds?: AgentPermissionKind[];
   nodeId?: string | null;
   workspacePath?: string | null;
   createdAt: number;
@@ -356,6 +391,7 @@ export type CreateAgentRequest = {
   channelId?: string;
   systemPrompt?: string;
   envVars?: Record<string, string>;
+  disabledToolKinds?: AgentPermissionKind[];
   nodeId?: string;
   workspacePath?: string;
 };
@@ -364,6 +400,7 @@ export type UpdateAgentRequest = {
   name?: string;
   systemPrompt?: string;
   envVars?: Record<string, string>;
+  disabledToolKinds?: AgentPermissionKind[];
 };
 
 export type ChannelInfo = {

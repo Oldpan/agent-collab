@@ -14,6 +14,7 @@ import type {
   CreateAgentRequest,
   UpdateAgentRequest,
 } from "@agent-collab/protocol";
+import * as api from "@/lib/api";
 
 export function App() {
   const [viewMode, setViewMode] = useState<"chat" | "sessions">("chat");
@@ -61,6 +62,15 @@ export function App() {
     [deleteAgent],
   );
 
+  const handleResetAgent = useCallback(
+    async (agentId: string) => {
+      await api.resetAgent(agentId);
+      await openAgentThread(agentId);
+      setViewMode("chat");
+    },
+    [openAgentThread],
+  );
+
   const handleOpenAgentThread = useCallback(
     (agentId: string) => {
       openAgentThread(agentId);
@@ -89,7 +99,7 @@ export function App() {
           defaultSize={25}
           minSize={15}
           maxSize={40}
-          className="bg-[linear-gradient(180deg,#ffe98d_0%,#ffd45e_100%)] text-zinc-950"
+          className="bg-[linear-gradient(180deg,#ffe06d_0%,#ffca43_100%)] text-zinc-950"
         >
           <Sidebar
             machines={machines}
@@ -102,6 +112,7 @@ export function App() {
             onDeleteMachine={deleteMachine}
             onCreateAgent={handleCreateAgent}
             onUpdateAgent={handleUpdateAgent}
+            onResetAgent={handleResetAgent}
             onDeleteAgent={handleDeleteAgent}
             onOpenAgentThread={handleOpenAgentThread}
           />

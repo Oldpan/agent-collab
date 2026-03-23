@@ -126,6 +126,19 @@ export async function openAgentThread(agentId: string): Promise<ConversationInfo
   return res.json();
 }
 
+export async function resetAgent(
+  agentId: string,
+): Promise<{ ok: boolean; conversations: ConversationInfo[] }> {
+  const res = await fetch(`${API_BASE}/agents/${agentId}/reset`, {
+    method: "POST",
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to reset agent: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function listAgentWorkspace(
   agentId: string,
   relativePath = "",

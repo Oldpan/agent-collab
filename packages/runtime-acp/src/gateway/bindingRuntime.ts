@@ -47,6 +47,7 @@ export class BindingRuntime {
   private readonly agentCommand: string;
   private readonly agentArgs: string[];
   private readonly env?: Record<string, string>;
+  private readonly disabledToolKinds: ToolKind[];
 
   constructor(params: {
     db: Db;
@@ -58,6 +59,7 @@ export class BindingRuntime {
     agentCommand?: string;
     agentArgs?: string[];
     env?: Record<string, string>;
+    disabledToolKinds?: ToolKind[];
     acpRpc?: import('../acp/stdio.js').StdioProcess;
   }) {
     this.db = params.db;
@@ -69,6 +71,7 @@ export class BindingRuntime {
     this.agentCommand = params.agentCommand ?? this.config.acpAgentCommand;
     this.agentArgs = params.agentArgs ?? this.config.acpAgentArgs;
     this.env = params.env;
+    this.disabledToolKinds = params.disabledToolKinds ?? [];
 
     this.client = new AcpClient({
       db: this.db,
@@ -76,6 +79,8 @@ export class BindingRuntime {
       agentCommand: this.agentCommand,
       agentArgs: this.agentArgs,
       toolAuth: this.toolAuth,
+      defaultAllowTools: true,
+      disabledToolKinds: this.disabledToolKinds,
       rpc: params.acpRpc,
       env: this.env,
       events: {
@@ -203,6 +208,37 @@ export class BindingRuntime {
           this.pendingPermissionActorUserId = this.currentActorUserId;
 
           const toolKind = toToolKind(req.params.toolCall?.kind);
+          if (toolKind && !this.disabledToolKinds.includes(toolKind)) {
+            const option = req.params.options.find(
+              (o) => o.kind === 'allow_always' || o.kind === 'allow_once',
+            );
+            if (option) {
+              this.toolAuth.grantOnce(this.sessionKey, toolKind, 1);
+              void this.client.respondPermission(req, {
+                kind: 'selected',
+                optionId: option.optionId,
+              });
+              this.pendingPermission = null;
+              this.pendingPermissionActorUserId = null;
+              return;
+            }
+          }
+
+          if (toolKind && this.disabledToolKinds.includes(toolKind)) {
+            const option = req.params.options.find(
+              (o) => o.kind === 'reject_always' || o.kind === 'reject_once',
+            );
+            if (option) {
+              void this.client.respondPermission(req, {
+                kind: 'selected',
+                optionId: option.optionId,
+              });
+              this.pendingPermission = null;
+              this.pendingPermissionActorUserId = null;
+              return;
+            }
+          }
+
           if (toolKind) {
             const policy = this.toolAuth.evaluatePersistentPolicy(
               this.bindingKey,

@@ -6,6 +6,7 @@ import {
   getUiMode,
   log,
   type Db,
+  type ToolKind,
   type ToolAuth,
   type UiMode,
 } from '@agent-collab/runtime-acp';
@@ -30,6 +31,7 @@ type RunLifecycleHooks = {
 export class AgentHost {
   readonly hostKey: string;
   readonly sessionKey: string;
+  private readonly workspaceRoot: string;
   private readonly runtime: BindingRuntime;
   private readonly db: Db;
   private readonly send: SendFn;
@@ -53,11 +55,13 @@ export class AgentHost {
     agentCommand: string;
     agentArgs: string[];
     env?: Record<string, string>;
+    disabledToolKinds?: ToolKind[];
     send: SendFn;
     hooks?: RunLifecycleHooks;
   }) {
     this.hostKey = params.hostKey;
     this.sessionKey = params.sessionKey;
+    this.workspaceRoot = params.workspaceRoot;
     this.db = params.db;
     this.send = params.send;
     this.hooks = params.hooks ?? {};
@@ -71,6 +75,7 @@ export class AgentHost {
       agentCommand: params.agentCommand,
       agentArgs: params.agentArgs,
       env: params.env,
+      disabledToolKinds: params.disabledToolKinds,
     });
   }
 
@@ -96,6 +101,10 @@ export class AgentHost {
 
   getLastError(): string | null {
     return this.lastError;
+  }
+
+  getWorkspaceRoot(): string {
+    return this.workspaceRoot;
   }
 
   async dispatch(msg: RunDispatchMsg): Promise<void> {

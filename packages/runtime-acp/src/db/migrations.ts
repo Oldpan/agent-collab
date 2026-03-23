@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 16;
+const LATEST_VERSION = 17;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -387,5 +387,13 @@ export function migrate(db: Db): void {
 
       UPDATE schema_version SET version = 16;
     `);
+  }
+
+  if (current < 17) {
+    const agentCols = db.prepare("PRAGMA table_info('agents')").all() as Array<{ name: string }>;
+    if (!agentCols.some((c) => c.name === 'disabled_tool_kinds')) {
+      db.exec(`ALTER TABLE agents ADD COLUMN disabled_tool_kinds TEXT;`);
+    }
+    db.exec(`UPDATE schema_version SET version = 17;`);
   }
 }

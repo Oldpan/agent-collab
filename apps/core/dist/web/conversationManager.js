@@ -47,28 +47,31 @@ export class ConversationManager {
         const envVarsJson = params.envVars && Object.keys(params.envVars).length > 0
             ? JSON.stringify(params.envVars)
             : null;
+        const disabledToolKindsJson = params.disabledToolKinds && params.disabledToolKinds.length > 0
+            ? JSON.stringify(params.disabledToolKinds)
+            : null;
         const now = Date.now();
         const workspacePath = params.workspacePath
             ?? path.join(os.homedir(), '.agent-collab', 'agents', `${agentId}-${slugifyAgentName(params.name)}`);
         fs.mkdirSync(workspacePath, { recursive: true });
-        this.db.prepare(`INSERT INTO agents(agent_id, name, agent_type, channel_id, system_prompt, memory, env_vars, node_id, workspace_path, created_at, updated_at)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(agentId, params.name, agentType, channelId, params.systemPrompt ?? '', '', envVarsJson, params.nodeId ?? null, workspacePath, now, now);
+        this.db.prepare(`INSERT INTO agents(agent_id, name, agent_type, channel_id, system_prompt, memory, env_vars, disabled_tool_kinds, node_id, workspace_path, created_at, updated_at)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(agentId, params.name, agentType, channelId, params.systemPrompt ?? '', '', envVarsJson, disabledToolKindsJson, params.nodeId ?? null, workspacePath, now, now);
         return {
             agentId, name: params.name, agentType, channelId,
             systemPrompt: params.systemPrompt ?? '',
-            envVars: params.envVars, nodeId: params.nodeId ?? null,
+            envVars: params.envVars, disabledToolKinds: params.disabledToolKinds, nodeId: params.nodeId ?? null,
             workspacePath, createdAt: now, updatedAt: now,
         };
     }
     listAgents(channelId) {
         const sql = channelId
             ? `SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
-                system_prompt as systemPrompt, env_vars as envVarsJson,
+                system_prompt as systemPrompt, env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
                 node_id as nodeId, workspace_path as workspacePath,
                 created_at as createdAt, updated_at as updatedAt
          FROM agents WHERE channel_id = ? ORDER BY updated_at DESC`
             : `SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
-                system_prompt as systemPrompt, env_vars as envVarsJson,
+                system_prompt as systemPrompt, env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
                 node_id as nodeId, workspace_path as workspacePath,
                 created_at as createdAt, updated_at as updatedAt
          FROM agents ORDER BY updated_at DESC`;
@@ -79,7 +82,7 @@ export class ConversationManager {
     }
     getAgent(agentId) {
         const row = this.db.prepare(`SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
-              system_prompt as systemPrompt, env_vars as envVarsJson,
+              system_prompt as systemPrompt, env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
               node_id as nodeId, workspace_path as workspacePath,
               created_at as createdAt, updated_at as updatedAt
        FROM agents WHERE agent_id = ?`).get(agentId);
@@ -93,13 +96,17 @@ export class ConversationManager {
         const name = req.name ?? existing.name;
         const systemPrompt = req.systemPrompt ?? existing.systemPrompt;
         const envVars = req.envVars ?? existing.envVars;
+        const disabledToolKinds = req.disabledToolKinds ?? existing.disabledToolKinds;
         const envVarsJson = envVars && Object.keys(envVars).length > 0
             ? JSON.stringify(envVars)
             : null;
+        const disabledToolKindsJson = disabledToolKinds && disabledToolKinds.length > 0
+            ? JSON.stringify(disabledToolKinds)
+            : null;
         this.db.prepare(`UPDATE agents
-       SET name = ?, system_prompt = ?, env_vars = ?, updated_at = ?
-       WHERE agent_id = ?`).run(name, systemPrompt, envVarsJson, now, agentId);
-        return { ...existing, name, systemPrompt, envVars, updatedAt: now };
+       SET name = ?, system_prompt = ?, env_vars = ?, disabled_tool_kinds = ?, updated_at = ?
+       WHERE agent_id = ?`).run(name, systemPrompt, envVarsJson, disabledToolKindsJson, now, agentId);
+        return { ...existing, name, systemPrompt, envVars, disabledToolKinds, updatedAt: now };
     }
     deleteAgent(agentId) {
         this.db.prepare(`DELETE FROM conversation_prompt_queue WHERE agent_id = ?`).run(agentId);
@@ -235,6 +242,40 @@ export class ConversationManager {
         this.db.prepare('DELETE FROM conversation_prompt_queue WHERE conversation_id = ?').run(id);
         this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
     }
+    resetAgent(agentId) {
+        const rows = this.db.prepare(`SELECT id, channel_id as channelId, agent_type as agentType, workspace_path as workspacePath,
+              session_key as sessionKey, node_id as nodeId, created_at as createdAt,
+              thread_kind as threadKind, is_primary_thread as isPrimaryThread
+       FROM conversations
+       WHERE agent_id = ?
+       ORDER BY is_primary_thread DESC, updated_at DESC`).all(agentId);
+        if (rows.length === 0)
+            return [];
+        const now = Date.now();
+        this.db.prepare('DELETE FROM conversation_prompt_queue WHERE agent_id = ?').run(agentId);
+        for (const row of rows) {
+            const runIds = this.db.prepare(`SELECT run_id as runId FROM runs WHERE session_key = ?`).all(row.sessionKey);
+            for (const run of runIds) {
+                this.db.prepare('DELETE FROM events WHERE run_id = ?').run(run.runId);
+            }
+            this.db.prepare('DELETE FROM runs WHERE session_key = ?').run(row.sessionKey);
+            const newSessionKey = randomUUID();
+            const preset = getRuntimeDriver(row.agentType);
+            createSession(this.db, {
+                sessionKey: newSessionKey,
+                agentCommand: preset.command,
+                agentArgs: preset.args,
+                cwd: row.workspacePath ?? this.config.workspaceRoot,
+                loadSupported: false,
+            });
+            upsertBinding(this.db, { platform: 'web', chatId: row.channelId, threadId: row.id, userId: row.agentType }, newSessionKey);
+            this.db.prepare(`UPDATE conversations
+         SET session_key = ?, status = 'idle', title = '', updated_at = ?
+         WHERE id = ?`).run(newSessionKey, now, row.id);
+            this.db.prepare('DELETE FROM sessions WHERE session_key = ?').run(row.sessionKey);
+        }
+        return this.listConversations({ agentId });
+    }
     async dispatchToNode(conversationId, promptText) {
         await this.executionDispatcher.dispatchPrompt(conversationId, promptText);
     }
@@ -342,6 +383,7 @@ function rowToAgentInfo(row) {
         channelId: row.channelId,
         systemPrompt: row.systemPrompt,
         envVars: parseEnvVars(row.envVarsJson),
+        disabledToolKinds: parseDisabledToolKinds(row.disabledToolKindsJson),
         nodeId: row.nodeId,
         workspacePath: row.workspacePath,
         createdAt: row.createdAt,
@@ -383,6 +425,20 @@ function parseEnvVars(raw) {
         const parsed = JSON.parse(raw);
         if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
             return parsed;
+        }
+    }
+    catch {
+        // ignore
+    }
+    return undefined;
+}
+function parseDisabledToolKinds(raw) {
+    if (!raw)
+        return undefined;
+    try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) {
+            return parsed.filter((value) => typeof value === 'string');
         }
     }
     catch {

@@ -1,5 +1,5 @@
 import type { Db } from '../db/db.js';
-import type { ToolAuth } from '../gateway/toolAuth.js';
+import type { ToolAuth, ToolKind } from '../gateway/toolAuth.js';
 import { type JsonRpcId } from './jsonrpc.js';
 import { type StdioProcess } from './stdio.js';
 import type { InitializeResult, NewSessionParams, NewSessionResult, PromptParams, PromptResult, RequestPermissionParams } from './types.js';
@@ -40,6 +40,8 @@ export declare class AcpClient {
     private readonly agentCommand;
     private readonly agentArgs;
     private readonly toolAuth;
+    private readonly defaultAllowTools;
+    private readonly disabledToolKinds;
     private readonly rpc;
     private nextId;
     private readonly pending;
@@ -53,6 +55,8 @@ export declare class AcpClient {
         agentCommand: string;
         agentArgs: string[];
         toolAuth?: ToolAuth;
+        defaultAllowTools?: boolean;
+        disabledToolKinds?: ToolKind[];
         events?: AcpClientEvents;
         rpc?: StdioProcess;
         env?: Record<string, string>;

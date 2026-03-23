@@ -3,6 +3,7 @@ import { NodeSink } from './nodeSink.js';
 export class AgentHost {
     hostKey;
     sessionKey;
+    workspaceRoot;
     runtime;
     db;
     send;
@@ -17,6 +18,7 @@ export class AgentHost {
     constructor(params) {
         this.hostKey = params.hostKey;
         this.sessionKey = params.sessionKey;
+        this.workspaceRoot = params.workspaceRoot;
         this.db = params.db;
         this.send = params.send;
         this.hooks = params.hooks ?? {};
@@ -30,6 +32,7 @@ export class AgentHost {
             agentCommand: params.agentCommand,
             agentArgs: params.agentArgs,
             env: params.env,
+            disabledToolKinds: params.disabledToolKinds,
         });
     }
     getState() {
@@ -49,6 +52,9 @@ export class AgentHost {
     }
     getLastError() {
         return this.lastError;
+    }
+    getWorkspaceRoot() {
+        return this.workspaceRoot;
     }
     async dispatch(msg) {
         return new Promise((resolve, reject) => {

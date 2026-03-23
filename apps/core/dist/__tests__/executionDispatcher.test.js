@@ -99,6 +99,46 @@ describe('ExecutionDispatcher', () => {
             CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
         });
     });
+    it('dispatchToNode 应携带 agent 级 disabledToolKinds', async () => {
+        const agent = manager.createAgent({
+            name: 'Restricted Bob',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/restricted-bob',
+            disabledToolKinds: ['execute', 'delete'],
+        });
+        const conv = manager.createConversation({
+            agentId: agent.agentId,
+            title: 'Restricted Test',
+        });
+        await manager.dispatchToNode(conv.id, 'hello');
+        const dispatch = sent[0]?.msg;
+        if (!dispatch || dispatch.type !== 'run.dispatch')
+            throw new Error('missing dispatch');
+        expect(dispatch.disabledToolKinds).toEqual(['execute', 'delete']);
+    });
+    it('dispatchToNode 的 contextText 应明确 local memory 走工作区文件工具', async () => {
+        const agent = manager.createAgent({
+            name: 'Memory Agent',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/memory-agent',
+            systemPrompt: 'Maintain memory carefully.',
+        });
+        const conv = manager.createConversation({
+            agentId: agent.agentId,
+            title: 'Memory Dispatch Test',
+        });
+        await manager.dispatchToNode(conv.id, 'remember this');
+        const dispatch = sent[0]?.msg;
+        if (!dispatch || dispatch.type !== 'run.dispatch')
+            throw new Error('missing dispatch');
+        expect(dispatch.contextText).toContain('[Local Memory Guide]');
+        expect(dispatch.contextText).toContain('Local memory is stored as ordinary workspace files');
+        expect(dispatch.contextText).toContain('Do not use MCP resource-reading tools');
+        expect(dispatch.contextText).toContain('MEMORY.md');
+        expect(dispatch.contextText).toContain('notes/*.md');
+    });
     it('cancelConversationRun 应发送 run.cancel 到节点', () => {
         const conv = manager.createConversation({
             title: 'Cancel Test',

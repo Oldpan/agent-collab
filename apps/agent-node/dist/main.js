@@ -4,7 +4,7 @@ import { openDb, migrate, log } from '@agent-collab/runtime-acp';
 import { loadConfig } from './config.js';
 import { CoreConnection } from './connection.js';
 import { Executor } from './executor.js';
-import { listWorkspaceDirectory, readWorkspaceFile, WorkspaceFsError } from './workspaceFs.js';
+import { listWorkspaceDirectory, readWorkspaceFile, resetWorkspaceDirectory, WorkspaceFsError } from './workspaceFs.js';
 async function main() {
     const config = loadConfig();
     // Ensure DB directory exists
@@ -51,7 +51,7 @@ async function main() {
                     });
                 }
                 catch (error) {
-                    connection.send(workspaceErrorResponse('workspace.list.response', msg.requestId, msg.relativePath, error));
+                    connection.send(workspacePathErrorResponse('workspace.list.response', msg.requestId, msg.relativePath, error));
                 }
                 break;
             case 'workspace.read.request':
@@ -68,7 +68,22 @@ async function main() {
                     });
                 }
                 catch (error) {
-                    connection.send(workspaceErrorResponse('workspace.read.response', msg.requestId, msg.relativePath, error));
+                    connection.send(workspacePathErrorResponse('workspace.read.response', msg.requestId, msg.relativePath, error));
+                }
+                break;
+            case 'workspace.reset.request':
+                try {
+                    executor.resetWorkspace(msg.workspaceRoot);
+                    resetWorkspaceDirectory(msg.workspaceRoot);
+                    connection.send({
+                        type: 'workspace.reset.response',
+                        requestId: msg.requestId,
+                        workspaceRoot: msg.workspaceRoot,
+                        ok: true,
+                    });
+                }
+                catch (error) {
+                    connection.send(workspaceResetErrorResponse(msg.requestId, msg.workspaceRoot, error));
                 }
                 break;
             default: {
@@ -93,7 +108,7 @@ async function main() {
     process.on('SIGTERM', shutdown);
 }
 await main();
-function workspaceErrorResponse(type, requestId, relativePath, error) {
+function workspacePathErrorResponse(type, requestId, relativePath, error) {
     if (error instanceof WorkspaceFsError) {
         return {
             type,
@@ -107,6 +122,24 @@ function workspaceErrorResponse(type, requestId, relativePath, error) {
         type,
         requestId,
         relativePath,
+        error: String(error?.message ?? error),
+        errorCode: 'io_error',
+    };
+}
+function workspaceResetErrorResponse(requestId, workspaceRoot, error) {
+    if (error instanceof WorkspaceFsError) {
+        return {
+            type: 'workspace.reset.response',
+            requestId,
+            workspaceRoot,
+            error: error.message,
+            errorCode: error.code,
+        };
+    }
+    return {
+        type: 'workspace.reset.response',
+        requestId,
+        workspaceRoot,
         error: String(error?.message ?? error),
         errorCode: 'io_error',
     };

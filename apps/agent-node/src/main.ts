@@ -6,7 +6,7 @@ import type { CoreToNode } from '@agent-collab/protocol';
 import { loadConfig } from './config.js';
 import { CoreConnection } from './connection.js';
 import { Executor } from './executor.js';
-import { listWorkspaceDirectory, readWorkspaceFile, WorkspaceFsError } from './workspaceFs.js';
+import { listWorkspaceDirectory, readWorkspaceFile, resetWorkspaceDirectory, WorkspaceFsError } from './workspaceFs.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -61,7 +61,7 @@ async function main(): Promise<void> {
             entries: result.entries,
           });
         } catch (error) {
-          connection.send(workspaceErrorResponse('workspace.list.response', msg.requestId, msg.relativePath, error));
+          connection.send(workspacePathErrorResponse('workspace.list.response', msg.requestId, msg.relativePath, error));
         }
         break;
 
@@ -78,7 +78,22 @@ async function main(): Promise<void> {
             modifiedAt: result.modifiedAt,
           });
         } catch (error) {
-          connection.send(workspaceErrorResponse('workspace.read.response', msg.requestId, msg.relativePath, error));
+          connection.send(workspacePathErrorResponse('workspace.read.response', msg.requestId, msg.relativePath, error));
+        }
+        break;
+
+      case 'workspace.reset.request':
+        try {
+          executor.resetWorkspace(msg.workspaceRoot);
+          resetWorkspaceDirectory(msg.workspaceRoot);
+          connection.send({
+            type: 'workspace.reset.response',
+            requestId: msg.requestId,
+            workspaceRoot: msg.workspaceRoot,
+            ok: true,
+          });
+        } catch (error) {
+          connection.send(workspaceResetErrorResponse(msg.requestId, msg.workspaceRoot, error));
         }
         break;
 
@@ -110,7 +125,7 @@ async function main(): Promise<void> {
 
 await main();
 
-function workspaceErrorResponse(
+function workspacePathErrorResponse(
   type: 'workspace.list.response' | 'workspace.read.response',
   requestId: string,
   relativePath: string,
@@ -130,6 +145,30 @@ function workspaceErrorResponse(
     type,
     requestId,
     relativePath,
+    error: String((error as Error)?.message ?? error),
+    errorCode: 'io_error' as const,
+  };
+}
+
+function workspaceResetErrorResponse(
+  requestId: string,
+  workspaceRoot: string,
+  error: unknown,
+) {
+  if (error instanceof WorkspaceFsError) {
+    return {
+      type: 'workspace.reset.response' as const,
+      requestId,
+      workspaceRoot,
+      error: error.message,
+      errorCode: error.code,
+    };
+  }
+
+  return {
+    type: 'workspace.reset.response' as const,
+    requestId,
+    workspaceRoot,
     error: String((error as Error)?.message ?? error),
     errorCode: 'io_error' as const,
   };

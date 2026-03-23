@@ -94,6 +94,40 @@ describe('ConversationManager', () => {
             expect(manager.listConversations()).toHaveLength(1);
         });
     });
+    describe('resetAgent', () => {
+        it('应重置 agent workspace 相关会话历史并换新 session_key', () => {
+            const agent = manager.createAgent({
+                name: 'Resettable',
+                agentType: 'claude_acp',
+                nodeId: 'node-1',
+                workspacePath: '/tmp/resettable-agent',
+            });
+            const conv = manager.openAgentThread(agent.agentId);
+            expect(conv).not.toBeNull();
+            if (!conv)
+                throw new Error('missing conversation');
+            const before = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?').get(conv.id);
+            db.prepare('INSERT INTO runs(run_id, session_key, prompt_text, started_at) VALUES(?, ?, ?, ?)').run('run-reset-1', before.sessionKey, 'remember this', Date.now());
+            db.prepare('INSERT INTO events(run_id, seq, method, payload_json, created_at) VALUES(?, ?, ?, ?, ?)').run('run-reset-1', 1, 'node/event', JSON.stringify({ type: 'content.delta', text: 'hi' }), Date.now());
+            db.prepare('INSERT INTO conversation_prompt_queue(agent_id, conversation_id, prompt_text, created_at, updated_at) VALUES(?, ?, ?, ?, ?)').run(agent.agentId, conv.id, 'queued prompt', Date.now(), Date.now());
+            const resetConversations = manager.resetAgent(agent.agentId);
+            const resetConv = resetConversations.find((item) => item.id === conv.id);
+            expect(resetConv).toBeTruthy();
+            expect(resetConv?.status).toBe('idle');
+            const after = db.prepare('SELECT session_key as sessionKey, status, title FROM conversations WHERE id = ?').get(conv.id);
+            expect(after.sessionKey).not.toBe(before.sessionKey);
+            expect(after.status).toBe('idle');
+            expect(after.title).toBe('');
+            const oldRuns = db.prepare('SELECT count(*) as count FROM runs WHERE session_key = ?').get(before.sessionKey);
+            const oldEvents = db.prepare('SELECT count(*) as count FROM events WHERE run_id = ?').get('run-reset-1');
+            const queueRows = db.prepare('SELECT count(*) as count FROM conversation_prompt_queue WHERE agent_id = ?').get(agent.agentId);
+            const newSession = db.prepare('SELECT count(*) as count FROM sessions WHERE session_key = ?').get(after.sessionKey);
+            expect(oldRuns.count).toBe(0);
+            expect(oldEvents.count).toBe(0);
+            expect(queueRows.count).toBe(0);
+            expect(newSession.count).toBe(1);
+        });
+    });
     // ─── channels ───
     describe('channels', () => {
         it('listChannels 应包含 default channel', () => {
@@ -187,6 +221,33 @@ describe('ConversationManager', () => {
                 .prepare('SELECT env_vars FROM conversations WHERE id = ?')
                 .get(conv.id);
             expect(row.env_vars).toBeNull();
+        });
+    });
+    describe('disabledToolKinds', () => {
+        it('创建 agent 时传入 disabledToolKinds 应存入 DB', () => {
+            const agent = manager.createAgent({
+                name: 'Restricted Agent',
+                disabledToolKinds: ['execute', 'fetch'],
+            });
+            const row = db
+                .prepare('SELECT disabled_tool_kinds FROM agents WHERE agent_id = ?')
+                .get(agent.agentId);
+            expect(JSON.parse(row.disabled_tool_kinds)).toEqual(['execute', 'fetch']);
+            expect(agent.disabledToolKinds).toEqual(['execute', 'fetch']);
+        });
+        it('更新 agent 时应覆盖 disabledToolKinds', () => {
+            const agent = manager.createAgent({
+                name: 'Updated Restricted Agent',
+                disabledToolKinds: ['read'],
+            });
+            const updated = manager.updateAgent(agent.agentId, {
+                disabledToolKinds: ['edit', 'delete'],
+            });
+            expect(updated?.disabledToolKinds).toEqual(['edit', 'delete']);
+            const row = db
+                .prepare('SELECT disabled_tool_kinds FROM agents WHERE agent_id = ?')
+                .get(agent.agentId);
+            expect(JSON.parse(row.disabled_tool_kinds)).toEqual(['edit', 'delete']);
         });
     });
 });

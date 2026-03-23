@@ -1,4 +1,4 @@
-const LATEST_VERSION = 16;
+const LATEST_VERSION = 17;
 export function migrate(db) {
     db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -330,5 +330,12 @@ export function migrate(db) {
 
       UPDATE schema_version SET version = 16;
     `);
+    }
+    if (current < 17) {
+        const agentCols = db.prepare("PRAGMA table_info('agents')").all();
+        if (!agentCols.some((c) => c.name === 'disabled_tool_kinds')) {
+            db.exec(`ALTER TABLE agents ADD COLUMN disabled_tool_kinds TEXT;`);
+        }
+        db.exec(`UPDATE schema_version SET version = 17;`);
     }
 }

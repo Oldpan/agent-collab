@@ -13,6 +13,8 @@ export class AcpClient {
     agentCommand;
     agentArgs;
     toolAuth;
+    defaultAllowTools;
+    disabledToolKinds;
     rpc;
     nextId = 1;
     pending = new Map();
@@ -27,6 +29,8 @@ export class AcpClient {
         this.agentCommand = params.agentCommand;
         this.agentArgs = params.agentArgs;
         this.toolAuth = params.toolAuth ?? null;
+        this.defaultAllowTools = params.defaultAllowTools ?? false;
+        this.disabledToolKinds = new Set(params.disabledToolKinds ?? []);
         this.events = params.events ?? {};
         this.rpc =
             params.rpc ?? spawnAcpAgent(this.agentCommand, this.agentArgs, params.env);
@@ -365,6 +369,12 @@ export class AcpClient {
         // Tool calls should only occur within a prompt turn.
         if (!sessionKey) {
             throw new Error(`Tool call not allowed outside prompt turn (kind=${kind})`);
+        }
+        if (this.disabledToolKinds.has(kind)) {
+            throw new Error(`Tool call denied by agent settings: ${kind} disabled.`);
+        }
+        if (this.defaultAllowTools) {
+            return;
         }
         // If auth is not wired, default deny (secure by default).
         if (!this.toolAuth) {
