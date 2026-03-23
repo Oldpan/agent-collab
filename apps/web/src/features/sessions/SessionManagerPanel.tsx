@@ -44,7 +44,8 @@ export function SessionManagerPanel({
   selectedId,
   onOpenSession,
 }: SessionManagerPanelProps) {
-  const sorted = [...conversations].sort((a, b) => b.updatedAt - a.updatedAt);
+  const visibleConversations = conversations.filter((conversation) => conversation.isPrimaryThread);
+  const sorted = [...visibleConversations].sort((a, b) => b.updatedAt - a.updatedAt);
   const agentMap = new Map(agents.map((agent) => [agent.agentId, agent]));
   const groups = agents
     .map((agent) => ({
@@ -53,7 +54,7 @@ export function SessionManagerPanel({
     }))
     .filter((group) => group.sessions.length > 0);
 
-  const statusCounts = conversations.reduce<Record<string, number>>((acc, conversation) => {
+  const statusCounts = visibleConversations.reduce<Record<string, number>>((acc, conversation) => {
     acc[conversation.status] = (acc[conversation.status] ?? 0) + 1;
     return acc;
   }, {});
@@ -69,7 +70,7 @@ export function SessionManagerPanel({
             </p>
           </div>
           <Badge variant="secondary" className="text-xs">
-            {conversations.length} sessions
+            {visibleConversations.length} sessions
           </Badge>
         </div>
         <div className="mt-4 flex flex-wrap gap-2">
@@ -94,7 +95,7 @@ export function SessionManagerPanel({
                   <div className="min-w-0">
                     <div className="truncate text-sm font-medium">{agent.name}</div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      {agent.agentType === "claude_acp" ? "Claude" : "Codex"} · {sessions.length} sessions
+                      {agent.agentType === "claude_acp" ? "Claude" : "Codex"} · private chat
                     </div>
                   </div>
                   <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
@@ -116,19 +117,10 @@ export function SessionManagerPanel({
                       >
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
-                            <span className="truncate text-sm font-medium">
-                              {conversation.title || (conversation.isPrimaryThread ? "Main thread" : "Untitled thread")}
-                            </span>
-                            {conversation.isPrimaryThread && (
-                              <Badge variant="outline" className="px-1 py-0 text-[8px] uppercase tracking-wide">
-                                Main
-                              </Badge>
-                            )}
-                            {!conversation.isPrimaryThread && (
-                              <Badge variant="secondary" className="px-1 py-0 text-[8px] uppercase tracking-wide">
-                                Branch
-                              </Badge>
-                            )}
+                            <span className="truncate text-sm font-medium">Private chat</span>
+                            <Badge variant="outline" className="px-1 py-0 text-[8px] uppercase tracking-wide">
+                              Main
+                            </Badge>
                           </div>
                           <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
                             <span>{owner?.name ?? "Unknown agent"}</span>

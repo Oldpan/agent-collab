@@ -1,4 +1,3 @@
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
   Collapsible,
@@ -34,6 +33,7 @@ import { ChevronRightIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { PromptComposer } from "./PromptComposer";
 import { AgentWorkspacePanel } from "./AgentWorkspacePanel";
+import { AgentProfilePanel } from "./AgentProfilePanel";
 import { ChatAvatar, readStoredUserIdentity } from "./ChatAvatar";
 import type { AgentInfo, ConversationInfo } from "@agent-collab/protocol";
 import type { LiveMessage, LiveToolCall } from "@/hooks/types";
@@ -60,7 +60,7 @@ const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
 
 /** Main chat panel: header + messages + composer */
 export function ChatPanel({ conversation, agent }: ChatPanelProps) {
-  const [activeTab, setActiveTab] = useState<"chat" | "workspace">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "workspace" | "profile">("chat");
   const userIdentity = useMemo(() => readStoredUserIdentity(), []);
   const {
     messages,
@@ -95,18 +95,15 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold">
-              {agent?.name ?? conversation.title ?? "Untitled"}
+              {agent?.name ?? "Agent"}
             </h2>
             <div className="mt-1 text-xs text-muted-foreground">
-              {conversation.isPrimaryThread ? "Main thread" : (conversation.title || "Branch thread")}
+              {conversation.isPrimaryThread ? "Private chat" : "Channel branch"}
             </div>
           </div>
-          <Badge variant="secondary" className="text-[11px]">
-            {conversation.agentType === "claude_acp" ? "Claude" : "Codex"}
-          </Badge>
           <StatusDot status={displayStatus} />
         </div>
-        <div className="mt-3 flex items-center gap-2">
+        <div className="mt-3 flex items-center gap-2 flex-wrap">
           <Button
             size="sm"
             variant={activeTab === "chat" ? "default" : "outline"}
@@ -123,11 +120,21 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
           >
             Workspace
           </Button>
+          <Button
+            size="sm"
+            variant={activeTab === "profile" ? "default" : "outline"}
+            className="h-8 text-xs"
+            onClick={() => setActiveTab("profile")}
+          >
+            Profile
+          </Button>
         </div>
       </div>
 
       {activeTab === "workspace" ? (
         <AgentWorkspacePanel agent={agent} />
+      ) : activeTab === "profile" ? (
+        <AgentProfilePanel agent={agent} />
       ) : (
         <>
           <Conversation className="min-h-0 flex-1 bg-[linear-gradient(180deg,rgba(255,253,247,0.96)_0%,rgba(255,249,236,0.92)_100%)]">

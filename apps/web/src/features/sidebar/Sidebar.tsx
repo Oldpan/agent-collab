@@ -1,5 +1,4 @@
 import { Button } from "@/components/ui/button";
-import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import {
@@ -8,7 +7,7 @@ import {
 import { useCallback, useEffect, useState } from "react";
 import type {
   AgentInfo, MachineInfo,
-  AgentType, CreateAgentRequest, CreateConversationRequest,
+  AgentType, CreateAgentRequest,
   UpdateAgentRequest, CreateMachineRequest, ConversationInfo,
 } from "@agent-collab/protocol";
 import { AgentDetailPanel } from "./AgentDetailPanel";
@@ -17,7 +16,6 @@ import { AgentEnvVarsEditor } from "./AgentEnvVarsEditor";
 import defaultSystemPrompt from "@/prompts/default-system-prompt.md?raw";
 
 const EXPANDED_MACHINES_STORAGE_KEY = "agent-collab:expanded-machines";
-const EXPANDED_AGENTS_STORAGE_KEY = "agent-collab:expanded-agents";
 
 function readStoredSet(storageKey: string): Set<string> {
   if (typeof window === "undefined") return new Set();
@@ -43,7 +41,6 @@ type SidebarProps = {
   conversations: ConversationInfo[];
   selectedId: string | null;
   selectedView: "chat" | "sessions";
-  onSelect: (id: string) => void;
   onOpenSessions: () => void;
   onCreateMachine: (req: CreateMachineRequest) => Promise<MachineInfo>;
   onDeleteMachine: (id: string) => void;
@@ -51,8 +48,6 @@ type SidebarProps = {
   onUpdateAgent: (id: string, req: UpdateAgentRequest) => Promise<void>;
   onDeleteAgent: (id: string) => void;
   onOpenAgentThread: (agentId: string) => void;
-  onCreateConversation: (req: CreateConversationRequest) => void;
-  onDeleteConversation: (id: string) => void;
 };
 
 function formatRelativeTime(ts: number): string {
@@ -82,17 +77,13 @@ function StatusDot({ status }: { status: MachineInfo["status"] }) {
 export function Sidebar({
   machines, agents, conversations, selectedId,
   selectedView,
-  onSelect, onCreateMachine, onDeleteMachine,
+  onCreateMachine, onDeleteMachine,
   onOpenSessions,
   onCreateAgent, onUpdateAgent, onDeleteAgent,
   onOpenAgentThread,
-  onCreateConversation, onDeleteConversation,
 }: SidebarProps) {
   const [expandedMachines, setExpandedMachines] = useState<Set<string>>(
     () => readStoredSet(EXPANDED_MACHINES_STORAGE_KEY),
-  );
-  const [expandedAgents, setExpandedAgents] = useState<Set<string>>(
-    () => readStoredSet(EXPANDED_AGENTS_STORAGE_KEY),
   );
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [showCreateMachine, setShowCreateMachine] = useState(false);
@@ -113,15 +104,6 @@ export function Sidebar({
     });
   };
 
-  const toggleAgent = (agentId: string) => {
-    setExpandedAgents((prev) => {
-      const next = new Set(prev);
-      next.has(agentId) ? next.delete(agentId) : next.add(agentId);
-      writeStoredSet(EXPANDED_AGENTS_STORAGE_KEY, next);
-      return next;
-    });
-  };
-
   const handleCreateAgent = useCallback(() => {
     if (!newAgentName.trim() || !createAgentInMachine) return;
     onCreateAgent({
@@ -136,20 +118,6 @@ export function Sidebar({
     setNewAgentSystemPrompt(defaultSystemPrompt);
     setNewAgentEnvVars(undefined);
   }, [newAgentName, newAgentType, newAgentSystemPrompt, newAgentEnvVars, createAgentInMachine, onCreateAgent]);
-
-  const handleCreateConversation = useCallback((agentId: string) => {
-    const agent = agents.find((a) => a.agentId === agentId);
-    if (!agent) return;
-    onCreateConversation({
-      agentId,
-      agentType: agent.agentType,
-      channelId: agent.channelId,
-      threadKind: "branch",
-      isPrimaryThread: false,
-      nodeId: agent.nodeId ?? undefined,
-      workspacePath: agent.workspacePath ?? undefined,
-    });
-  }, [agents, onCreateConversation]);
 
   const openCreateAgentForm = (nodeId: string, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -172,13 +140,6 @@ export function Sidebar({
 
     const selectedAgent = agents.find((agent) => agent.agentId === selectedConversation.agentId);
     if (!selectedAgent) return;
-
-    setExpandedAgents((prev) => {
-      if (prev.has(selectedAgent.agentId)) return prev;
-      const next = new Set(prev).add(selectedAgent.agentId);
-      writeStoredSet(EXPANDED_AGENTS_STORAGE_KEY, next);
-      return next;
-    });
 
     if (selectedAgent.nodeId) {
       setExpandedMachines((prev) => {
@@ -240,6 +201,10 @@ export function Sidebar({
           {machines.map((machine) => {
             const machineAgents = agents.filter((a) => a.nodeId === machine.nodeId);
             const isExpanded = expandedMachines.has(machine.nodeId);
+            const selectedConversation = selectedId
+              ? conversations.find((conversation) => conversation.id === selectedId)
+              : null;
+            const selectedAgentId = selectedConversation?.agentId ?? null;
 
             return (
               <div key={machine.nodeId}>
@@ -351,23 +316,18 @@ export function Sidebar({
                     )}
 
                     {machineAgents.map((agent) => {
-                      const agentConvs = conversations
-                        .filter((c) => c.agentId === agent.agentId)
-                        .sort((a, b) => {
-                          if (a.isPrimaryThread !== b.isPrimaryThread) return a.isPrimaryThread ? -1 : 1;
-                          return b.updatedAt - a.updatedAt;
-                        });
-                      const isAgentExpanded = expandedAgents.has(agent.agentId);
                       const isEditing = editingAgentId === agent.agentId;
+                      const primaryConversation = conversations.find(
+                        (conversation) => conversation.agentId === agent.agentId && conversation.isPrimaryThread,
+                      );
 
                       return (
                         <div key={agent.agentId}>
                           <AgentRow
                             agent={agent}
-                            conversationCount={agentConvs.length}
-                            isExpanded={isAgentExpanded}
                             isEditing={isEditing}
-                            onToggle={() => toggleAgent(agent.agentId)}
+                            isSelected={selectedAgentId === agent.agentId}
+                            updatedAt={primaryConversation?.updatedAt ?? agent.updatedAt}
                             onOpen={() => onOpenAgentThread(agent.agentId)}
                             onEdit={() => setEditingAgentId(isEditing ? null : agent.agentId)}
                             onDelete={() => onDeleteAgent(agent.agentId)}
@@ -379,32 +339,6 @@ export function Sidebar({
                               onUpdate={(req) => onUpdateAgent(agent.agentId, req)}
                               onClose={() => setEditingAgentId(null)}
                             />
-                          )}
-
-                          {isAgentExpanded && (
-                            <div className="ml-3 flex flex-col gap-0.5 mt-0.5">
-                              {agentConvs.map((conv) => (
-                                <ConversationItem
-                                  key={conv.id}
-                                  conversation={conv}
-                                  isSelected={conv.id === selectedId}
-                                  onSelect={onSelect}
-                                  onDelete={onDeleteConversation}
-                                />
-                              ))}
-                              {agentConvs.length === 0 && (
-                                <p className="text-[10px] text-muted-foreground px-2 py-1">
-                                  No threads yet
-                                </p>
-                              )}
-                              <button
-                                type="button"
-                                className="text-left text-[10px] text-muted-foreground px-2 py-0.5 rounded hover:bg-accent/50 cursor-pointer"
-                                onClick={() => handleCreateConversation(agent.agentId)}
-                              >
-                                + New Thread
-                              </button>
-                            </div>
                           )}
                         </div>
                       );
@@ -424,16 +358,15 @@ export function Sidebar({
 
 type AgentRowProps = {
   agent: AgentInfo;
-  conversationCount: number;
-  isExpanded: boolean;
   isEditing: boolean;
-  onToggle: () => void;
+  isSelected: boolean;
+  updatedAt: number;
   onOpen: () => void;
   onEdit: () => void;
   onDelete: () => void;
 };
 
-function AgentRow({ agent, conversationCount, isExpanded, isEditing, onToggle, onOpen, onEdit, onDelete }: AgentRowProps) {
+function AgentRow({ agent, isEditing, isSelected, updatedAt, onOpen, onEdit, onDelete }: AgentRowProps) {
   const [confirmDelete, setConfirmDelete] = useState(false);
 
   const handleDelete = (e: React.MouseEvent) => {
@@ -447,31 +380,22 @@ function AgentRow({ agent, conversationCount, isExpanded, isEditing, onToggle, o
   };
 
   return (
-    <div className="group flex items-center gap-1.5 rounded px-2 py-1.5 hover:bg-accent/50">
-      <button
-        type="button"
-        className="shrink-0 cursor-pointer"
-        onClick={onToggle}
-        title={isExpanded ? "Collapse threads" : "Expand threads"}
-      >
-        {isExpanded
-          ? <ChevronDownIcon className="size-3 text-muted-foreground" />
-          : <ChevronRightIcon className="size-3 text-muted-foreground" />
-        }
-      </button>
+    <div className={cn(
+      "group flex items-center gap-1.5 rounded px-2 py-1.5",
+      isSelected ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
+    )}>
       <button
         type="button"
         className="flex min-w-0 flex-1 items-center gap-1.5 text-left cursor-pointer"
         onClick={onOpen}
-        title="Open main thread"
+        title="Open private chat"
       >
-        <span className="min-w-0 flex-1 truncate text-xs font-medium">{agent.name}</span>
-        <Badge variant="secondary" className="text-[9px] px-1 py-0">
-          {agent.agentType === "claude_acp" ? "Claude" : "Codex"}
-        </Badge>
-        {conversationCount > 0 && (
-          <span className="text-[10px] text-muted-foreground">{conversationCount}</span>
-        )}
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-xs font-medium">{agent.name}</div>
+          <div className="text-[10px] text-muted-foreground">
+            {formatRelativeTime(updatedAt)}
+          </div>
+        </div>
       </button>
       <div className="flex items-center gap-1 shrink-0">
         <button
@@ -498,72 +422,5 @@ function AgentRow({ agent, conversationCount, isExpanded, isEditing, onToggle, o
         </button>
       </div>
     </div>
-  );
-}
-
-// ─── ConversationItem ───
-
-type ConversationItemProps = {
-  conversation: ConversationInfo;
-  isSelected: boolean;
-  onSelect: (id: string) => void;
-  onDelete: (id: string) => void;
-};
-
-function ConversationItem({ conversation, isSelected, onSelect, onDelete }: ConversationItemProps) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
-
-  const handleDelete = useCallback((e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (confirmDelete) {
-      onDelete(conversation.id);
-      setConfirmDelete(false);
-    } else {
-      setConfirmDelete(true);
-      setTimeout(() => setConfirmDelete(false), 3000);
-    }
-  }, [confirmDelete, conversation.id, onDelete]);
-
-  return (
-    <button
-      type="button"
-      className={cn(
-        "group flex w-full items-center gap-1.5 rounded px-2 py-1 text-left cursor-pointer transition-colors",
-        isSelected ? "bg-accent text-accent-foreground" : "hover:bg-accent/50",
-      )}
-      onClick={() => onSelect(conversation.id)}
-    >
-      <div className="flex-1 min-w-0">
-        <div className="flex items-center gap-1">
-          <span className="truncate text-xs">
-            {conversation.title || "Untitled"}
-          </span>
-          {conversation.isPrimaryThread && (
-            <Badge variant="outline" className="px-1 py-0 text-[8px] uppercase tracking-wide">
-              Main
-            </Badge>
-          )}
-        </div>
-        <div className="flex items-center gap-1.5">
-          <span className="text-[10px] text-muted-foreground">
-            {formatRelativeTime(conversation.updatedAt)}
-          </span>
-          <span className="font-mono text-[9px] text-muted-foreground/50" title={conversation.id}>
-            {conversation.id.slice(0, 8)}
-          </span>
-        </div>
-      </div>
-      <button
-        type="button"
-        className={cn(
-          "shrink-0 p-0.5 rounded opacity-0 group-hover:opacity-100 cursor-pointer",
-          confirmDelete ? "opacity-100 text-destructive" : "text-muted-foreground hover:text-destructive",
-        )}
-        onClick={handleDelete}
-        title={confirmDelete ? "Click again to confirm" : "Delete"}
-      >
-        <TrashIcon className="size-3" />
-      </button>
-    </button>
   );
 }

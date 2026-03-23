@@ -11,7 +11,6 @@ import {
   ResizableHandle,
 } from "@/components/ui/resizable";
 import type {
-  CreateConversationRequest,
   CreateAgentRequest,
   UpdateAgentRequest,
 } from "@agent-collab/protocol";
@@ -22,9 +21,7 @@ export function App() {
     conversations,
     selectedId,
     loading,
-    createConversation,
     openAgentThread,
-    deleteConversation,
     selectConversation,
   } = useConversations();
 
@@ -64,27 +61,12 @@ export function App() {
     [deleteAgent],
   );
 
-  const handleCreateConversation = useCallback(
-    (req: CreateConversationRequest) => {
-      createConversation(req);
-      setViewMode("chat");
-    },
-    [createConversation],
-  );
-
   const handleOpenAgentThread = useCallback(
     (agentId: string) => {
       openAgentThread(agentId);
       setViewMode("chat");
     },
     [openAgentThread],
-  );
-
-  const handleDeleteConversation = useCallback(
-    (id: string) => {
-      deleteConversation(id);
-    },
-    [deleteConversation],
   );
 
   const handleSelectConversation = useCallback(
@@ -115,7 +97,6 @@ export function App() {
             conversations={conversations}
             selectedId={selectedId}
             selectedView={viewMode}
-            onSelect={handleSelectConversation}
             onOpenSessions={handleOpenSessions}
             onCreateMachine={createMachine}
             onDeleteMachine={deleteMachine}
@@ -123,8 +104,6 @@ export function App() {
             onUpdateAgent={handleUpdateAgent}
             onDeleteAgent={handleDeleteAgent}
             onOpenAgentThread={handleOpenAgentThread}
-            onCreateConversation={handleCreateConversation}
-            onDeleteConversation={handleDeleteConversation}
           />
         </ResizablePanel>
 
