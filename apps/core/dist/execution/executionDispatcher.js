@@ -36,16 +36,32 @@ export class ExecutionDispatcher {
         let contextText = '';
         let agentEnvVars;
         let disabledToolKinds;
+        let useNotificationPrompt = false;
         if (row.agentId) {
             const agent = this.getAgentById(row.agentId);
             if (agent) {
                 agentEnvVars = agent.envVars;
                 disabledToolKinds = agent.disabledToolKinds;
                 contextText = await buildAgentContextText({
-                    systemPrompt: agent.systemPrompt,
+                    agentName: agent.name,
+                    agentDescription: agent.systemPrompt || undefined,
                     agentType: agent.agentType,
                     workspacePath: row.workspacePath ?? this.config.workspaceRoot,
                 });
+                // Write user message to channel_messages so agent can read via check_messages
+                const dmChannelId = `dm:${row.agentId}`;
+                const msgSeq = (() => {
+                    const r = this.db
+                        .prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?')
+                        .get(dmChannelId);
+                    return (r.maxSeq ?? 0) + 1;
+                })();
+                this.db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+           VALUES(?, ?, 'user', 'User', 'user', ?, ?, ?, ?)`).run(randomUUID(), dmChannelId, `dm:@${agent.name}`, promptText, msgSeq, Date.now());
+                // Ensure agent has a checkpoint for this DM channel so check_messages returns the message
+                this.db.prepare(`INSERT OR IGNORE INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
+           VALUES(?, ?, 0)`).run(row.agentId, dmChannelId);
+                useNotificationPrompt = true;
             }
         }
         log.info('[dispatcher] dispatching prompt', {
@@ -55,6 +71,14 @@ export class ExecutionDispatcher {
             dispatchMode,
             hostKey,
         });
+        let channelBridgeConfig;
+        if (row.agentId) {
+            const cbHost = this.config.webHost === '0.0.0.0' ? '127.0.0.1' : this.config.webHost;
+            channelBridgeConfig = {
+                agentId: row.agentId,
+                serverUrl: `http://${cbHost}:${this.config.webPort}`,
+            };
+        }
         const sent = this.nodeRegistry.send(row.nodeId, {
             type: 'run.dispatch',
             runId,
@@ -67,11 +91,14 @@ export class ExecutionDispatcher {
                 ...(driver.defaultEnv ?? {}),
             },
             disabledToolKinds,
-            prompt: promptText,
+            prompt: useNotificationPrompt
+                ? '[System notification: You have 1 new message(s) waiting. Call check_messages to read them when you\'re ready.]'
+                : promptText,
             sessionKey: row.sessionKey,
             hostKey,
             dispatchMode,
             contextText: contextText || undefined,
+            channelBridgeConfig,
         });
         if (!sent) {
             finishRun(this.db, { runId, error: 'Node disconnected during dispatch' });

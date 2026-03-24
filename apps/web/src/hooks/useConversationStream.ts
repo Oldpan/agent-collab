@@ -7,6 +7,8 @@ const createId = () => `msg-${nextId++}`;
 
 type UseConversationStreamOptions = {
   conversationId: string | null;
+  /** When set (agent conversation), use channel-based message model instead of ACP streaming */
+  conversationAgentId?: string | null;
 };
 
 type UseConversationStreamReturn = {
@@ -26,7 +28,8 @@ type UseConversationStreamReturn = {
 export function useConversationStream(
   options: UseConversationStreamOptions,
 ): UseConversationStreamReturn {
-  const { conversationId } = options;
+  const { conversationId, conversationAgentId } = options;
+  const isChannelMode = Boolean(conversationAgentId);
 
   const [messages, setMessages] = useState<LiveMessage[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
@@ -83,7 +86,38 @@ export function useConversationStream(
       }
 
       switch (event.type) {
+        case "channel.message": {
+          // Channel-based message: agent responded via send_message MCP
+          const { id, senderName, senderType, content, createdAt } = event.message;
+          const role = senderType === "user" ? "user" : "assistant";
+          const toolCalls = role === "assistant" ? [...currentToolCallsRef.current] : undefined;
+          currentToolCallsRef.current = [];
+          currentMsgIdRef.current = null;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id,
+              role,
+              text: content,
+              createdAt: new Date(createdAt).getTime(),
+              isStreaming: false,
+              toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
+            },
+          ]);
+          break;
+        }
+
         case "turn.begin": {
+          if (isChannelMode) {
+            // Channel mode: don't create a message bubble — just reset accumulators.
+            // The message will be created when channel.message arrives.
+            textRef.current = "";
+            thinkingRef.current = "";
+            currentToolCallsRef.current = [];
+            currentMsgIdRef.current = null;
+            setStatus("streaming");
+            break;
+          }
           // Start a new assistant message
           const id = createId();
           currentMsgIdRef.current = id;
@@ -239,6 +273,25 @@ export function useConversationStream(
       return;
     }
 
+    // Channel mode: load history from REST endpoint before opening WS
+    if (isChannelMode) {
+      fetch(`/api/conversations/${conversationId}/channel-messages?limit=100`)
+        .then((r) => r.json())
+        .then((data: { messages?: Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: string }> }) => {
+          if (!data.messages) return;
+          setMessages(
+            data.messages.map((m) => ({
+              id: m.id,
+              role: m.senderType === "user" ? "user" : "assistant",
+              text: m.content,
+              createdAt: new Date(m.createdAt).getTime(),
+              isStreaming: false,
+            })),
+          );
+        })
+        .catch(() => {/* ignore */});
+    }
+
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const wsUrl = `${protocol}//${window.location.host}/api/conversations/${conversationId}/stream`;
     const ws = new WebSocket(wsUrl);
@@ -278,7 +331,7 @@ export function useConversationStream(
         wsRef.current = null;
       }
     };
-  }, [conversationId, finalizeCurrentToolCalls, processEvent]);
+  }, [conversationId, isChannelMode, finalizeCurrentToolCalls, processEvent]);
 
   // Send helpers
   const sendEvent = useCallback((event: ClientEvent) => {

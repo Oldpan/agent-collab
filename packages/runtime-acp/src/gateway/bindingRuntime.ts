@@ -305,6 +305,22 @@ export class BindingRuntime {
             }
           }
 
+          // Auto-allow MCP tool calls (toolKind is null for MCP/unknown tool kinds)
+          if (!toolKind) {
+            const option = req.params.options.find(
+              (o) => o.kind === 'allow_always' || o.kind === 'allow_once',
+            );
+            if (option) {
+              void this.client.respondPermission(req, {
+                kind: 'selected',
+                optionId: option.optionId,
+              });
+              this.pendingPermission = null;
+              this.pendingPermissionActorUserId = null;
+              return;
+            }
+          }
+
           const title =
             req.params.toolCall?.title ??
             req.params.toolCall?.toolCallId ??

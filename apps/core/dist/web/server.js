@@ -4,6 +4,7 @@ import fastifyWebSocket from '@fastify/websocket';
 import { log } from '@agent-collab/runtime-acp';
 import { handleWebSocket, broadcast } from './wsHandler.js';
 import { handleNodeWebSocket } from './nodeWsHandler.js';
+import { registerInternalAgentRoutes } from './internalAgentRouter.js';
 import { NodeRegistry } from '../services/nodeRegistry.js';
 import { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/agentWorkspaceService.js';
@@ -188,6 +189,34 @@ export async function startServer(params) {
             .all(sessionRow.sessionKey);
         return runs;
     });
+    // Channel message history for a conversation (used by frontend to load DM history)
+    app.get('/api/conversations/:id/channel-messages', async (req, reply) => {
+        const conv = conversationManager.getConversation(req.params.id);
+        if (!conv) {
+            reply.code(404);
+            return { error: 'Not found' };
+        }
+        if (!conv.agentId) {
+            return { messages: [] };
+        }
+        const limit = Math.min(Number(req.query.limit ?? 50), 200);
+        const dmChannelId = `dm:${conv.agentId}`;
+        const rows = db
+            .prepare(`SELECT message_id as id, sender_name as senderName, sender_type as senderType,
+                  content, created_at as createdAt
+           FROM channel_messages
+           WHERE channel_id = ?
+           ORDER BY seq DESC LIMIT ?`)
+            .all(dmChannelId, limit);
+        const messages = rows.reverse().map((r) => ({
+            id: r.id,
+            senderName: r.senderName,
+            senderType: r.senderType,
+            content: r.content,
+            createdAt: new Date(r.createdAt).toISOString(),
+        }));
+        return { messages };
+    });
     // ─── Channel routes ───
     // List all channels
     app.get('/api/channels', async () => {
@@ -254,6 +283,16 @@ export async function startServer(params) {
         reply.code(204);
         return;
     });
+    // ─── Internal agent routes (used by channel-bridge MCP server) ───
+    function broadcastToAgent(agentId, event) {
+        const rows = db
+            .prepare('SELECT id FROM conversations WHERE agent_id = ?')
+            .all(agentId);
+        for (const row of rows) {
+            broadcast(row.id, event);
+        }
+    }
+    registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent);
     // ─── Node REST routes ───
     // List connected agent nodes (in-memory only, for backward compat)
     app.get('/api/nodes', async () => {

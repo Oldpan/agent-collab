@@ -220,6 +220,50 @@ export async function startServer(params: {
     return runs;
   });
 
+  // Channel message history for a conversation (used by frontend to load DM history)
+  app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
+    '/api/conversations/:id/channel-messages',
+    async (req, reply) => {
+      const conv = conversationManager.getConversation(req.params.id);
+      if (!conv) {
+        reply.code(404);
+        return { error: 'Not found' };
+      }
+      if (!conv.agentId) {
+        return { messages: [] };
+      }
+
+      const limit = Math.min(Number(req.query.limit ?? 50), 200);
+      const dmChannelId = `dm:${conv.agentId}`;
+
+      const rows = db
+        .prepare(
+          `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
+                  content, created_at as createdAt
+           FROM channel_messages
+           WHERE channel_id = ?
+           ORDER BY seq DESC LIMIT ?`,
+        )
+        .all(dmChannelId, limit) as Array<{
+        id: string;
+        senderName: string;
+        senderType: string;
+        content: string;
+        createdAt: number;
+      }>;
+
+      const messages = rows.reverse().map((r) => ({
+        id: r.id,
+        senderName: r.senderName,
+        senderType: r.senderType as 'user' | 'agent',
+        content: r.content,
+        createdAt: new Date(r.createdAt).toISOString(),
+      }));
+
+      return { messages };
+    },
+  );
+
   // ─── Channel routes ───
 
   // List all channels
@@ -290,7 +334,16 @@ export async function startServer(params: {
 
   // ─── Internal agent routes (used by channel-bridge MCP server) ───
 
-  registerInternalAgentRoutes(app, db, conversationManager);
+  function broadcastToAgent(agentId: string, event: import('@agent-collab/protocol').ServerEvent): void {
+    const rows = db
+      .prepare('SELECT id FROM conversations WHERE agent_id = ?')
+      .all(agentId) as Array<{ id: string }>;
+    for (const row of rows) {
+      broadcast(row.id, event);
+    }
+  }
+
+  registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent);
 
   // ─── Node REST routes ───
 

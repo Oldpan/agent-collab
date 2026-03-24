@@ -125,6 +125,17 @@ export type HistoryUserMessageEvent = {
   text: string;
 };
 
+export type ChannelMessageEvent = {
+  type: 'channel.message';
+  message: {
+    id: string;
+    senderName: string;
+    senderType: 'user' | 'agent';
+    content: string;
+    createdAt: string;
+  };
+};
+
 export type ServerEvent =
   | ConversationStatusEvent
   | TurnBeginEvent
@@ -137,7 +148,8 @@ export type ServerEvent =
   | ErrorEvent
   | HistoryCompleteEvent
   | HistoryResetEvent
-  | HistoryUserMessageEvent;
+  | HistoryUserMessageEvent
+  | ChannelMessageEvent;
 
 // ─── 客户端 → 服务端 事件 ───
 

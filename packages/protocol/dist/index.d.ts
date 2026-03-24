@@ -70,7 +70,17 @@ export type HistoryUserMessageEvent = {
     type: 'history.user_message';
     text: string;
 };
-export type ServerEvent = ConversationStatusEvent | TurnBeginEvent | TurnEndEvent | ContentDeltaEvent | ThinkingDeltaEvent | ToolCallEvent | ToolResultEvent | ApprovalRequestEvent | ErrorEvent | HistoryCompleteEvent | HistoryResetEvent | HistoryUserMessageEvent;
+export type ChannelMessageEvent = {
+    type: 'channel.message';
+    message: {
+        id: string;
+        senderName: string;
+        senderType: 'user' | 'agent';
+        content: string;
+        createdAt: string;
+    };
+};
+export type ServerEvent = ConversationStatusEvent | TurnBeginEvent | TurnEndEvent | ContentDeltaEvent | ThinkingDeltaEvent | ToolCallEvent | ToolResultEvent | ApprovalRequestEvent | ErrorEvent | HistoryCompleteEvent | HistoryResetEvent | HistoryUserMessageEvent | ChannelMessageEvent;
 export type FileRef = {
     uri: string;
     mimeType?: string;

@@ -69,7 +69,10 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
     sendPrompt,
     respondApproval,
     cancel,
-  } = useConversationStream({ conversationId: conversation.id });
+  } = useConversationStream({
+    conversationId: conversation.id,
+    conversationAgentId: conversation.agentId,
+  });
 
   const displayStatus =
     status === "submitted" || status === "streaming"

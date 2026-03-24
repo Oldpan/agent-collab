@@ -64,6 +64,7 @@ export class ExecutionDispatcher {
     let contextText = '';
     let agentEnvVars: Record<string, string> | undefined;
     let disabledToolKinds: AgentInfo['disabledToolKinds'];
+    let useNotificationPrompt = false;
     if (row.agentId) {
       const agent = this.getAgentById(row.agentId);
       if (agent) {
@@ -75,6 +76,29 @@ export class ExecutionDispatcher {
           agentType: agent.agentType,
           workspacePath: row.workspacePath ?? this.config.workspaceRoot,
         });
+
+        // Write user message to channel_messages so agent can read via check_messages
+        const dmChannelId = `dm:${row.agentId}`;
+        const msgSeq = (() => {
+          const r = this.db
+            .prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?')
+            .get(dmChannelId) as { maxSeq: number | null };
+          return (r.maxSeq ?? 0) + 1;
+        })();
+        this.db.prepare(
+          `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+           VALUES(?, ?, 'user', 'User', 'user', ?, ?, ?, ?)`,
+        ).run(randomUUID(), dmChannelId, `dm:@${agent.name}`, promptText, msgSeq, Date.now());
+
+        // Ensure agent checkpoint is at most msgSeq-1 so check_messages returns the new message.
+        // Use MIN to never advance the checkpoint past what the agent has already read.
+        this.db.prepare(
+          `INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
+           VALUES(?, ?, ?)
+           ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`,
+        ).run(row.agentId, dmChannelId, msgSeq - 1);
+
+        useNotificationPrompt = true;
       }
     }
 
@@ -107,7 +131,9 @@ export class ExecutionDispatcher {
         ...(driver.defaultEnv ?? {}),
       },
       disabledToolKinds,
-      prompt: promptText,
+      prompt: useNotificationPrompt
+        ? '[System notification: You have 1 new message(s) waiting. Call check_messages to read them when you\'re ready.]'
+        : promptText,
       sessionKey: row.sessionKey,
       hostKey,
       dispatchMode,

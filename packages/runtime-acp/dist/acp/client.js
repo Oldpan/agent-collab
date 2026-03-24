@@ -6,7 +6,7 @@ import { log } from '../logging.js';
 import { resolveWorkspacePath } from '../tools/workspace.js';
 import { isNotification, isRequest, isResponse, } from './jsonrpc.js';
 import { spawnAcpAgent } from './stdio.js';
-const ACP_BOOTSTRAP_TIMEOUT_MS = 30_000;
+const ACP_BOOTSTRAP_TIMEOUT_MS = 60_000;
 export class AcpClient {
     db;
     workspaceRoot;

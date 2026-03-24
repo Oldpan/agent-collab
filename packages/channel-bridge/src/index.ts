@@ -107,7 +107,11 @@ server.tool(
       if (!ok) return toText(`Error: ${errText(data, 'receive failed')}`);
       const d = data as { messages?: unknown[] };
       if (d.messages && d.messages.length > 0) {
-        return toText(formatMessages(d.messages as MessageItem[]));
+        const formatted = formatMessages(d.messages as MessageItem[]);
+        return toText(
+          formatted +
+          '\n\n--- IMPORTANT: You MUST reply using mcp__chat__send_message(target="<target from above>", content="..."). Do NOT output text directly. ---',
+        );
       }
       return toText('No new messages.');
     } catch (err: unknown) {

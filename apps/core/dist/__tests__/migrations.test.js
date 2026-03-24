@@ -17,10 +17,10 @@ describe('migrations', () => {
         expect(colNames).toContain('updated_at');
         db.close();
     });
-    it('schema_version 应为最新版本 17', () => {
+    it('schema_version 应为最新版本 20', () => {
         const db = createTestDb();
         const row = db.prepare('SELECT version FROM schema_version').get();
-        expect(row.version).toBe(17);
+        expect(row.version).toBe(20);
         db.close();
     });
     it('nodes 表应包含 display_name, env_var_keys, provisioned_at 列', () => {
@@ -80,6 +80,9 @@ describe('migrations', () => {
         expect(tableNames).toContain('agents');
         expect(tableNames).toContain('node_dispatch_queue');
         expect(tableNames).toContain('conversation_prompt_queue');
+        expect(tableNames).toContain('channel_messages');
+        expect(tableNames).toContain('tasks');
+        expect(tableNames).toContain('agent_message_checkpoints');
         db.close();
     });
 });

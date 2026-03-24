@@ -6,6 +6,9 @@ export function spawnAcpAgent(command, args, env) {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: {
             ...process.env,
+            // Unset vars that would prevent Claude Code from starting inside an existing Claude session
+            CLAUDECODE: undefined,
+            CLAUDE_CODE_ENTRYPOINT: undefined,
             ...env,
         },
     });

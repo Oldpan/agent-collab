@@ -33,6 +33,7 @@ export class AgentHost {
             agentArgs: params.agentArgs,
             env: params.env,
             disabledToolKinds: params.disabledToolKinds,
+            channelBridgeMcpEntry: params.channelBridgeMcpEntry,
         });
     }
     getState() {

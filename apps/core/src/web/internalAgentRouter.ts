@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import type { Db } from '@agent-collab/runtime-acp';
+import type { ServerEvent } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
 
 type MessageRow = {
@@ -39,6 +40,7 @@ export function registerInternalAgentRoutes(
   app: FastifyInstance,
   db: Db,
   conversationManager: ConversationManager,
+  broadcastToAgent: (agentId: string, event: ServerEvent) => void,
 ): void {
   // ─── Messaging ───────────────────────────────────────────────────────────
 
@@ -64,7 +66,9 @@ export function registerInternalAgentRoutes(
       return { error: 'target and content are required' };
     }
 
-    const channelId = resolveChannelFromTarget(target, db);
+    // For DM targets that don't resolve to a known agent (e.g. dm:@User — a human),
+    // fall back to the sending agent's own DM channel so the reply is visible to frontend.
+    const channelId = resolveChannelFromTarget(target, db) ?? (target.startsWith('dm:') ? `dm:${agentId}` : null);
     if (!channelId) {
       reply.code(400);
       return { error: `Cannot resolve channel from target: ${target}` };
@@ -78,6 +82,17 @@ export function registerInternalAgentRoutes(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
        VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?)`,
     ).run(messageId, channelId, agentId, agent.name, target, content, seq, now);
+
+    broadcastToAgent(agentId, {
+      type: 'channel.message',
+      message: {
+        id: messageId,
+        senderName: agent.name,
+        senderType: 'agent',
+        content,
+        createdAt: new Date(now).toISOString(),
+      },
+    });
 
     return { messageId, seq };
   });
@@ -96,37 +111,46 @@ export function registerInternalAgentRoutes(
         return { error: 'Agent not found' };
       }
 
-      // Gather all channels the agent belongs to (via its channelId)
+      // Query both the agent's public channel and the user DM channel
       const agent = conversationManager.getAgent(agentId)!;
-      const channelId = agent.channelId;
+      const publicChannelId = agent.channelId;
+      const dmChannelId = `dm:${agentId}`;
+      const channelsToQuery = [publicChannelId, dmChannelId];
 
-      const checkpoint = (db
-        .prepare(
-          `SELECT last_seq as lastSeq FROM agent_message_checkpoints
-           WHERE agent_id = ? AND channel_id = ?`,
-        )
-        .get(agentId, channelId) as { lastSeq: number } | undefined)?.lastSeq ?? 0;
+      let allRows: MessageRow[] = [];
+      for (const channelId of channelsToQuery) {
+        const checkpoint = (db
+          .prepare(
+            `SELECT last_seq as lastSeq FROM agent_message_checkpoints
+             WHERE agent_id = ? AND channel_id = ?`,
+          )
+          .get(agentId, channelId) as { lastSeq: number } | undefined)?.lastSeq ?? 0;
 
-      const rows = db
-        .prepare(
-          `SELECT message_id as messageId, channel_id as channelId, sender_id as senderId,
-                  sender_name as senderName, sender_type as senderType,
-                  target, content, seq, created_at as createdAt
-           FROM channel_messages
-           WHERE channel_id = ? AND seq > ?
-           ORDER BY seq ASC
-           LIMIT 50`,
-        )
-        .all(channelId, checkpoint) as MessageRow[];
+        const rows = db
+          .prepare(
+            `SELECT message_id as messageId, channel_id as channelId, sender_id as senderId,
+                    sender_name as senderName, sender_type as senderType,
+                    target, content, seq, created_at as createdAt
+             FROM channel_messages
+             WHERE channel_id = ? AND seq > ? AND sender_id != ?
+             ORDER BY seq ASC
+             LIMIT 50`,
+          )
+          .all(channelId, checkpoint, agentId) as MessageRow[];
 
-      if (rows.length > 0) {
-        const maxSeq = rows[rows.length - 1].seq;
-        db.prepare(
-          `INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
-           VALUES(?, ?, ?)
-           ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = excluded.last_seq`,
-        ).run(agentId, channelId, maxSeq);
+        if (rows.length > 0) {
+          const maxSeq = rows[rows.length - 1].seq;
+          db.prepare(
+            `INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
+             VALUES(?, ?, ?)
+             ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = excluded.last_seq`,
+          ).run(agentId, channelId, maxSeq);
+        }
+        allRows = allRows.concat(rows);
       }
+
+      // Merge and sort by createdAt
+      const rows = allRows.sort((a, b) => a.createdAt - b.createdAt);
 
       const messages = rows.map((r) => ({
         message_id: r.messageId,
@@ -570,12 +594,18 @@ function resolveChannelFromTarget(target: string, db: Db): string | null {
     return row?.channelId ?? null;
   }
 
-  // "dm:@agentname" or "dm:@agentname:threadid" — use the default channel for DMs
+  // "dm:@agentname" or "dm:@agentname:threadid" — resolve to dm:{agentId} virtual channel
   if (target.startsWith('dm:')) {
-    const row = db
-      .prepare("SELECT channel_id as channelId FROM channels WHERE channel_id = 'default'")
-      .get() as { channelId: string } | undefined;
-    return row?.channelId ?? null;
+    const match = target.match(/^dm:@([^:]+)/);
+    if (match) {
+      const agentName = match[1];
+      const agentRow = db
+        .prepare('SELECT agent_id as agentId FROM agents WHERE name = ?')
+        .get(agentName) as { agentId: string } | undefined;
+      if (agentRow) return `dm:${agentRow.agentId}`;
+    }
+    // Non-agent DM target (e.g. dm:@User) — return null so the caller can fall back to dm:{agentId}
+    return null;
   }
 
   return null;

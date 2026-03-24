@@ -83,7 +83,9 @@ server.tool('check_messages', 'Check for new messages without waiting. Returns i
             return toText(`Error: ${errText(data, 'receive failed')}`);
         const d = data;
         if (d.messages && d.messages.length > 0) {
-            return toText(formatMessages(d.messages));
+            const formatted = formatMessages(d.messages);
+            return toText(formatted +
+                '\n\n--- IMPORTANT: You MUST reply using mcp__chat__send_message(target="<target from above>", content="..."). Do NOT output text directly. ---');
         }
         return toText('No new messages.');
     }

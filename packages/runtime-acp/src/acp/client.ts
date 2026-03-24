@@ -83,7 +83,7 @@ type PendingRequest = {
   timer: NodeJS.Timeout | null;
 };
 
-const ACP_BOOTSTRAP_TIMEOUT_MS = 30_000;
+const ACP_BOOTSTRAP_TIMEOUT_MS = 60_000;
 
 export class AcpClient {
   private readonly db: Db;
