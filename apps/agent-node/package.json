@@ -15,6 +15,7 @@
     "node": ">=18"
   },
   "dependencies": {
+    "@agent-collab/channel-bridge": "workspace:*",
     "@agent-collab/protocol": "workspace:*",
     "@agent-collab/runtime-acp": "workspace:*",
     "better-sqlite3": "^12.6.2",

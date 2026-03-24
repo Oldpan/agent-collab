@@ -1,9 +1,12 @@
+import { createRequire } from 'node:module';
+import path from 'node:path';
 import {
   ToolAuth,
   createSession,
   getSession,
   upsertBinding,
   log,
+  type McpServerEntry,
 } from '@agent-collab/runtime-acp';
 import type { Db } from '@agent-collab/runtime-acp';
 import { getRuntimeDriver, type RunDispatchMsg, type NodeToCore } from '@agent-collab/protocol';
@@ -15,7 +18,6 @@ import {
   removeDispatch,
   updateDispatchState,
 } from './dispatchQueueStore.js';
-import path from 'node:path';
 
 type SendFn = (msg: NodeToCore) => void;
 type HostInstance = Pick<
@@ -81,6 +83,23 @@ export class Executor {
       sessionKey,
     );
 
+    let channelBridgeMcpEntry: McpServerEntry | undefined;
+    if (msg.channelBridgeConfig) {
+      const { agentId, serverUrl, authToken } = msg.channelBridgeConfig;
+      try {
+        const req = createRequire(import.meta.url);
+        const binPath = req.resolve('@agent-collab/channel-bridge');
+        channelBridgeMcpEntry = {
+          name: 'chat',
+          command: 'node',
+          args: [binPath, '--agent-id', agentId, '--server-url', serverUrl],
+          env: authToken ? [{ name: 'CHANNEL_BRIDGE_AUTH_TOKEN', value: authToken }] : [],
+        };
+      } catch {
+        log.warn('[executor] channel-bridge package not found, skipping MCP injection');
+      }
+    }
+
     let host = this.hosts.get(runtimeKey);
     if (host?.getState() === 'failed') {
       log.warn('[executor] recreating failed host', {
@@ -106,6 +125,7 @@ export class Executor {
         agentArgs: driver.args,
         env: msg.envVars,
         disabledToolKinds: msg.disabledToolKinds,
+        channelBridgeMcpEntry,
         send: this.send,
         hooks: {
           onRunStart: (dispatchMsg) => {

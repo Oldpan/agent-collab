@@ -8,7 +8,7 @@ export interface RuntimeConfig {
   uiJsonMaxChars: number;
 }
 import { AcpClient, type PermissionRequest } from '../acp/client.js';
-import type { ContentBlock, InitializeResult } from '../acp/types.js';
+import type { ContentBlock, InitializeResult, McpServerEntry } from '../acp/types.js';
 import {
   SHARED_CHAT_SCOPE_USER_ID,
   clearAcpSessionId,
@@ -49,6 +49,8 @@ export class BindingRuntime {
   private readonly env?: Record<string, string>;
   private readonly disabledToolKinds: ToolKind[];
 
+  private readonly channelBridgeMcpEntry?: McpServerEntry;
+
   constructor(params: {
     db: Db;
     config: RuntimeConfig;
@@ -61,6 +63,7 @@ export class BindingRuntime {
     env?: Record<string, string>;
     disabledToolKinds?: ToolKind[];
     acpRpc?: import('../acp/stdio.js').StdioProcess;
+    channelBridgeMcpEntry?: McpServerEntry;
   }) {
     this.db = params.db;
     this.config = params.config;
@@ -72,6 +75,7 @@ export class BindingRuntime {
     this.agentArgs = params.agentArgs ?? this.config.acpAgentArgs;
     this.env = params.env;
     this.disabledToolKinds = params.disabledToolKinds ?? [];
+    this.channelBridgeMcpEntry = params.channelBridgeMcpEntry;
 
     this.client = new AcpClient({
       db: this.db,
@@ -373,14 +377,17 @@ export class BindingRuntime {
     return this.init;
   }
 
-  async ensureSessionId(): Promise<string> {
+  async ensureSessionId(systemPromptAppend?: string): Promise<string> {
     if (this.acpSessionId) return this.acpSessionId;
 
     await this.ensureInitialized();
 
     const newSession = await this.client.newSession({
       cwd: this.workspaceRoot,
-      mcpServers: [],
+      mcpServers: this.channelBridgeMcpEntry ? [this.channelBridgeMcpEntry] : [],
+      ...(systemPromptAppend?.trim() && {
+        _meta: { systemPrompt: { append: systemPromptAppend } },
+      }),
     });
 
     this.acpSessionId = newSession.sessionId;
@@ -569,7 +576,7 @@ export class BindingRuntime {
     actorUserId?: string;
   }): Promise<{ stopReason: string; lastSeq: number; isFreshSession: boolean }> {
     const isFreshSession = !this.acpSessionId;
-    const sessionId = await this.ensureSessionId();
+    const sessionId = await this.ensureSessionId(isFreshSession ? params.contextText : undefined);
 
     const run = {
       runId: params.runId,
@@ -578,10 +585,6 @@ export class BindingRuntime {
     };
 
     const blocks: ContentBlock[] = [];
-
-    if (isFreshSession && params.contextText?.trim()) {
-      blocks.push({ type: 'text', text: params.contextText });
-    }
 
     if (params.promptText.trim()) {
       blocks.push({ type: 'text', text: params.promptText });

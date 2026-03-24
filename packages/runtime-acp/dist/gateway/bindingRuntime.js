@@ -27,6 +27,7 @@ export class BindingRuntime {
     agentArgs;
     env;
     disabledToolKinds;
+    channelBridgeMcpEntry;
     constructor(params) {
         this.db = params.db;
         this.config = params.config;
@@ -38,6 +39,7 @@ export class BindingRuntime {
         this.agentArgs = params.agentArgs ?? this.config.acpAgentArgs;
         this.env = params.env;
         this.disabledToolKinds = params.disabledToolKinds ?? [];
+        this.channelBridgeMcpEntry = params.channelBridgeMcpEntry;
         this.client = new AcpClient({
             db: this.db,
             workspaceRoot: this.workspaceRoot,
@@ -288,13 +290,16 @@ export class BindingRuntime {
         });
         return this.init;
     }
-    async ensureSessionId() {
+    async ensureSessionId(systemPromptAppend) {
         if (this.acpSessionId)
             return this.acpSessionId;
         await this.ensureInitialized();
         const newSession = await this.client.newSession({
             cwd: this.workspaceRoot,
-            mcpServers: [],
+            mcpServers: this.channelBridgeMcpEntry ? [this.channelBridgeMcpEntry] : [],
+            ...(systemPromptAppend?.trim() && {
+                _meta: { systemPrompt: { append: systemPromptAppend } },
+            }),
         });
         this.acpSessionId = newSession.sessionId;
         updateAcpSessionId(this.db, this.sessionKey, this.acpSessionId);
@@ -432,16 +437,13 @@ export class BindingRuntime {
     }
     async promptOnce(params) {
         const isFreshSession = !this.acpSessionId;
-        const sessionId = await this.ensureSessionId();
+        const sessionId = await this.ensureSessionId(isFreshSession ? params.contextText : undefined);
         const run = {
             runId: params.runId,
             sessionKey: this.sessionKey,
             createdAtMs: Date.now(),
         };
         const blocks = [];
-        if (isFreshSession && params.contextText?.trim()) {
-            blocks.push({ type: 'text', text: params.contextText });
-        }
         if (params.promptText.trim()) {
             blocks.push({ type: 'text', text: params.promptText });
         }

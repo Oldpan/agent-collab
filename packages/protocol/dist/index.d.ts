@@ -181,6 +181,11 @@ export type RunDispatchMsg = {
     hostKey: string;
     dispatchMode: RuntimeDispatchMode;
     contextText?: string;
+    channelBridgeConfig?: {
+        agentId: string;
+        serverUrl: string;
+        authToken?: string;
+    };
 };
 export type RunCancelMsg = {
     type: 'run.cancel';

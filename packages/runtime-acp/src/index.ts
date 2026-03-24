@@ -23,6 +23,7 @@ export type {
   PromptResult,
   ContentBlock,
   RequestPermissionParams,
+  McpServerEntry,
 } from './acp/types.js';
 
 // Gateway / runtime layer

@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 17;
+const LATEST_VERSION = 20;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -395,5 +395,56 @@ export function migrate(db: Db): void {
       db.exec(`ALTER TABLE agents ADD COLUMN disabled_tool_kinds TEXT;`);
     }
     db.exec(`UPDATE schema_version SET version = 17;`);
+  }
+
+  if (current < 18) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS channel_messages (
+        message_id   TEXT PRIMARY KEY,
+        channel_id   TEXT NOT NULL,
+        sender_id    TEXT NOT NULL,
+        sender_name  TEXT NOT NULL,
+        sender_type  TEXT NOT NULL,
+        target       TEXT NOT NULL,
+        content      TEXT NOT NULL,
+        seq          INTEGER NOT NULL,
+        created_at   INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_channel_messages_channel ON channel_messages(channel_id, seq);
+      CREATE INDEX IF NOT EXISTS idx_channel_messages_target  ON channel_messages(target, seq);
+    `);
+    db.exec(`UPDATE schema_version SET version = 18;`);
+  }
+
+  if (current < 19) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS tasks (
+        task_id              TEXT PRIMARY KEY,
+        channel_id           TEXT NOT NULL,
+        task_number          INTEGER NOT NULL,
+        title                TEXT NOT NULL,
+        status               TEXT NOT NULL DEFAULT 'todo',
+        claimed_by_agent_id  TEXT,
+        claimed_by_name      TEXT,
+        created_by_agent_id  TEXT,
+        created_by_name      TEXT,
+        created_at           INTEGER NOT NULL,
+        updated_at           INTEGER NOT NULL,
+        UNIQUE(channel_id, task_number)
+      );
+    `);
+    db.exec(`UPDATE schema_version SET version = 19;`);
+  }
+
+  if (current < 20) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_message_checkpoints (
+        agent_id   TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        last_seq   INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (agent_id, channel_id)
+      );
+    `);
+    db.exec(`UPDATE schema_version SET version = 20;`);
   }
 }

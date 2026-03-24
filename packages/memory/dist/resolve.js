@@ -1,4 +1,5 @@
 import { WorkspaceMemoryBackend } from './workspace.js';
+import { buildAgentSystemPrompt } from './systemPrompt.js';
 export function resolveMemoryBackend(agentType, workspacePath) {
     void agentType;
     return new WorkspaceMemoryBackend(workspacePath);
@@ -16,16 +17,18 @@ function buildLocalMemoryGuide(workspacePath) {
 }
 /**
  * Builds the full context text to inject at the start of a fresh ACP session.
- * Combines: system prompt + local native memory (from filesystem).
- * Returns '' if all parts are empty.
+ * Combines: dynamic system prompt + local memory guide + local native memory (from filesystem).
+ *
+ * agentDescription is the agent's role description (previously stored as systemPrompt in DB).
+ * toolPrefix controls the MCP tool name prefix (default: 'mcp__chat__').
  */
 export async function buildAgentContextText(params) {
-    const { systemPrompt, agentType, workspacePath } = params;
+    const { agentName, agentDescription, agentType, workspacePath, toolPrefix = 'mcp__chat__' } = params;
+    const systemPrompt = buildAgentSystemPrompt({ name: agentName, description: agentDescription }, { toolPrefix, workspacePath, includeStdinNotification: true });
     const backend = resolveMemoryBackend(agentType, workspacePath);
     const nativeMemory = await backend.load();
     const parts = [];
-    if (systemPrompt.trim())
-        parts.push(`[System Prompt]\n${systemPrompt.trim()}`);
+    parts.push(`[System Prompt]\n${systemPrompt}`);
     parts.push(`[Local Memory Guide]\n${buildLocalMemoryGuide(workspacePath)}`);
     if (nativeMemory.trim())
         parts.push(`[Local Memory]\n${nativeMemory.trim()}`);

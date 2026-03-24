@@ -8,6 +8,7 @@ import type { CreateConversationRequest, CreateChannelRequest, CreateAgentReques
 import type { ConversationManager } from './conversationManager.js';
 import { handleWebSocket, broadcast } from './wsHandler.js';
 import { handleNodeWebSocket } from './nodeWsHandler.js';
+import { registerInternalAgentRoutes } from './internalAgentRouter.js';
 import { NodeRegistry } from '../services/nodeRegistry.js';
 import { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/agentWorkspaceService.js';
@@ -286,6 +287,10 @@ export async function startServer(params: {
     reply.code(204);
     return;
   });
+
+  // ─── Internal agent routes (used by channel-bridge MCP server) ───
+
+  registerInternalAgentRoutes(app, db, conversationManager);
 
   // ─── Node REST routes ───
 

@@ -4,7 +4,7 @@ export { spawnAcpAgent } from './acp/stdio.js';
 export type { StdioProcess } from './acp/stdio.js';
 export { isRequest, isResponse, isNotification, } from './acp/jsonrpc.js';
 export type { JsonRpcRequest, JsonRpcResponse, JsonRpcNotification, JsonRpcMessage, } from './acp/jsonrpc.js';
-export type { InitializeParams, InitializeResult, NewSessionParams, NewSessionResult, PromptParams, PromptResult, ContentBlock, RequestPermissionParams, } from './acp/types.js';
+export type { InitializeParams, InitializeResult, NewSessionParams, NewSessionResult, PromptParams, PromptResult, ContentBlock, RequestPermissionParams, McpServerEntry, } from './acp/types.js';
 export { BindingRuntime } from './gateway/bindingRuntime.js';
 export type { RuntimeConfig } from './gateway/bindingRuntime.js';
 export { createSession, createRun, finishRun, getSession, getBinding, upsertBinding, updateAcpSessionId, clearAcpSessionId, updateLoadSupported, bindingKeyFromConversationKey, SHARED_CHAT_SCOPE_USER_ID, } from './gateway/sessionStore.js';

@@ -132,7 +132,7 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.disabledToolKinds).toEqual(['execute', 'delete']);
   });
 
-  it('dispatchToNode 的 contextText 应明确 local memory 走工作区文件工具', async () => {
+  it('dispatchToNode 的 contextText 应包含动态 system prompt 和 local memory 指引', async () => {
     const agent = manager.createAgent({
       name: 'Memory Agent',
       agentType: 'claude_acp',
@@ -149,6 +149,15 @@ describe('ExecutionDispatcher', () => {
 
     const dispatch = sent[0]?.msg;
     if (!dispatch || dispatch.type !== 'run.dispatch') throw new Error('missing dispatch');
+    // Dynamic system prompt section
+    expect(dispatch.contextText).toContain('[System Prompt]');
+    expect(dispatch.contextText).toContain('"Memory Agent"');
+    expect(dispatch.contextText).toContain('mcp__chat__send_message');
+    expect(dispatch.contextText).toContain('mcp__chat__check_messages');
+    expect(dispatch.contextText).toContain('Compaction safety');
+    // description appended as initial role
+    expect(dispatch.contextText).toContain('Maintain memory carefully');
+    // Local memory guide section still present
     expect(dispatch.contextText).toContain('[Local Memory Guide]');
     expect(dispatch.contextText).toContain('Local memory is stored as ordinary workspace files');
     expect(dispatch.contextText).toContain('Do not use MCP resource-reading tools');

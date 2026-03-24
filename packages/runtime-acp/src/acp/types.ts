@@ -22,9 +22,16 @@ export type InitializeResult = {
   authMethods?: Array<{ id: string; name: string; description?: string }>;
 };
 
+export type McpServerEntry =
+  | { name: string; command: string; args: string[]; env?: Array<{ name: string; value: string }> }
+  | { name: string; type: string; url: string; headers?: Array<{ name: string; value: string }> };
+
 export type NewSessionParams = {
   cwd: string;
-  mcpServers: unknown[];
+  mcpServers: McpServerEntry[];
+  _meta?: {
+    systemPrompt?: string | { append: string };
+  };
 };
 
 export type NewSessionResult = {

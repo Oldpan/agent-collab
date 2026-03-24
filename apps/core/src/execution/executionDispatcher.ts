@@ -70,7 +70,8 @@ export class ExecutionDispatcher {
         agentEnvVars = agent.envVars;
         disabledToolKinds = agent.disabledToolKinds;
         contextText = await buildAgentContextText({
-          systemPrompt: agent.systemPrompt,
+          agentName: agent.name,
+          agentDescription: agent.systemPrompt || undefined,
           agentType: agent.agentType,
           workspacePath: row.workspacePath ?? this.config.workspaceRoot,
         });
@@ -84,6 +85,15 @@ export class ExecutionDispatcher {
       dispatchMode,
       hostKey,
     });
+
+    let channelBridgeConfig: { agentId: string; serverUrl: string } | undefined;
+    if (row.agentId) {
+      const cbHost = this.config.webHost === '0.0.0.0' ? '127.0.0.1' : this.config.webHost;
+      channelBridgeConfig = {
+        agentId: row.agentId,
+        serverUrl: `http://${cbHost}:${this.config.webPort}`,
+      };
+    }
 
     const sent = this.nodeRegistry!.send(row.nodeId, {
       type: 'run.dispatch',
@@ -102,6 +112,7 @@ export class ExecutionDispatcher {
       hostKey,
       dispatchMode,
       contextText: contextText || undefined,
+      channelBridgeConfig,
     });
 
     if (!sent) {

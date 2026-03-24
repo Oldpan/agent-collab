@@ -6,7 +6,7 @@ export interface RuntimeConfig {
     uiJsonMaxChars: number;
 }
 import { type PermissionRequest } from '../acp/client.js';
-import type { InitializeResult } from '../acp/types.js';
+import type { InitializeResult, McpServerEntry } from '../acp/types.js';
 import { ToolAuth, type ToolKind } from './toolAuth.js';
 export declare class BindingRuntime {
     private readonly db;
@@ -33,6 +33,7 @@ export declare class BindingRuntime {
     private readonly agentArgs;
     private readonly env?;
     private readonly disabledToolKinds;
+    private readonly channelBridgeMcpEntry?;
     constructor(params: {
         db: Db;
         config: RuntimeConfig;
@@ -45,12 +46,13 @@ export declare class BindingRuntime {
         env?: Record<string, string>;
         disabledToolKinds?: ToolKind[];
         acpRpc?: import('../acp/stdio.js').StdioProcess;
+        channelBridgeMcpEntry?: McpServerEntry;
     });
     close(): void;
     private enqueueSinkWrite;
     private flushSinkWriteQueue;
     ensureInitialized(): Promise<InitializeResult>;
-    ensureSessionId(): Promise<string>;
+    ensureSessionId(systemPromptAppend?: string): Promise<string>;
     getLoadSupported(): boolean;
     getPendingPermission(): PermissionRequest | null;
     selectPermissionOption(idx: number, sink: OutboundSink, actorUserId?: string): Promise<void>;
