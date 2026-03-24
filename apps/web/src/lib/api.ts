@@ -126,6 +126,28 @@ export async function openAgentThread(agentId: string): Promise<ConversationInfo
   return res.json();
 }
 
+export async function restartAgent(
+  agentId: string,
+): Promise<{ ok: boolean; conversations: ConversationInfo[] }> {
+  const res = await fetch(`${API_BASE}/agents/${agentId}/restart`, { method: "POST" });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to restart agent: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function clearAgentChat(
+  agentId: string,
+): Promise<{ ok: boolean; conversations: ConversationInfo[] }> {
+  const res = await fetch(`${API_BASE}/agents/${agentId}/clear-chat`, { method: "POST" });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to clear agent chat: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function resetAgent(
   agentId: string,
 ): Promise<{ ok: boolean; conversations: ConversationInfo[] }> {

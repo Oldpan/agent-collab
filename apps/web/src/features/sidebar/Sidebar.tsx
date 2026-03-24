@@ -47,6 +47,8 @@ type SidebarProps = {
   onDeleteMachine: (id: string) => void;
   onCreateAgent: (req: CreateAgentRequest) => void;
   onUpdateAgent: (id: string, req: UpdateAgentRequest) => Promise<void>;
+  onRestartAgent: (id: string) => Promise<void>;
+  onClearAgentChat: (id: string) => Promise<void>;
   onResetAgent: (id: string) => Promise<void>;
   onDeleteAgent: (id: string) => void;
   onOpenAgentThread: (agentId: string) => void;
@@ -82,7 +84,7 @@ export function Sidebar({
   onCreateMachine, onDeleteMachine,
   onOpenSessions,
   onCreateAgent, onUpdateAgent, onDeleteAgent,
-  onResetAgent,
+  onRestartAgent, onClearAgentChat, onResetAgent,
   onOpenAgentThread,
 }: SidebarProps) {
   const [expandedMachines, setExpandedMachines] = useState<Set<string>>(
@@ -356,6 +358,8 @@ export function Sidebar({
                             <AgentDetailPanel
                               agent={agent}
                               onUpdate={(req) => onUpdateAgent(agent.agentId, req)}
+                              onRestart={() => onRestartAgent(agent.agentId)}
+                              onClearChat={() => onClearAgentChat(agent.agentId)}
                               onReset={() => onResetAgent(agent.agentId)}
                               onClose={() => setEditingAgentId(null)}
                             />

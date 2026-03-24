@@ -1,6 +1,6 @@
 import { useState, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { XIcon, SaveIcon, RotateCcwIcon } from "lucide-react";
+import { XIcon, SaveIcon, RefreshCwIcon, MessageSquareOffIcon, Trash2Icon } from "lucide-react";
 import type { AgentInfo, UpdateAgentRequest } from "@agent-collab/protocol";
 import { cn } from "@/lib/utils";
 import { AgentEnvVarsEditor } from "./AgentEnvVarsEditor";
@@ -9,16 +9,18 @@ import { AgentPermissionSettings } from "./AgentPermissionSettings";
 type Props = {
   agent: AgentInfo;
   onUpdate: (req: UpdateAgentRequest) => Promise<void>;
+  onRestart: () => Promise<void>;
+  onClearChat: () => Promise<void>;
   onReset: () => Promise<void>;
   onClose: () => void;
 };
 
-export function AgentDetailPanel({ agent, onUpdate, onReset, onClose }: Props) {
+export function AgentDetailPanel({ agent, onUpdate, onRestart, onClearChat, onReset, onClose }: Props) {
   const [name, setName] = useState(agent.name);
   const [envVars, setEnvVars] = useState<Record<string, string> | undefined>(agent.envVars);
   const [disabledToolKinds, setDisabledToolKinds] = useState(agent.disabledToolKinds);
   const [saving, setSaving] = useState(false);
-  const [resetting, setResetting] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   const handleSave = useCallback(async () => {
     setSaving(true);
@@ -30,20 +32,51 @@ export function AgentDetailPanel({ agent, onUpdate, onReset, onClose }: Props) {
     }
   }, [disabledToolKinds, envVars, name, onUpdate, onClose]);
 
-  const handleReset = useCallback(async () => {
+  const handleRestart = useCallback(async () => {
     const confirmed = window.confirm(
-      `Reset ${agent.name}?\n\nThis will clear the agent workspace, remove chat history, and start the current private session from a clean state.`,
+      `Restart ${agent.name}?\n\nThe agent process will be restarted. All chat history and workspace files are preserved.`,
     );
     if (!confirmed) return;
+    setBusy(true);
+    try {
+      await onRestart();
+      onClose();
+    } catch (error) {
+      window.alert(String((error as Error)?.message ?? error));
+    } finally {
+      setBusy(false);
+    }
+  }, [agent.name, onClose, onRestart]);
 
-    setResetting(true);
+  const handleClearChat = useCallback(async () => {
+    const confirmed = window.confirm(
+      `Clear chat history for ${agent.name}?\n\nAll messages will be removed and the session will restart. Workspace files are preserved.`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      await onClearChat();
+      onClose();
+    } catch (error) {
+      window.alert(String((error as Error)?.message ?? error));
+    } finally {
+      setBusy(false);
+    }
+  }, [agent.name, onClose, onClearChat]);
+
+  const handleReset = useCallback(async () => {
+    const confirmed = window.confirm(
+      `Full reset of ${agent.name}?\n\nThis will clear ALL chat history AND delete all workspace files. This cannot be undone.`,
+    );
+    if (!confirmed) return;
+    setBusy(true);
     try {
       await onReset();
       onClose();
     } catch (error) {
       window.alert(String((error as Error)?.message ?? error));
     } finally {
-      setResetting(false);
+      setBusy(false);
     }
   }, [agent.name, onClose, onReset]);
 
@@ -55,22 +88,45 @@ export function AgentDetailPanel({ agent, onUpdate, onReset, onClose }: Props) {
     <div className="space-y-2 border-t border-black/10 bg-[#fff0ae] px-3 py-2">
       <div className="flex items-center justify-between">
         <span className="text-xs font-medium text-zinc-950">Edit Agent</span>
-        <div className="flex items-center gap-1">
-          <Button
-            size="sm"
-            variant="outline"
-            className="h-6 rounded-sm border-2 border-zinc-900 bg-[#ffd8d8] px-2 text-[10px] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#ffc6c6]"
-            onClick={handleReset}
-            disabled={saving || resetting}
-            title="Reset agent workspace and chat history"
-          >
-            <RotateCcwIcon className="mr-1 size-3" />
-            {resetting ? "Resetting..." : "Reset"}
-          </Button>
-          <Button size="icon-xs" variant="outline" className="rounded-sm border-2 border-zinc-900 bg-white hover:bg-[#fff1a9]" onClick={onClose}>
-            <XIcon className="size-3" />
-          </Button>
-        </div>
+        <Button size="icon-xs" variant="outline" className="rounded-sm border-2 border-zinc-900 bg-white hover:bg-[#fff1a9]" onClick={onClose}>
+          <XIcon className="size-3" />
+        </Button>
+      </div>
+
+      <div className="flex gap-1">
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 flex-1 rounded-sm border-2 border-zinc-900 bg-[#dff0ff] px-1.5 text-[10px] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#c5e4ff]"
+          onClick={handleRestart}
+          disabled={saving || busy}
+          title="Restart agent process, keep all data"
+        >
+          <RefreshCwIcon className="mr-1 size-3" />
+          Restart
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 flex-1 rounded-sm border-2 border-zinc-900 bg-[#fff0d0] px-1.5 text-[10px] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#ffe4b0]"
+          onClick={handleClearChat}
+          disabled={saving || busy}
+          title="Clear chat history, keep workspace files"
+        >
+          <MessageSquareOffIcon className="mr-1 size-3" />
+          Clear chat
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-6 flex-1 rounded-sm border-2 border-zinc-900 bg-[#ffd8d8] px-1.5 text-[10px] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#ffc6c6]"
+          onClick={handleReset}
+          disabled={saving || busy}
+          title="Full reset: clear chat history and workspace files"
+        >
+          <Trash2Icon className="mr-1 size-3" />
+          Full reset
+        </Button>
       </div>
 
       {/* Name */}

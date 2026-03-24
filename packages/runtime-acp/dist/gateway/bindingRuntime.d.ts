@@ -52,7 +52,7 @@ export declare class BindingRuntime {
     private enqueueSinkWrite;
     private flushSinkWriteQueue;
     ensureInitialized(): Promise<InitializeResult>;
-    ensureSessionId(systemPromptAppend?: string): Promise<string>;
+    ensureSessionId(): Promise<string>;
     getLoadSupported(): boolean;
     getPendingPermission(): PermissionRequest | null;
     selectPermissionOption(idx: number, sink: OutboundSink, actorUserId?: string): Promise<void>;

@@ -93,6 +93,42 @@ export async function startServer(params: {
     return thread;
   });
 
+  app.post<{ Params: { id: string } }>('/api/agents/:id/restart', async (req, reply) => {
+    const agent = conversationManager.getAgent(req.params.id);
+    if (!agent) { reply.code(404); return { error: 'Not found' }; }
+    if (!agent.nodeId) { reply.code(409); return { error: 'Agent is not assigned to a remote node.' }; }
+
+    const hostKeys = conversationManager.getAgentHostKeys(req.params.id);
+    for (const { nodeId, hostKey } of hostKeys) {
+      nodeRegistry.send(nodeId, { type: 'host.close', hostKey });
+    }
+
+    const conversations = conversationManager.listConversations({ agentId: req.params.id });
+    for (const conversation of conversations) {
+      broadcast(conversation.id, { type: 'conversation.status', conversationId: conversation.id, status: 'idle' });
+    }
+    return { ok: true, conversations };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/agents/:id/clear-chat', async (req, reply) => {
+    const agent = conversationManager.getAgent(req.params.id);
+    if (!agent) { reply.code(404); return { error: 'Not found' }; }
+
+    const hostKeys = conversationManager.getAgentHostKeys(req.params.id);
+    if (agent.nodeId) {
+      for (const { nodeId, hostKey } of hostKeys) {
+        nodeRegistry.send(nodeId, { type: 'host.close', hostKey });
+      }
+    }
+
+    const conversations = conversationManager.clearAgentChat(req.params.id);
+    for (const conversation of conversations) {
+      broadcast(conversation.id, { type: 'history.reset' });
+      broadcast(conversation.id, { type: 'conversation.status', conversationId: conversation.id, status: 'idle' });
+    }
+    return { ok: true, conversations };
+  });
+
   app.post<{ Params: { id: string } }>('/api/agents/:id/reset', async (req, reply) => {
     const agent = conversationManager.getAgent(req.params.id);
     if (!agent) {

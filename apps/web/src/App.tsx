@@ -62,6 +62,22 @@ export function App() {
     [deleteAgent],
   );
 
+  const handleRestartAgent = useCallback(
+    async (agentId: string) => {
+      await api.restartAgent(agentId);
+    },
+    [],
+  );
+
+  const handleClearAgentChat = useCallback(
+    async (agentId: string) => {
+      await api.clearAgentChat(agentId);
+      await openAgentThread(agentId);
+      setViewMode("chat");
+    },
+    [openAgentThread],
+  );
+
   const handleResetAgent = useCallback(
     async (agentId: string) => {
       await api.resetAgent(agentId);
@@ -112,6 +128,8 @@ export function App() {
             onDeleteMachine={deleteMachine}
             onCreateAgent={handleCreateAgent}
             onUpdateAgent={handleUpdateAgent}
+            onRestartAgent={handleRestartAgent}
+            onClearAgentChat={handleClearAgentChat}
             onResetAgent={handleResetAgent}
             onDeleteAgent={handleDeleteAgent}
             onOpenAgentThread={handleOpenAgentThread}

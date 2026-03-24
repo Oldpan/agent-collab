@@ -206,6 +206,18 @@ export class Executor {
     return false;
   }
 
+  closeHost(hostKey: string): void {
+    const host = this.hosts.get(hostKey);
+    if (!host) return;
+    const currentRunId = host.getCurrentRunId();
+    if (currentRunId) {
+      this.runToHost.delete(currentRunId);
+      removeDispatch(this.db, currentRunId);
+    }
+    host.close();
+    this.hosts.delete(hostKey);
+  }
+
   resetWorkspace(workspaceRoot: string): void {
     const resolvedRoot = path.resolve(workspaceRoot);
 

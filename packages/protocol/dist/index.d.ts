@@ -218,7 +218,11 @@ export type WorkspaceReadRequestMsg = {
     workspaceRoot: string;
     relativePath: string;
 };
-export type CoreToNode = NodeAckMsg | RunDispatchMsg | RunCancelMsg | NodePermissionResponseMsg | WorkspaceListRequestMsg | WorkspaceReadRequestMsg | WorkspaceResetRequestMsg;
+export type HostCloseMsg = {
+    type: 'host.close';
+    hostKey: string;
+};
+export type CoreToNode = NodeAckMsg | RunDispatchMsg | RunCancelMsg | NodePermissionResponseMsg | WorkspaceListRequestMsg | WorkspaceReadRequestMsg | WorkspaceResetRequestMsg | HostCloseMsg;
 export type ConversationInfo = {
     id: string;
     channelId: string;

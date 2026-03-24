@@ -87,7 +87,7 @@ export function AgentWorkspacePanel({ agent }: AgentWorkspacePanelProps) {
 
   useEffect(() => {
     if (!agent?.agentId || !workspaceRoot) return;
-    if (directories[""] || loadingDirectories.has("")) return;
+    if (directories[""] || loadingDirectories.has("") || workspaceError) return;
 
     void loadDirectory("").then((entries) => {
       if (!entries || selectedFilePath) return;
@@ -96,7 +96,7 @@ export function AgentWorkspacePanel({ agent }: AgentWorkspacePanelProps) {
         void loadFile(memoryFile.path);
       }
     });
-  }, [agent?.agentId, directories, loadDirectory, loadFile, loadingDirectories, selectedFilePath, workspaceRoot]);
+  }, [agent?.agentId, directories, loadDirectory, loadFile, loadingDirectories, selectedFilePath, workspaceRoot, workspaceError]);
 
   const rootEntries = directories[""] ?? [];
   const isRootLoading = loadingDirectories.has("");

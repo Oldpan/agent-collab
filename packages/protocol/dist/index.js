@@ -13,8 +13,8 @@ export const RUNTIME_DRIVERS = {
     },
     codex_acp: {
         agentType: 'codex_acp',
-        command: 'npx',
-        args: ['-y', '@zed-industries/codex-acp@latest'],
+        command: 'codex-acp',
+        args: [],
         supportsResume: true,
         supportsPushNotifications: false,
         nativeMemoryBackend: 'workspace',

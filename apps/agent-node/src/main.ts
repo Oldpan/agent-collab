@@ -82,6 +82,11 @@ async function main(): Promise<void> {
         }
         break;
 
+      case 'host.close':
+        executor.closeHost(msg.hostKey);
+        log.info('[agent-node] host closed', { hostKey: msg.hostKey });
+        break;
+
       case 'workspace.reset.request':
         try {
           executor.resetWorkspace(msg.workspaceRoot);

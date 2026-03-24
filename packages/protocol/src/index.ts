@@ -41,8 +41,8 @@ export const RUNTIME_DRIVERS: Record<AgentType, RuntimeDriverDefinition> = {
   },
   codex_acp: {
     agentType: 'codex_acp',
-    command: 'npx',
-    args: ['-y', '@zed-industries/codex-acp@latest'],
+    command: 'codex-acp',
+    args: [],
     supportsResume: true,
     supportsPushNotifications: false,
     nativeMemoryBackend: 'workspace',
@@ -337,6 +337,11 @@ export type WorkspaceReadRequestMsg = {
   relativePath: string;
 };
 
+export type HostCloseMsg = {
+  type: 'host.close';
+  hostKey: string;
+};
+
 export type CoreToNode =
   | NodeAckMsg
   | RunDispatchMsg
@@ -344,7 +349,8 @@ export type CoreToNode =
   | NodePermissionResponseMsg
   | WorkspaceListRequestMsg
   | WorkspaceReadRequestMsg
-  | WorkspaceResetRequestMsg;
+  | WorkspaceResetRequestMsg
+  | HostCloseMsg;
 
 // ─── REST API 类型 ───
 
