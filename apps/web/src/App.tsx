@@ -1,4 +1,4 @@
-import { useMemo, useCallback, useState } from "react";
+import { useMemo, useCallback, useState, useEffect } from "react";
 import { useConversations } from "@/hooks/useConversations";
 import { useAgents } from "@/hooks/useAgents";
 import { useMachines } from "@/hooks/useMachines";
@@ -15,8 +15,24 @@ import type {
   UpdateAgentRequest,
 } from "@agent-collab/protocol";
 import * as api from "@/lib/api";
+import { cn } from "@/lib/utils";
+
+function useIsMobile() {
+  const [isMobile, setIsMobile] = useState(
+    () => typeof window !== "undefined" && window.innerWidth < 768,
+  );
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const handler = (e: MediaQueryListEvent) => setIsMobile(e.matches);
+    mq.addEventListener("change", handler);
+    return () => mq.removeEventListener("change", handler);
+  }, []);
+  return isMobile;
+}
 
 export function App() {
+  const isMobile = useIsMobile();
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"chat" | "sessions">("chat");
   const {
     conversations,
@@ -107,48 +123,78 @@ export function App() {
     setViewMode("sessions");
   }, []);
 
+  const sidebarProps = {
+    machines,
+    agents,
+    conversations,
+    selectedId,
+    selectedView: viewMode,
+    onOpenSessions: handleOpenSessions,
+    onCreateMachine: createMachine,
+    onDeleteMachine: deleteMachine,
+    onCreateAgent: handleCreateAgent,
+    onUpdateAgent: handleUpdateAgent,
+    onRestartAgent: handleRestartAgent,
+    onClearAgentChat: handleClearAgentChat,
+    onResetAgent: handleResetAgent,
+    onDeleteAgent: handleDeleteAgent,
+    onOpenAgentThread: handleOpenAgentThread,
+  };
+
   return (
     <div className="flex h-full bg-[linear-gradient(180deg,#fff4a0_0%,#ffe07a_100%)] text-foreground">
-      <ResizablePanelGroup direction="horizontal" className="h-full">
-        {/* Sidebar */}
-        <ResizablePanel
-          defaultSize={25}
-          minSize={15}
-          maxSize={40}
-          className="bg-[linear-gradient(180deg,#ffe06d_0%,#ffca43_100%)] text-zinc-950"
-        >
-          <Sidebar
-            machines={machines}
-            agents={agents}
-            conversations={conversations}
-            selectedId={selectedId}
-            selectedView={viewMode}
-            onOpenSessions={handleOpenSessions}
-            onCreateMachine={createMachine}
-            onDeleteMachine={deleteMachine}
-            onCreateAgent={handleCreateAgent}
-            onUpdateAgent={handleUpdateAgent}
-            onRestartAgent={handleRestartAgent}
-            onClearAgentChat={handleClearAgentChat}
-            onResetAgent={handleResetAgent}
-            onDeleteAgent={handleDeleteAgent}
-            onOpenAgentThread={handleOpenAgentThread}
-          />
-        </ResizablePanel>
+      {/* Mobile: backdrop */}
+      {isMobile && mobileSidebarOpen && (
+        <div
+          className="fixed inset-0 z-40 bg-black/50"
+          onClick={() => setMobileSidebarOpen(false)}
+        />
+      )}
 
-        <ResizableHandle />
+      {/* Mobile: sidebar drawer */}
+      {isMobile && (
+        <div
+          className={cn(
+            "fixed inset-y-0 left-0 z-50 w-72 transition-transform duration-300",
+            mobileSidebarOpen ? "translate-x-0" : "-translate-x-full",
+          )}
+        >
+          <Sidebar {...sidebarProps} />
+        </div>
+      )}
+
+      <ResizablePanelGroup direction="horizontal" className="h-full">
+        {/* Desktop sidebar */}
+        {!isMobile && (
+          <>
+            <ResizablePanel
+              defaultSize={25}
+              minSize={15}
+              maxSize={40}
+              className="bg-[linear-gradient(180deg,#ffe06d_0%,#ffca43_100%)] text-zinc-950"
+            >
+              <Sidebar {...sidebarProps} />
+            </ResizablePanel>
+            <ResizableHandle />
+          </>
+        )}
 
         {/* Chat area */}
-        <ResizablePanel defaultSize={75} minSize={50}>
+        <ResizablePanel defaultSize={isMobile ? 100 : 75} minSize={50}>
           {viewMode === "sessions" ? (
             <SessionManagerPanel
               conversations={conversations}
               agents={agents}
               selectedId={selectedId}
               onOpenSession={handleSelectConversation}
+              onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
             />
           ) : selectedConversation ? (
-            <ChatPanel conversation={selectedConversation} agent={selectedAgent} />
+            <ChatPanel
+              conversation={selectedConversation}
+              agent={selectedAgent}
+              onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
+            />
           ) : (
             <div className="flex h-full items-center justify-center text-muted-foreground">
               <div className="text-center space-y-2">

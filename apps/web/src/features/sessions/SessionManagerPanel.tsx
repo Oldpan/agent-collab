@@ -1,6 +1,7 @@
 import { Badge } from "@/components/ui/badge";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
+import { MenuIcon } from "lucide-react";
 import type { AgentInfo, ConversationInfo } from "@agent-collab/protocol";
 
 type SessionManagerPanelProps = {
@@ -8,6 +9,7 @@ type SessionManagerPanelProps = {
   agents: AgentInfo[];
   selectedId: string | null;
   onOpenSession: (conversationId: string) => void;
+  onOpenSidebar?: () => void;
 };
 
 function formatRelativeTime(ts: number): string {
@@ -43,6 +45,7 @@ export function SessionManagerPanel({
   agents,
   selectedId,
   onOpenSession,
+  onOpenSidebar,
 }: SessionManagerPanelProps) {
   const visibleConversations = conversations.filter((conversation) => conversation.isPrimaryThread);
   const sorted = [...visibleConversations].sort((a, b) => b.updatedAt - a.updatedAt);
@@ -63,11 +66,23 @@ export function SessionManagerPanel({
     <div className="flex h-full flex-col">
       <div className="border-b border-border px-5 py-4">
         <div className="flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-sm font-semibold">Session Manager</h2>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Inspect all current chat sessions and jump into any agent thread.
-            </p>
+          <div className="flex items-center gap-3">
+            {onOpenSidebar && (
+              <button
+                type="button"
+                className="shrink-0 rounded-md border-2 border-zinc-900 bg-[#fff9d8] p-1 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff1a9] cursor-pointer"
+                onClick={onOpenSidebar}
+                aria-label="Open sidebar"
+              >
+                <MenuIcon className="size-4 text-zinc-700" />
+              </button>
+            )}
+            <div>
+              <h2 className="text-sm font-semibold">Session Manager</h2>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Inspect all current chat sessions and jump into any agent thread.
+              </p>
+            </div>
           </div>
           <Badge variant="secondary" className="text-xs">
             {visibleConversations.length} sessions

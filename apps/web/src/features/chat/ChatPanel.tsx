@@ -29,7 +29,7 @@ import {
   type ToolState,
 } from "@/components/ai-elements/tool";
 import { useConversationStream } from "@/hooks/useConversationStream";
-import { ChevronRightIcon } from "lucide-react";
+import { ChevronRightIcon, MenuIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { PromptComposer } from "./PromptComposer";
 import { AgentWorkspacePanel } from "./AgentWorkspacePanel";
@@ -43,6 +43,7 @@ import { cn } from "@/lib/utils";
 type ChatPanelProps = {
   conversation: ConversationInfo;
   agent: AgentInfo | null;
+  onOpenSidebar?: () => void;
 };
 
 /** Determine tool display state from LiveToolCall */
@@ -60,7 +61,7 @@ const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
 });
 
 /** Main chat panel: header + messages + composer */
-export function ChatPanel({ conversation, agent }: ChatPanelProps) {
+export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "activity" | "workspace" | "profile">("chat");
   const userIdentity = useMemo(() => readStoredUserIdentity(), []);
   const {
@@ -98,6 +99,16 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
       {/* Header */}
       <div className="border-b border-black/10 bg-[#fffce8] px-4 py-3 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.45)]">
         <div className="flex items-center gap-3">
+          {onOpenSidebar && (
+            <button
+              type="button"
+              className="shrink-0 rounded-md border-2 border-zinc-900 bg-[#fff9d8] p-1 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff1a9] cursor-pointer"
+              onClick={onOpenSidebar}
+              aria-label="Open sidebar"
+            >
+              <MenuIcon className="size-4 text-zinc-700" />
+            </button>
+          )}
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold tracking-tight text-zinc-950">
               {agent?.name ?? "Agent"}
