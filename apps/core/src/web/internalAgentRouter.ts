@@ -222,7 +222,7 @@ export function registerInternalAgentRoutes(
       return { error: 'channel query parameter is required' };
     }
 
-    const channelId = resolveChannelFromTarget(channel, db);
+    const channelId = resolveChannelFromTarget(channel, db) ?? (channel.startsWith('dm:') ? `dm:${agentId}` : null);
     if (!channelId) {
       reply.code(400);
       return { error: `Cannot resolve channel: ${channel}` };

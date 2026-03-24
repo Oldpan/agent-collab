@@ -1,3 +1,13 @@
+/** A single agent run (one ACP turn), containing tool calls and optional thinking */
+export type LiveRun = {
+  id: string;
+  startedAt: number;
+  endedAt?: number;
+  toolCalls: LiveToolCall[];
+  thinking?: string;
+  isActive: boolean;
+};
+
 /** A message in the live chat stream */
 export type LiveMessage = {
   id: string;

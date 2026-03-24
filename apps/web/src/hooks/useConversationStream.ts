@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useLayoutEffect } from "react";
 import type { ServerEvent, ClientEvent } from "@agent-collab/protocol";
-import type { LiveMessage, LiveToolCall, PendingApproval, ChatStatus } from "./types";
+import type { LiveMessage, LiveRun, LiveToolCall, PendingApproval, ChatStatus } from "./types";
 
 let nextId = 1;
 const createId = () => `msg-${nextId++}`;
@@ -13,6 +13,7 @@ type UseConversationStreamOptions = {
 
 type UseConversationStreamReturn = {
   messages: LiveMessage[];
+  runs: LiveRun[];
   status: ChatStatus;
   pendingApproval: PendingApproval | null;
   sendPrompt: (text: string) => void;
@@ -32,6 +33,7 @@ export function useConversationStream(
   const isChannelMode = Boolean(conversationAgentId);
 
   const [messages, setMessages] = useState<LiveMessage[]>([]);
+  const [runs, setRuns] = useState<LiveRun[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
 
@@ -41,6 +43,7 @@ export function useConversationStream(
   const thinkingRef = useRef("");
   const currentToolCallsRef = useRef<LiveToolCall[]>([]);
   const currentMsgIdRef = useRef<string | null>(null);
+  const currentRunIdRef = useRef<string | null>(null);
 
   // Helper: update the latest assistant message in-place
   const updateCurrentMessage = useCallback(() => {
@@ -76,11 +79,13 @@ export function useConversationStream(
 
       if ((event as { type: string }).type === "history.reset") {
         setMessages([]);
+        setRuns([]);
         setPendingApproval(null);
         textRef.current = "";
         thinkingRef.current = "";
         currentToolCallsRef.current = [];
         currentMsgIdRef.current = null;
+        currentRunIdRef.current = null;
         setStatus("idle");
         return;
       }
@@ -90,7 +95,16 @@ export function useConversationStream(
           // Channel-based message: agent responded via send_message MCP
           const { id, senderName, senderType, content, createdAt } = event.message;
           const role = senderType === "user" ? "user" : "assistant";
-          const toolCalls = role === "assistant" ? [...currentToolCallsRef.current] : undefined;
+          // Finalize current run: tool calls go to Activity tab, not the message bubble
+          if (role === "assistant" && currentRunIdRef.current) {
+            const runId = currentRunIdRef.current;
+            setRuns((prev) =>
+              prev.map((r) =>
+                r.id === runId ? { ...r, isActive: false, endedAt: Date.now() } : r,
+              ),
+            );
+            currentRunIdRef.current = null;
+          }
           currentToolCallsRef.current = [];
           currentMsgIdRef.current = null;
           setMessages((prev) => [
@@ -101,7 +115,6 @@ export function useConversationStream(
               text: content,
               createdAt: new Date(createdAt).getTime(),
               isStreaming: false,
-              toolCalls: toolCalls && toolCalls.length > 0 ? toolCalls : undefined,
             },
           ]);
           break;
@@ -109,13 +122,20 @@ export function useConversationStream(
 
         case "turn.begin": {
           if (isChannelMode) {
-            // Channel mode: don't create a message bubble — just reset accumulators.
-            // The message will be created when channel.message arrives.
+            // Skip history replay turns (they come from wsHandler on connect)
+            if (event.turnId.startsWith("replay-")) break;
+            // Channel mode: create a new run entry for Activity tab; no message bubble.
+            const runId = event.turnId;
+            currentRunIdRef.current = runId;
             textRef.current = "";
             thinkingRef.current = "";
             currentToolCallsRef.current = [];
             currentMsgIdRef.current = null;
             setStatus("streaming");
+            setRuns((prev) => [
+              ...prev,
+              { id: runId, startedAt: Date.now(), toolCalls: [], isActive: true },
+            ]);
             break;
           }
           // Start a new assistant message
@@ -141,6 +161,13 @@ export function useConversationStream(
         case "thinking.delta": {
           thinkingRef.current += event.text;
           updateCurrentMessage();
+          if (isChannelMode && currentRunIdRef.current) {
+            const runId = currentRunIdRef.current;
+            const thinking = thinkingRef.current;
+            setRuns((prev) =>
+              prev.map((r) => (r.id === runId ? { ...r, thinking } : r)),
+            );
+          }
           break;
         }
 
@@ -152,26 +179,23 @@ export function useConversationStream(
           if (existingIndex >= 0) {
             currentToolCallsRef.current = currentToolCallsRef.current.map((tc, index) =>
               index === existingIndex
-                ? {
-                    ...tc,
-                    name: event.name,
-                    input: event.input,
-                    completed: false,
-                  }
+                ? { ...tc, name: event.name, input: event.input, completed: false }
                 : tc,
             );
           } else {
             currentToolCallsRef.current = [
               ...currentToolCallsRef.current,
-              {
-                id: event.toolCallId,
-                name: event.name,
-                input: event.input,
-                completed: false,
-              },
+              { id: event.toolCallId, name: event.name, input: event.input, completed: false },
             ];
           }
           updateCurrentMessage();
+          if (isChannelMode && currentRunIdRef.current) {
+            const runId = currentRunIdRef.current;
+            const toolCalls = [...currentToolCallsRef.current];
+            setRuns((prev) =>
+              prev.map((r) => (r.id === runId ? { ...r, toolCalls } : r)),
+            );
+          }
           break;
         }
 
@@ -182,6 +206,13 @@ export function useConversationStream(
               : tc,
           );
           updateCurrentMessage();
+          if (isChannelMode && currentRunIdRef.current) {
+            const runId = currentRunIdRef.current;
+            const toolCalls = [...currentToolCallsRef.current];
+            setRuns((prev) =>
+              prev.map((r) => (r.id === runId ? { ...r, toolCalls } : r)),
+            );
+          }
           break;
         }
 
@@ -203,6 +234,16 @@ export function useConversationStream(
                 m.id === msgId ? { ...m, isStreaming: false } : m,
               ),
             );
+          }
+          // Finalize any active run (non-channel mode or runs without channel.message)
+          if (currentRunIdRef.current) {
+            const runId = currentRunIdRef.current;
+            setRuns((prev) =>
+              prev.map((r) =>
+                r.id === runId ? { ...r, isActive: false, endedAt: Date.now() } : r,
+              ),
+            );
+            currentRunIdRef.current = null;
           }
           currentMsgIdRef.current = null;
           setStatus("idle");
@@ -233,7 +274,8 @@ export function useConversationStream(
         }
 
         case "history.user_message": {
-          // 历史回放：插入用户消息
+          // Channel mode uses REST history — skip WS replay to avoid duplicates
+          if (isChannelMode) break;
           const umId = createId();
           setMessages((prev) => [
             ...prev,
@@ -261,12 +303,14 @@ export function useConversationStream(
   useLayoutEffect(() => {
     // Reset state
     setMessages([]);
+    setRuns([]);
     setStatus("idle");
     setPendingApproval(null);
     textRef.current = "";
     thinkingRef.current = "";
     currentToolCallsRef.current = [];
     currentMsgIdRef.current = null;
+    currentRunIdRef.current = null;
 
     if (!conversationId) {
       wsRef.current = null;
@@ -370,6 +414,7 @@ export function useConversationStream(
 
   return {
     messages,
+    runs,
     status,
     pendingApproval,
     sendPrompt,

@@ -19,7 +19,7 @@ export type AgentNodeConfig = RuntimeConfig & {
 export function loadConfig(): AgentNodeConfig {
   const coreUrl = process.env.CORE_URL ?? 'ws://localhost:3100';
   const hostname = process.env.NODE_HOSTNAME ?? os.hostname();
-  const workspaceRoot = process.env.WORKSPACE_ROOT ?? os.tmpdir();
+  const workspaceRoot = process.env.WORKSPACE_ROOT ?? path.join(os.homedir(), '.agent-node', 'workspace');
   const dbPath =
     process.env.DB_PATH ?? path.join(os.homedir(), '.agent-node', 'db.sqlite');
   const nodeId = process.env.NODE_ID ?? resolveStableNodeId(dbPath);

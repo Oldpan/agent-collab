@@ -34,6 +34,7 @@ import { useEffect, useMemo, useState } from "react";
 import { PromptComposer } from "./PromptComposer";
 import { AgentWorkspacePanel } from "./AgentWorkspacePanel";
 import { AgentProfilePanel } from "./AgentProfilePanel";
+import { AgentActivityPanel } from "./AgentActivityPanel";
 import { ChatAvatar, readStoredUserIdentity } from "./ChatAvatar";
 import type { AgentInfo, ConversationInfo } from "@agent-collab/protocol";
 import type { LiveMessage, LiveToolCall } from "@/hooks/types";
@@ -60,10 +61,11 @@ const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
 
 /** Main chat panel: header + messages + composer */
 export function ChatPanel({ conversation, agent }: ChatPanelProps) {
-  const [activeTab, setActiveTab] = useState<"chat" | "workspace" | "profile">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "activity" | "workspace" | "profile">("chat");
   const userIdentity = useMemo(() => readStoredUserIdentity(), []);
   const {
     messages,
+    runs,
     status,
     pendingApproval,
     sendPrompt,
@@ -120,6 +122,20 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
           </Button>
           <Button
             size="sm"
+            variant={activeTab === "activity" ? "default" : "outline"}
+            className={cn(
+              "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+              activeTab === "activity" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+            )}
+            onClick={() => setActiveTab("activity")}
+          >
+            Activity
+            {runs.some((r) => r.isActive) && (
+              <span className="ml-1.5 size-1.5 rounded-full bg-amber-500 animate-pulse inline-block" />
+            )}
+          </Button>
+          <Button
+            size="sm"
             variant={activeTab === "workspace" ? "default" : "outline"}
             className={cn(
               "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
@@ -147,6 +163,8 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
         <AgentWorkspacePanel agent={agent} />
       ) : activeTab === "profile" ? (
         <AgentProfilePanel agent={agent} />
+      ) : activeTab === "activity" ? (
+        <AgentActivityPanel runs={runs} />
       ) : (
         <>
           <Conversation className="min-h-0 flex-1 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.7),transparent_28%),linear-gradient(180deg,#fffdf2_0%,#fff5d1_100%)]">
@@ -179,7 +197,7 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
                 </div>
               )}
 
-              {(status === "queued" || status === "submitted" || status === "streaming" || status === "recovering" || status === "awaiting_approval") && (
+              {(status === "queued" || status === "submitted" || status === "recovering" || status === "awaiting_approval") && (
                 <div className="mx-1 mt-2 mb-3 flex items-center gap-2 rounded-md border-2 border-zinc-900 bg-white px-3 py-2 text-sm text-zinc-600 shadow-[4px_4px_0_0_rgba(0,0,0,0.1)]">
                   <Loader size={14} />
                   <span>
@@ -189,9 +207,7 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
                       ? "Thinking..."
                       : status === "recovering"
                         ? "Recovering session..."
-                      : status === "awaiting_approval"
-                        ? "Waiting for approval..."
-                        : "Streaming..."}
+                        : "Waiting for approval..."}
                   </span>
                 </div>
               )}
