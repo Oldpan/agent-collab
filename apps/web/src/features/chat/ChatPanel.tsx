@@ -97,7 +97,7 @@ export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps
   return (
     <div className="flex h-full flex-col bg-[#fffce8]">
       {/* Header */}
-      <div className="border-b border-black/10 bg-[#fffce8] px-4 py-3 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.45)]">
+      <div className="border-b-2 border-black bg-[#fffce8] px-4 py-3">
         <div className="flex items-center gap-3">
           {onOpenSidebar && (
             <button

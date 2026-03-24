@@ -158,8 +158,7 @@ function buildConnectionCommand(machine: MachineInfo, envVarKeys: string[]): str
     `${prefix}NODE_ID=${machine.nodeId} \\\n` +
     `  NODE_HOSTNAME=${machine.name} \\\n` +
     `  CORE_URL=${CORE_URL} \\\n` +
-    `  WORKSPACE_ROOT=~/.agent-collab/agents \\\n` +
-    `  DB_PATH=~/.agent-collab/agents/db.sqlite \\\n` +
+    `  DB_PATH=~/.agent-collab/db.sqlite \\\n` +
     `  pnpm --filter @agent-collab/agent-node run dev`
   );
 }

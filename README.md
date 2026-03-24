@@ -35,46 +35,76 @@ pnpm install
 
 ### 开发模式
 
-```bash
-# 同时启动 core 后端 + web 前端
-pnpm dev
+系统由三个独立进程组成，需要分别在不同终端中启动：
 
-# 或分别启动
-pnpm dev:core   # 后端，默认端口 3100
-pnpm dev:web    # 前端 Vite dev server，默认端口 5173（自动代理 /api → 3100）
+**终端 1 — Core 后端**
+
+```bash
+pnpm dev:core
+# 监听 http://localhost:3100
 ```
+
+**终端 2 — Web 前端**
+
+```bash
+pnpm dev:web
+# 监听 http://localhost:5173，自动代理 /api → 3100
+```
+
+也可以用一条命令同时启动 core + web：
+
+```bash
+pnpm dev
+```
+
+**终端 3 — Agent Node（本地模拟）**
+
+所有 Agent 执行必须通过 agent-node，core 本身不运行 Agent。本地开发时可在同一台机器上启动一个模拟节点：
+
+```bash
+CORE_URL=ws://localhost:3100 \
+NODE_ID=local-node-1 \
+NODE_HOSTNAME=local-sim \
+DB_PATH=/tmp/agent-node-ws/db.sqlite \
+pnpm --filter @agent-collab/agent-node run dev
+```
+
+> `DB_PATH` 是 agent-node 本地 SQLite 数据库路径，首次运行会自动创建。
+
+启动后打开 `http://localhost:5173`，可以看到 `local-node-1` 机器状态变为 ● online，在其下创建 Agent 即可开始对话。
 
 ### 构建
 
 ```bash
 pnpm build
+
+# 修改了 packages/runtime-acp/src/ 下的文件后，需单独重新构建
+pnpm --filter @agent-collab/runtime-acp run build
 ```
 
-### 连接远端 Agent Node
+### 连接真实远端机器
 
-所有 Agent 执行必须通过 agent-node，core 本身不运行任何 Agent。
+若要在另一台机器上运行 agent-node：
 
 **步骤一：在前端预置机器**
 
-打开 `http://localhost:5173`，点击侧边栏顶部的 **+** 按钮，填写机器名称和所需的 API key 名称（如 `ANTHROPIC_API_KEY`）。创建后 UI 会生成一条连接命令，状态显示为 ⏳ pending。
+打开 `http://localhost:5173`，点击侧边栏顶部的 **+** 按钮填写机器名称。创建后 UI 会生成带有预分配 `NODE_ID` 的连接命令，机器状态显示为 ⏳ pending。
 
 **步骤二：在目标机器执行连接命令**
 
-复制 UI 生成的命令（类似下面的形式）并在目标机器上运行：
+复制 UI 生成的命令（形如下面的形式）并在目标机器上运行：
 
 ```bash
-NODE_ID=<预分配的uuid> \
+NODE_ID=<UI 预分配的 uuid> \
 NODE_HOSTNAME=my-gpu-box \
 CORE_URL=ws://your-core-host:3100 \
-WORKSPACE_ROOT=/home/user/projects \
 DB_PATH=/home/user/.agent-collab/db.sqlite \
-ANTHROPIC_API_KEY=sk-ant-... \
 pnpm --filter @agent-collab/agent-node run dev
 ```
 
 命令执行后机器状态自动变为 ● online。
 
-**步骤三：在已连接的机器下创建 Agent 并开始对话**
+**步骤三：创建 Agent 并开始对话**
 
 在侧边栏 Machine 行点击 **+** 创建 Agent，选择 agent type（`claude_acp` / `codex_acp`），创建对话即可。
 

@@ -163,8 +163,8 @@ export function Sidebar({
   return (
     <div className="flex h-full flex-col bg-[#ffd000]">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-black/10 bg-[#ffd000] px-3 py-3 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.45)]">
-        <h1 className="text-xs font-semibold uppercase tracking-wider text-zinc-600">
+      <div className="flex items-center justify-between border-b-2 border-black bg-[#ffd000] px-3 py-3">
+        <h1 className="text-xs font-semibold uppercase tracking-wider text-zinc-800">
           Machines &amp; Agents
         </h1>
         <div className="flex items-center gap-1">
