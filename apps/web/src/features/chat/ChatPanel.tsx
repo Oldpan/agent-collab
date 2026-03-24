@@ -94,9 +94,9 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
   }, [conversation.id]);
 
   return (
-    <div className="flex h-full flex-col bg-[linear-gradient(180deg,#fffdf0_0%,#fff4c8_100%)]">
+    <div className="flex h-full flex-col bg-[#fffce8]">
       {/* Header */}
-      <div className="border-b border-black/10 bg-[#fffbe3] px-4 py-3 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.45)]">
+      <div className="border-b border-black/10 bg-[#fffce8] px-4 py-3 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.45)]">
         <div className="flex items-center gap-3">
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold tracking-tight text-zinc-950">
@@ -167,7 +167,7 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
         <AgentActivityPanel runs={runs} />
       ) : (
         <>
-          <Conversation className="min-h-0 flex-1 bg-[radial-gradient(circle_at_top,rgba(255,255,255,0.7),transparent_28%),linear-gradient(180deg,#fffdf2_0%,#fff5d1_100%)]">
+          <Conversation className="min-h-0 flex-1 bg-[#fffce8]">
             <ConversationContent className="px-3 py-4">
               {messages.length === 0 ? (
                 <ConversationEmptyState
@@ -198,7 +198,7 @@ export function ChatPanel({ conversation, agent }: ChatPanelProps) {
               )}
 
               {(status === "queued" || status === "submitted" || status === "recovering" || status === "awaiting_approval") && (
-                <div className="mx-1 mt-2 mb-3 flex items-center gap-2 rounded-md border-2 border-zinc-900 bg-white px-3 py-2 text-sm text-zinc-600 shadow-[4px_4px_0_0_rgba(0,0,0,0.1)]">
+                <div className="mx-1 mt-2 mb-3 flex items-center gap-2 rounded-md border-2 border-zinc-900 bg-[#fffce8] px-3 py-2 text-sm text-zinc-600 shadow-[4px_4px_0_0_rgba(0,0,0,0.1)]">
                   <Loader size={14} />
                   <span>
                     {status === "queued"
@@ -277,7 +277,7 @@ function MessageRow({
           <div className={cn("mb-1.5 flex w-full items-start gap-3", metaAlign)}>
             <div className={cn("min-w-0 flex flex-wrap items-center gap-x-2 gap-y-1", infoAlign)}>
               <span className="text-[15px] font-semibold tracking-tight text-zinc-950">{displayName}</span>
-              <span className="rounded-sm border border-zinc-900 bg-white/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-500">
+              <span className="rounded-sm border border-zinc-900 bg-[#fffce8]/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-500">
                 {displayRole}
               </span>
               {!isUser && agent && (

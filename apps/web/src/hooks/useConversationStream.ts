@@ -122,19 +122,19 @@ export function useConversationStream(
 
         case "turn.begin": {
           if (isChannelMode) {
-            // Skip history replay turns (they come from wsHandler on connect)
-            if (event.turnId.startsWith("replay-")) break;
-            // Channel mode: create a new run entry for Activity tab; no message bubble.
+            // Channel mode: create a run entry for Activity tab; no message bubble.
+            // Replay turns (history) are included but don't change streaming status.
             const runId = event.turnId;
+            const isReplay = runId.startsWith("replay-");
             currentRunIdRef.current = runId;
             textRef.current = "";
             thinkingRef.current = "";
             currentToolCallsRef.current = [];
             currentMsgIdRef.current = null;
-            setStatus("streaming");
+            if (!isReplay) setStatus("streaming");
             setRuns((prev) => [
               ...prev,
-              { id: runId, startedAt: Date.now(), toolCalls: [], isActive: true },
+              { id: runId, startedAt: Date.now(), toolCalls: [], isActive: !isReplay },
             ]);
             break;
           }

@@ -159,9 +159,9 @@ export function Sidebar({
   }, [agents, conversations, selectedId]);
 
   return (
-    <div className="flex h-full flex-col bg-[linear-gradient(180deg,#ffe06d_0%,#ffca43_100%)]">
+    <div className="flex h-full flex-col bg-[#ffd000]">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-black/10 bg-[#ffe48a] px-3 py-3 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.45)]">
+      <div className="flex items-center justify-between border-b border-black/10 bg-[#ffd000] px-3 py-3 shadow-[0_10px_24px_-18px_rgba(0,0,0,0.45)]">
         <h1 className="text-xs font-semibold uppercase tracking-wider text-zinc-600">
           Machines &amp; Agents
         </h1>

@@ -426,7 +426,13 @@ export class AcpClient {
             ? resolveWorkspacePath(this.workspaceRoot, params.cwd)
             : this.workspaceRoot;
         const byteLimit = params.outputByteLimit ?? 256_000;
-        const child = spawn(params.command, params.args ?? [], {
+        // Claude Code ACP may pass shell commands with operators (&&, |, etc.) as a single string.
+        // Wrap in sh -c so the shell can interpret them correctly.
+        const hasShellOperators = /[&|;<>$`\\!]/.test(params.command) || (params.args ?? []).length === 0;
+        const [spawnCmd, spawnArgs] = hasShellOperators
+            ? ['sh', ['-c', params.command, ...(params.args ?? [])]]
+            : [params.command, params.args ?? []];
+        const child = spawn(spawnCmd, spawnArgs, {
             cwd,
             env: {
                 ...process.env,

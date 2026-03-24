@@ -30,8 +30,8 @@ export type RuntimeDriverDefinition = {
 export const RUNTIME_DRIVERS: Record<AgentType, RuntimeDriverDefinition> = {
   claude_acp: {
     agentType: 'claude_acp',
-    command: 'npx',
-    args: ['-y', '@zed-industries/claude-code-acp@latest'],
+    command: 'claude-code-acp',
+    args: [],
     supportsResume: true,
     supportsPushNotifications: true,
     nativeMemoryBackend: 'workspace',

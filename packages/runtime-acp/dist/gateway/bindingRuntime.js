@@ -233,8 +233,10 @@ export class BindingRuntime {
                             }
                         }
                     }
-                    // Auto-allow MCP tool calls (toolKind is null for MCP/unknown tool kinds)
-                    if (!toolKind) {
+                    // Catch-all: auto-allow everything not already handled above.
+                    // This covers MCP tools (toolKind=null), unrecognised tool kinds, and
+                    // any toolKind not in disabledToolKinds that fell through the policy check.
+                    {
                         const option = req.params.options.find((o) => o.kind === 'allow_always' || o.kind === 'allow_once');
                         if (option) {
                             void this.client.respondPermission(req, {
@@ -246,29 +248,6 @@ export class BindingRuntime {
                             return;
                         }
                     }
-                    const title = req.params.toolCall?.title ??
-                        req.params.toolCall?.toolCallId ??
-                        'tool_call';
-                    const toolName = resolvePermissionToolName(req.params.toolCall, toolKind, title);
-                    const toolArgs = resolvePermissionToolArgs(req.params.toolCall);
-                    this.enqueueSinkWrite(async () => {
-                        const sink = this.activeSink;
-                        if (!sink)
-                            return;
-                        if (sink.requestPermission) {
-                            await sink.requestPermission({
-                                uiMode: this.currentUiMode,
-                                sessionKey: this.sessionKey,
-                                requestId: String(req.requestId),
-                                toolTitle: title,
-                                toolKind: toolKind ?? null,
-                                toolName,
-                                toolArgs,
-                            });
-                            return;
-                        }
-                        await sink.sendText(formatPermissionRequest(req));
-                    });
                 },
                 onAgentStderr: (line) => {
                     log.debug('[agent stderr]', line);
