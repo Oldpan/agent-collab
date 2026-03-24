@@ -92,21 +92,11 @@ export function useConversationStream(
 
       switch (event.type) {
         case "channel.message": {
-          // Channel-based message: agent responded via send_message MCP
-          const { id, senderName, senderType, content, createdAt } = event.message;
+          // Channel-based message: agent responded via send_message MCP.
+          // Do NOT finalize the run here — the agent may continue with tool calls
+          // (e.g. memory writes) after send_message. Let turn.end handle finalization.
+          const { id, senderType, content, createdAt } = event.message;
           const role = senderType === "user" ? "user" : "assistant";
-          // Finalize current run: tool calls go to Activity tab, not the message bubble
-          if (role === "assistant" && currentRunIdRef.current) {
-            const runId = currentRunIdRef.current;
-            setRuns((prev) =>
-              prev.map((r) =>
-                r.id === runId ? { ...r, isActive: false, endedAt: Date.now() } : r,
-              ),
-            );
-            currentRunIdRef.current = null;
-          }
-          currentToolCallsRef.current = [];
-          currentMsgIdRef.current = null;
           setMessages((prev) => [
             ...prev,
             {
@@ -235,12 +225,14 @@ export function useConversationStream(
               ),
             );
           }
-          // Finalize any active run (non-channel mode or runs without channel.message)
+          // Finalize any active run — include finalized toolCalls so tool calls without
+          // an explicit tool.result (e.g. some codex tools) are shown as completed.
           if (currentRunIdRef.current) {
             const runId = currentRunIdRef.current;
+            const toolCalls = [...currentToolCallsRef.current];
             setRuns((prev) =>
               prev.map((r) =>
-                r.id === runId ? { ...r, isActive: false, endedAt: Date.now() } : r,
+                r.id === runId ? { ...r, isActive: false, endedAt: Date.now(), toolCalls } : r,
               ),
             );
             currentRunIdRef.current = null;
