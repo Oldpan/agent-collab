@@ -22,15 +22,12 @@ export class ExecutionDispatcher {
             throw new Error(`Unknown conversation: ${conversationId}`);
         if (!row.nodeId)
             throw new Error('No agent node assigned. Connect an agent-node first.');
-        const node = this.nodeRegistry?.getNode(row.nodeId);
-        if (!node) {
-            log.warn('[dispatcher] node not connected', { nodeId: row.nodeId, conversationId });
-            throw new Error(`Node not connected: ${row.nodeId}`);
-        }
         const runId = randomUUID();
         const hostKey = `conversation:${conversationId}:${row.agentType}`;
         const dispatchMode = this.getDispatchMode(row.sessionKey);
         const driver = getRuntimeDriver(row.agentType);
+        // Persist run and user message BEFORE node connectivity check so they survive
+        // even if the node is offline — the user's message will still be visible after refresh.
         createRun(this.db, { runId, sessionKey: row.sessionKey, promptText });
         this.updateStatus(conversationId, 'active');
         let contextText = '';
@@ -48,6 +45,11 @@ export class ExecutionDispatcher {
                     agentType: agent.agentType,
                     workspacePath: row.workspacePath ?? this.config.workspaceRoot,
                 });
+                if (dispatchMode !== 'cold_start') {
+                    const replayText = this.buildConversationReplayText(row.sessionKey, runId);
+                    if (replayText)
+                        contextText += '\n\n' + replayText;
+                }
                 // Write user message to channel_messages so agent can read via check_messages
                 const dmChannelId = `dm:${row.agentId}`;
                 const msgSeq = (() => {
@@ -58,11 +60,20 @@ export class ExecutionDispatcher {
                 })();
                 this.db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
            VALUES(?, ?, 'user', 'User', 'user', ?, ?, ?, ?)`).run(randomUUID(), dmChannelId, `dm:@${agent.name}`, promptText, msgSeq, Date.now());
-                // Ensure agent has a checkpoint for this DM channel so check_messages returns the message
-                this.db.prepare(`INSERT OR IGNORE INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
-           VALUES(?, ?, 0)`).run(row.agentId, dmChannelId);
+                // Ensure agent checkpoint is at most msgSeq-1 so check_messages returns the new message.
+                // Use MIN to never advance the checkpoint past what the agent has already read.
+                this.db.prepare(`INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
+           VALUES(?, ?, ?)
+           ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`).run(row.agentId, dmChannelId, msgSeq - 1);
                 useNotificationPrompt = true;
             }
+        }
+        const node = this.nodeRegistry?.getNode(row.nodeId);
+        if (!node) {
+            finishRun(this.db, { runId, error: 'Node not connected' });
+            this.updateStatus(conversationId, 'idle');
+            log.warn('[dispatcher] node not connected', { nodeId: row.nodeId, conversationId });
+            throw new Error(`Node not connected: ${row.nodeId}`);
         }
         log.info('[dispatcher] dispatching prompt', {
             nodeId: row.nodeId,
@@ -204,6 +215,54 @@ export class ExecutionDispatcher {
             .prepare('SELECT COUNT(*) as count FROM runs WHERE session_key = ?')
             .get(sessionKey);
         return row.count > 0 ? 'resume' : 'cold_start';
+    }
+    /**
+     * Rebuild recent conversation history from core's DB (content.delta events) so that
+     * a freshly restarted ACP process can recover context it would otherwise have lost.
+     */
+    buildConversationReplayText(sessionKey, excludeRunId) {
+        if (!this.config.contextReplayEnabled || this.config.contextReplayRuns <= 0)
+            return '';
+        const runs = this.db.prepare(`SELECT run_id as runId, prompt_text as promptText, stop_reason as stopReason, error
+       FROM runs
+       WHERE session_key = ? AND run_id != ? AND ended_at IS NOT NULL
+       ORDER BY started_at DESC
+       LIMIT ?`).all(sessionKey, excludeRunId, this.config.contextReplayRuns);
+        const chronological = runs.slice().reverse();
+        const blocks = [];
+        for (const run of chronological) {
+            const events = this.db.prepare(`SELECT payload_json as payloadJson FROM events
+         WHERE run_id = ? AND method = 'node/event'
+         ORDER BY seq ASC`).all(run.runId);
+            let assistantText = '';
+            for (const ev of events) {
+                try {
+                    const parsed = JSON.parse(ev.payloadJson);
+                    if (parsed?.type === 'content.delta' && typeof parsed.text === 'string') {
+                        assistantText += parsed.text;
+                    }
+                }
+                catch { /* ignore malformed rows */ }
+            }
+            const assistantLine = assistantText.trim()
+                ? assistantText.trim()
+                : run.error
+                    ? `[error] ${run.error}`
+                    : run.stopReason
+                        ? `[stop_reason] ${run.stopReason}`
+                        : '';
+            blocks.push(`User: ${run.promptText}`);
+            if (assistantLine)
+                blocks.push(`Assistant: ${assistantLine}`);
+        }
+        const raw = blocks.join('\n');
+        if (!raw.trim())
+            return '';
+        const header = 'Context (previous messages, for continuity after restart):\n';
+        const full = header + raw;
+        if (full.length <= this.config.contextReplayMaxChars)
+            return full;
+        return header + raw.slice(Math.max(0, raw.length - this.config.contextReplayMaxChars));
     }
     updateStatus(conversationId, status) {
         this.db

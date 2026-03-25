@@ -165,23 +165,38 @@ export class ConversationManager {
 
     // Cascade delete all conversation data
     for (const row of rows) {
+      const bindingKeys = this.db.prepare(
+        `SELECT binding_key as bindingKey FROM bindings WHERE session_key = ?`,
+      ).all(row.sessionKey) as Array<{ bindingKey: string }>;
       const runIds = this.db.prepare(`SELECT run_id as runId FROM runs WHERE session_key = ?`)
         .all(row.sessionKey) as Array<{ runId: string }>;
+
+      this.db.prepare('DELETE FROM conversation_prompt_queue WHERE conversation_id = ?').run(row.id);
+
       for (const run of runIds) {
+        this.db.prepare('DELETE FROM delivery_checkpoints WHERE run_id = ?').run(run.runId);
         this.db.prepare('DELETE FROM events WHERE run_id = ?').run(run.runId);
       }
+
       this.db.prepare('DELETE FROM runs WHERE session_key = ?').run(row.sessionKey);
+
+      for (const binding of bindingKeys) {
+        this.db.prepare('DELETE FROM jobs WHERE binding_key = ?').run(binding.bindingKey);
+        this.db.prepare('DELETE FROM tool_policies WHERE binding_key = ?').run(binding.bindingKey);
+        this.db.prepare('DELETE FROM delivery_checkpoints WHERE binding_key = ?').run(binding.bindingKey);
+        this.db.prepare('DELETE FROM ui_prefs WHERE binding_key = ?').run(binding.bindingKey);
+        this.db.prepare('DELETE FROM tool_allow_prefixes WHERE binding_key = ?').run(binding.bindingKey);
+      }
+
+      this.db.prepare('DELETE FROM bindings WHERE session_key = ?').run(row.sessionKey);
+      this.db.prepare('DELETE FROM conversations WHERE id = ?').run(row.id);
       this.db.prepare('DELETE FROM sessions WHERE session_key = ?').run(row.sessionKey);
-      this.db.prepare('DELETE FROM conversation_prompt_queue WHERE conversation_id = ?').run(row.id);
     }
 
     // Delete agent-related data
     this.db.prepare(`DELETE FROM conversation_prompt_queue WHERE agent_id = ?`).run(agentId);
     this.db.prepare(`DELETE FROM channel_messages WHERE channel_id = ?`).run(`dm:${agentId}`);
     this.db.prepare(`DELETE FROM agent_message_checkpoints WHERE agent_id = ?`).run(agentId);
-
-    // Delete all conversations
-    this.db.prepare(`DELETE FROM conversations WHERE agent_id = ?`).run(agentId);
 
     // Finally delete the agent
     this.db.prepare(`DELETE FROM agents WHERE agent_id = ?`).run(agentId);
@@ -615,7 +630,14 @@ export class ConversationManager {
   }
 
   deleteMachine(nodeId: string): void {
-    this.db.prepare(`UPDATE agents SET node_id = NULL WHERE node_id = ?`).run(nodeId);
+    const agentIds = this.db.prepare(
+      `SELECT agent_id as agentId FROM agents WHERE node_id = ?`,
+    ).all(nodeId) as Array<{ agentId: string }>;
+
+    for (const agent of agentIds) {
+      this.deleteAgent(agent.agentId);
+    }
+
     this.db.prepare(`UPDATE nodes SET status = 'deleted' WHERE node_id = ?`).run(nodeId);
 
     if (this.nodeRegistry) {

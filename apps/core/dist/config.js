@@ -51,8 +51,8 @@ function createConfigSchema(defaults) {
         uiDefaultMode: z.enum(['verbose', 'summary']).default('summary'),
         uiJsonMaxChars: z.number().int().min(200).max(200_000).default(12_000),
         contextReplayEnabled: z.boolean().default(true),
-        contextReplayRuns: z.number().int().min(0).max(50).default(8),
-        contextReplayMaxChars: z.number().int().min(200).max(200_000).default(12_000),
+        contextReplayRuns: z.number().int().min(0).max(100).default(16),
+        contextReplayMaxChars: z.number().int().min(200).max(512_000).default(128_000),
     });
 }
 export async function loadConfig(options = {}) {

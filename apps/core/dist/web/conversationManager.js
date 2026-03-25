@@ -109,10 +109,38 @@ export class ConversationManager {
         return { ...existing, name, systemPrompt, envVars, disabledToolKinds, updatedAt: now };
     }
     deleteAgent(agentId) {
+        // Get all conversations for this agent to cascade delete their data
+        const rows = this.db.prepare(`SELECT id, session_key as sessionKey
+       FROM conversations WHERE agent_id = ?`).all(agentId);
+        // Cascade delete all conversation data
+        for (const row of rows) {
+            const bindingKeys = this.db.prepare(`SELECT binding_key as bindingKey FROM bindings WHERE session_key = ?`).all(row.sessionKey);
+            const runIds = this.db.prepare(`SELECT run_id as runId FROM runs WHERE session_key = ?`)
+                .all(row.sessionKey);
+            this.db.prepare('DELETE FROM conversation_prompt_queue WHERE conversation_id = ?').run(row.id);
+            for (const run of runIds) {
+                this.db.prepare('DELETE FROM delivery_checkpoints WHERE run_id = ?').run(run.runId);
+                this.db.prepare('DELETE FROM events WHERE run_id = ?').run(run.runId);
+            }
+            this.db.prepare('DELETE FROM runs WHERE session_key = ?').run(row.sessionKey);
+            for (const binding of bindingKeys) {
+                this.db.prepare('DELETE FROM jobs WHERE binding_key = ?').run(binding.bindingKey);
+                this.db.prepare('DELETE FROM tool_policies WHERE binding_key = ?').run(binding.bindingKey);
+                this.db.prepare('DELETE FROM delivery_checkpoints WHERE binding_key = ?').run(binding.bindingKey);
+                this.db.prepare('DELETE FROM ui_prefs WHERE binding_key = ?').run(binding.bindingKey);
+                this.db.prepare('DELETE FROM tool_allow_prefixes WHERE binding_key = ?').run(binding.bindingKey);
+            }
+            this.db.prepare('DELETE FROM bindings WHERE session_key = ?').run(row.sessionKey);
+            this.db.prepare('DELETE FROM conversations WHERE id = ?').run(row.id);
+            this.db.prepare('DELETE FROM sessions WHERE session_key = ?').run(row.sessionKey);
+        }
+        // Delete agent-related data
         this.db.prepare(`DELETE FROM conversation_prompt_queue WHERE agent_id = ?`).run(agentId);
-        // Nullify agent_id on conversations before deleting the agent
-        this.db.prepare(`UPDATE conversations SET agent_id = NULL WHERE agent_id = ?`).run(agentId);
+        this.db.prepare(`DELETE FROM channel_messages WHERE channel_id = ?`).run(`dm:${agentId}`);
+        this.db.prepare(`DELETE FROM agent_message_checkpoints WHERE agent_id = ?`).run(agentId);
+        // Finally delete the agent
         this.db.prepare(`DELETE FROM agents WHERE agent_id = ?`).run(agentId);
+        return { deletedConversations: rows.length };
     }
     // ─── CRUD ───
     createConversation(params) {
@@ -242,6 +270,48 @@ export class ConversationManager {
         this.db.prepare('DELETE FROM conversation_prompt_queue WHERE conversation_id = ?').run(id);
         this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
     }
+    /** Returns hostKeys (conversation:{id}:{agentType}) for all conversations of this agent */
+    getAgentHostKeys(agentId) {
+        const rows = this.db.prepare(`SELECT id, agent_type as agentType, node_id as nodeId
+       FROM conversations WHERE agent_id = ? AND node_id IS NOT NULL`).all(agentId);
+        return rows.map((r) => ({ nodeId: r.nodeId, hostKey: `conversation:${r.id}:${r.agentType}` }));
+    }
+    /** Clear chat history and reset session (keeps workspace files) */
+    clearAgentChat(agentId) {
+        const rows = this.db.prepare(`SELECT id, channel_id as channelId, agent_type as agentType, workspace_path as workspacePath,
+              session_key as sessionKey, node_id as nodeId, created_at as createdAt,
+              thread_kind as threadKind, is_primary_thread as isPrimaryThread
+       FROM conversations
+       WHERE agent_id = ?
+       ORDER BY is_primary_thread DESC, updated_at DESC`).all(agentId);
+        if (rows.length === 0)
+            return [];
+        const now = Date.now();
+        this.db.prepare('DELETE FROM conversation_prompt_queue WHERE agent_id = ?').run(agentId);
+        this.db.prepare(`DELETE FROM channel_messages WHERE channel_id = ?`).run(`dm:${agentId}`);
+        this.db.prepare(`DELETE FROM agent_message_checkpoints WHERE agent_id = ?`).run(agentId);
+        for (const row of rows) {
+            const runIds = this.db.prepare(`SELECT run_id as runId FROM runs WHERE session_key = ?`)
+                .all(row.sessionKey);
+            for (const run of runIds) {
+                this.db.prepare('DELETE FROM events WHERE run_id = ?').run(run.runId);
+            }
+            this.db.prepare('DELETE FROM runs WHERE session_key = ?').run(row.sessionKey);
+            const newSessionKey = randomUUID();
+            const preset = getRuntimeDriver(row.agentType);
+            createSession(this.db, {
+                sessionKey: newSessionKey,
+                agentCommand: preset.command,
+                agentArgs: preset.args,
+                cwd: row.workspacePath ?? this.config.workspaceRoot,
+                loadSupported: false,
+            });
+            upsertBinding(this.db, { platform: 'web', chatId: row.channelId, threadId: row.id, userId: row.agentType }, newSessionKey);
+            this.db.prepare(`UPDATE conversations SET session_key = ?, status = 'idle', title = '', updated_at = ? WHERE id = ?`).run(newSessionKey, now, row.id);
+            this.db.prepare('DELETE FROM sessions WHERE session_key = ?').run(row.sessionKey);
+        }
+        return this.listConversations({ agentId });
+    }
     resetAgent(agentId) {
         const rows = this.db.prepare(`SELECT id, channel_id as channelId, agent_type as agentType, workspace_path as workspacePath,
               session_key as sessionKey, node_id as nodeId, created_at as createdAt,
@@ -354,7 +424,7 @@ export class ConversationManager {
         const rows = this.db.prepare(`SELECT node_id as nodeId, hostname, agent_types_json as agentTypesJson, version,
               status, last_seen as lastSeen, created_at as createdAt,
               display_name as displayName, env_var_keys as envVarKeysJson, provisioned_at as provisionedAt
-       FROM nodes ORDER BY provisioned_at DESC, created_at ASC`).all();
+       FROM nodes WHERE status != 'deleted' ORDER BY provisioned_at DESC, created_at ASC`).all();
         return rows.map((row) => {
             const isOnline = !!this.nodeRegistry?.getNode(row.nodeId);
             return rowToMachineInfo(row, isOnline);
@@ -364,15 +434,25 @@ export class ConversationManager {
         const row = this.db.prepare(`SELECT node_id as nodeId, hostname, agent_types_json as agentTypesJson, version,
               status, last_seen as lastSeen, created_at as createdAt,
               display_name as displayName, env_var_keys as envVarKeysJson, provisioned_at as provisionedAt
-       FROM nodes WHERE node_id = ?`).get(nodeId);
+       FROM nodes WHERE node_id = ? AND status != 'deleted'`).get(nodeId);
         if (!row)
             return null;
         const isOnline = !!this.nodeRegistry?.getNode(nodeId);
         return rowToMachineInfo(row, isOnline);
     }
     deleteMachine(nodeId) {
-        this.db.prepare(`UPDATE agents SET node_id = NULL WHERE node_id = ?`).run(nodeId);
-        this.db.prepare(`DELETE FROM nodes WHERE node_id = ?`).run(nodeId);
+        const agentIds = this.db.prepare(`SELECT agent_id as agentId FROM agents WHERE node_id = ?`).all(nodeId);
+        for (const agent of agentIds) {
+            this.deleteAgent(agent.agentId);
+        }
+        this.db.prepare(`UPDATE nodes SET status = 'deleted' WHERE node_id = ?`).run(nodeId);
+        if (this.nodeRegistry) {
+            const node = this.nodeRegistry.getNode(nodeId);
+            if (node) {
+                node.ws.close(4000, 'Machine has been deleted');
+                this.nodeRegistry.unregister(nodeId);
+            }
+        }
     }
 }
 function rowToAgentInfo(row) {

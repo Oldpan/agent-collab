@@ -128,6 +128,36 @@ describe('ConversationManager', () => {
             expect(newSession.count).toBe(1);
         });
     });
+    describe('deleteMachine', () => {
+        it('应级联删除机器下的 agents、会话和运行数据', () => {
+            db.prepare(`INSERT INTO nodes(node_id, hostname, agent_types_json, version, status, last_seen, created_at, display_name, env_var_keys, provisioned_at)
+         VALUES(?, ?, '[]', '', 'offline', 0, ?, NULL, '[]', 0)`).run('node-old', 'oldpan-ai', Date.now());
+            const agent = manager.createAgent({
+                name: 'Tabb',
+                agentType: 'claude_acp',
+                nodeId: 'node-old',
+                workspacePath: '/tmp/tabb',
+            });
+            const conv = manager.openAgentThread(agent.agentId);
+            expect(conv).not.toBeNull();
+            if (!conv)
+                throw new Error('missing conversation');
+            const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?').get(conv.id);
+            db.prepare('INSERT INTO runs(run_id, session_key, prompt_text, started_at) VALUES(?, ?, ?, ?)').run('run-delete-machine', sessionRow.sessionKey, 'hello', Date.now());
+            db.prepare('INSERT INTO events(run_id, seq, method, payload_json, created_at) VALUES(?, ?, ?, ?, ?)').run('run-delete-machine', 1, 'node/event', JSON.stringify({ type: 'content.delta', text: 'hi' }), Date.now());
+            manager.deleteMachine('node-old');
+            const nodeRow = db.prepare('SELECT status FROM nodes WHERE node_id = ?').get('node-old');
+            const agentRow = db.prepare('SELECT agent_id as agentId FROM agents WHERE agent_id = ?').get(agent.agentId);
+            const conversationCount = db.prepare('SELECT count(*) as count FROM conversations WHERE agent_id = ?').get(agent.agentId);
+            const runCount = db.prepare('SELECT count(*) as count FROM runs WHERE run_id = ?').get('run-delete-machine');
+            const eventCount = db.prepare('SELECT count(*) as count FROM events WHERE run_id = ?').get('run-delete-machine');
+            expect(nodeRow?.status).toBe('deleted');
+            expect(agentRow).toBeUndefined();
+            expect(conversationCount.count).toBe(0);
+            expect(runCount.count).toBe(0);
+            expect(eventCount.count).toBe(0);
+        });
+    });
     // ─── channels ───
     describe('channels', () => {
         it('listChannels 应包含 default channel', () => {

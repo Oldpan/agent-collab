@@ -76,7 +76,7 @@ function replayHistory(socket, conversationId, manager) {
         return;
     // 获取所有 runs，按时间正序
     const runs = db
-        .prepare(`SELECT run_id as runId, prompt_text as promptText, stop_reason as stopReason, ended_at as endedAt
+        .prepare(`SELECT run_id as runId, prompt_text as promptText, stop_reason as stopReason, ended_at as endedAt, started_at as startedAt
        FROM runs WHERE session_key = ? ORDER BY started_at ASC`)
         .all(row.sessionKey);
     const send = (event) => {
@@ -89,7 +89,7 @@ function replayHistory(socket, conversationId, manager) {
         send({ type: 'history.user_message', text: run.promptText });
         // 发送 turn
         const turnId = `replay-${run.runId}`;
-        send({ type: 'turn.begin', turnId });
+        send({ type: 'turn.begin', turnId, startedAt: run.startedAt });
         // 读取 node/event（remote runs）— 直接回放 ServerEvent
         const nodeEvents = db
             .prepare(`SELECT payload_json as payloadJson FROM events

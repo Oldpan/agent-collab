@@ -24,7 +24,9 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
             reply.code(400);
             return { error: 'target and content are required' };
         }
-        const channelId = resolveChannelFromTarget(target, db);
+        // For DM targets that don't resolve to a known agent (e.g. dm:@User — a human),
+        // fall back to the sending agent's own DM channel so the reply is visible to frontend.
+        const channelId = resolveChannelFromTarget(target, db) ?? (target.startsWith('dm:') ? `dm:${agentId}` : null);
         if (!channelId) {
             reply.code(400);
             return { error: `Cannot resolve channel from target: ${target}` };
@@ -141,7 +143,7 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
             reply.code(400);
             return { error: 'channel query parameter is required' };
         }
-        const channelId = resolveChannelFromTarget(channel, db);
+        const channelId = resolveChannelFromTarget(channel, db) ?? (channel.startsWith('dm:') ? `dm:${agentId}` : null);
         if (!channelId) {
             reply.code(400);
             return { error: `Cannot resolve channel: ${channel}` };
@@ -431,11 +433,8 @@ function resolveChannelFromTarget(target, db) {
             if (agentRow)
                 return `dm:${agentRow.agentId}`;
         }
-        // Fallback for non-agent DM targets
-        const row = db
-            .prepare("SELECT channel_id as channelId FROM channels WHERE channel_id = 'default'")
-            .get();
-        return row?.channelId ?? null;
+        // Non-agent DM target (e.g. dm:@User) — return null so the caller can fall back to dm:{agentId}
+        return null;
     }
     return null;
 }

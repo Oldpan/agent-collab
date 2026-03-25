@@ -78,4 +78,54 @@ describe('Executor recovery', () => {
 
     executor.close();
   });
+
+  it('claude dispatch 应注入隔离的 CLAUDE_CONFIG_DIR', async () => {
+    const db = createTestDb();
+    openDbs.push(db);
+
+    const captured: Array<{ env?: Record<string, string>; workspaceRoot: string }> = [];
+    const workspaceRoot = '/tmp/claude-isolated-test';
+
+    const executor = new Executor({
+      db,
+      config: createTestConfig(),
+      send: () => {},
+      createHost: ({ env, workspaceRoot: hostWorkspaceRoot }) => {
+        captured.push({ env, workspaceRoot: hostWorkspaceRoot });
+        return {
+          getState: () => 'idle',
+          dispatch: async () => {},
+          cancelRun: async () => false,
+          handlePermissionResponse: async () => false,
+          close: () => {},
+          getCurrentRunId: () => null,
+          getLastError: () => null,
+          getWorkspaceRoot: () => hostWorkspaceRoot,
+        };
+      },
+    });
+
+    await executor.dispatch({
+      type: 'run.dispatch',
+      runId: 'run-claude-env-1',
+      conversationId: 'conv-claude-env-1',
+      agentType: 'claude_acp',
+      workspacePath: workspaceRoot,
+      prompt: 'hello',
+      sessionKey: 'session-claude-env-1',
+      hostKey: 'conversation:conv-claude-env-1:claude_acp',
+      dispatchMode: 'cold_start',
+      envVars: {
+        ANTHROPIC_MODEL: 'GLM-4.7',
+      },
+    });
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.env).toMatchObject({
+      ANTHROPIC_MODEL: 'GLM-4.7',
+      CLAUDE_CONFIG_DIR: `${workspaceRoot}/.claude-runtime`,
+    });
+
+    executor.close();
+  });
 });

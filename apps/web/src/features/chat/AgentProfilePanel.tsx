@@ -19,6 +19,10 @@ export function AgentProfilePanel({ agent }: AgentProfilePanelProps) {
   const envKeys = Object.keys(agent.envVars ?? {}).sort((a, b) => a.localeCompare(b));
   const disabledToolKinds = [...(agent.disabledToolKinds ?? [])].sort((a, b) => a.localeCompare(b));
   const memoryPath = agent.workspacePath ? `${agent.workspacePath}/MEMORY.md` : null;
+  const claudeConfigDir =
+    agent.agentType === "claude_acp" && agent.workspacePath
+      ? `${agent.workspacePath}/.claude-runtime`
+      : null;
 
   return (
     <ScrollArea className="flex-1">
@@ -37,6 +41,7 @@ export function AgentProfilePanel({ agent }: AgentProfilePanelProps) {
           <InfoRow label="Node" value={agent.nodeId ?? "Unassigned"} mono />
           <InfoRow label="Workspace" value={agent.workspacePath ?? "Not configured"} mono />
           <InfoRow label="Local Memory" value={memoryPath ?? "Not configured"} mono />
+          {claudeConfigDir ? <InfoRow label="Claude Config Dir" value={claudeConfigDir} mono /> : null}
         </ProfileSection>
 
         <ProfileSection title="Configured Env Vars">

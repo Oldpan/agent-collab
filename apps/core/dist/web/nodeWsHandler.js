@@ -22,6 +22,12 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
             case 'node.register': {
                 nodeId = msg.nodeId;
                 const now = Date.now();
+                const existing = db.prepare('SELECT node_id, status FROM nodes WHERE node_id = ?').get(msg.nodeId);
+                if (existing?.status === 'deleted') {
+                    log.warn(`[node-ws] connection rejected: node ${msg.nodeId} was deleted`);
+                    socket.close(4000, 'Machine has been deleted');
+                    return;
+                }
                 registry.register({
                     nodeId: msg.nodeId,
                     hostname: msg.hostname,
@@ -32,7 +38,6 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
                 });
                 // Persist to DB: update existing pre-provisioned row or insert new
                 const agentTypesJson = JSON.stringify(msg.agentTypes);
-                const existing = db.prepare('SELECT node_id FROM nodes WHERE node_id = ?').get(msg.nodeId);
                 if (existing) {
                     db.prepare(`UPDATE nodes SET hostname=?, agent_types_json=?, version=?, status='online', last_seen=?,
              created_at=CASE WHEN created_at=0 THEN ? ELSE created_at END WHERE node_id=?`).run(msg.hostname, agentTypesJson, msg.version, now, now, msg.nodeId);
@@ -51,6 +56,12 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
             }
             case 'run.event': {
                 log.debug('[node-ws] run.event', { conversationId: msg.conversationId, eventType: msg.event.type });
+                // Silently discard events for runs that no longer exist (deleted by reset/clear-chat)
+                const runKnown = !!(db.prepare('SELECT 1 FROM runs WHERE run_id = ?').get(msg.runId));
+                if (!runKnown) {
+                    log.debug('[node-ws] ignoring run.event for unknown/deleted run', { runId: msg.runId });
+                    break;
+                }
                 if (msg.event.type === 'conversation.status') {
                     db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
                         .run(msg.event.status, Date.now(), msg.conversationId);
@@ -67,6 +78,17 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
             case 'run.end': {
                 log.info('[node-ws] run.end', { runId: msg.runId, conversationId: msg.conversationId, error: msg.error ?? null });
                 runSeq.delete(msg.runId);
+                // Check if this run still exists in core's DB.
+                // After reset/clear-chat the run rows are deleted — ignore stale run.end messages
+                // so they don't overwrite the conversation status set by the reset operation.
+                const runExists = !!(db
+                    .prepare('SELECT 1 FROM runs WHERE run_id = ?')
+                    .get(msg.runId));
+                if (!runExists) {
+                    log.warn('[node-ws] ignoring run.end for unknown/deleted run', { runId: msg.runId });
+                    void manager.onConversationSettled(msg.conversationId);
+                    break;
+                }
                 // Mark run as finished in core DB
                 finishRun(db, msg.error
                     ? { runId: msg.runId, error: msg.error }

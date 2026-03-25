@@ -71,6 +71,10 @@ async function main() {
                     connection.send(workspacePathErrorResponse('workspace.read.response', msg.requestId, msg.relativePath, error));
                 }
                 break;
+            case 'host.close':
+                executor.closeHost(msg.hostKey);
+                log.info('[agent-node] host closed', { hostKey: msg.hostKey });
+                break;
             case 'workspace.reset.request':
                 try {
                     executor.resetWorkspace(msg.workspaceRoot);

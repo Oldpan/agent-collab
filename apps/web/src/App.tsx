@@ -45,9 +45,16 @@ export function App() {
   const { agents, createAgent, updateAgent, deleteAgent } = useAgents();
   const { machines, createMachine, deleteMachine } = useMachines();
 
+  const visibleConversations = useMemo(() => {
+    const agentIds = new Set(agents.map((agent) => agent.agentId));
+    return conversations.filter(
+      (conversation) => conversation.agentId && agentIds.has(conversation.agentId),
+    );
+  }, [agents, conversations]);
+
   const selectedConversation = useMemo(
-    () => conversations.find((c) => c.id === selectedId),
-    [conversations, selectedId],
+    () => visibleConversations.find((c) => c.id === selectedId),
+    [visibleConversations, selectedId],
   );
   const selectedAgent = useMemo(
     () => {
@@ -56,6 +63,12 @@ export function App() {
     },
     [agents, selectedConversation?.agentId],
   );
+
+  useEffect(() => {
+    if (!selectedId) return;
+    if (visibleConversations.some((conversation) => conversation.id === selectedId)) return;
+    selectConversation(null);
+  }, [selectConversation, selectedId, visibleConversations]);
 
   const handleCreateAgent = useCallback(
     (req: CreateAgentRequest) => {
@@ -126,7 +139,7 @@ export function App() {
   const sidebarProps = {
     machines,
     agents,
-    conversations,
+    conversations: visibleConversations,
     selectedId,
     selectedView: viewMode,
     onOpenSessions: handleOpenSessions,
@@ -183,7 +196,7 @@ export function App() {
         <ResizablePanel defaultSize={isMobile ? 100 : 75} minSize={50}>
           {viewMode === "sessions" ? (
             <SessionManagerPanel
-              conversations={conversations}
+              conversations={visibleConversations}
               agents={agents}
               selectedId={selectedId}
               onOpenSession={handleSelectConversation}

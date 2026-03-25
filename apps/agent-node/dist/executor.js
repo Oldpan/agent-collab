@@ -3,6 +3,7 @@ import path from 'node:path';
 import { ToolAuth, createSession, getSession, upsertBinding, log, } from '@agent-collab/runtime-acp';
 import { getRuntimeDriver } from '@agent-collab/protocol';
 import { AgentHost } from './agentHost.js';
+import { ensureIsolatedClaudeConfig } from './claudeConfig.js';
 import { enqueueDispatch, listPendingDispatches, removeDispatch, updateDispatchState, } from './dispatchQueueStore.js';
 export class Executor {
     db;
@@ -25,6 +26,11 @@ export class Executor {
         const bindingKey = `node:${conversationId}:-:node_user`;
         const runtimeKey = hostKey || sessionKey;
         const driver = getRuntimeDriver(msg.agentType);
+        const workspaceRoot = msg.workspacePath ?? this.config.workspaceRoot;
+        const runtimeEnv = { ...(msg.envVars ?? {}) };
+        if (msg.agentType === 'claude_acp') {
+            runtimeEnv.CLAUDE_CONFIG_DIR = ensureIsolatedClaudeConfig(workspaceRoot);
+        }
         log.info('[executor] dispatch received', {
             runId,
             conversationId,
@@ -43,7 +49,7 @@ export class Executor {
                 sessionKey,
                 agentCommand: driver.command,
                 agentArgs: driver.args,
-                cwd: msg.workspacePath ?? this.config.workspaceRoot,
+                cwd: workspaceRoot,
                 loadSupported: false,
             });
             log.debug('[executor] created local session', { sessionKey, conversationId });
@@ -87,10 +93,10 @@ export class Executor {
                 db: this.db,
                 config: this.config,
                 toolAuth: this.toolAuth,
-                workspaceRoot: msg.workspacePath ?? this.config.workspaceRoot,
+                workspaceRoot,
                 agentCommand: driver.command,
                 agentArgs: driver.args,
-                env: msg.envVars,
+                env: runtimeEnv,
                 disabledToolKinds: msg.disabledToolKinds,
                 channelBridgeMcpEntry,
                 send: this.send,
@@ -163,6 +169,18 @@ export class Executor {
                 return true;
         }
         return false;
+    }
+    closeHost(hostKey) {
+        const host = this.hosts.get(hostKey);
+        if (!host)
+            return;
+        const currentRunId = host.getCurrentRunId();
+        if (currentRunId) {
+            this.runToHost.delete(currentRunId);
+            removeDispatch(this.db, currentRunId);
+        }
+        host.close();
+        this.hosts.delete(hostKey);
     }
     resetWorkspace(workspaceRoot) {
         const resolvedRoot = path.resolve(workspaceRoot);

@@ -65,6 +65,38 @@ Machines (remote nodes) can be registered in DB before the physical machine conn
 
 Machine CRUD lives in `ConversationManager` (`createMachine`, `listMachines`, `getMachine`, `deleteMachine`). `listMachines()` overlays live NodeRegistry status on top of DB-persisted status via `rowToMachineInfo(row, isOnline)`.
 
+### agent-node nodeId & hostname 生成机制
+
+agent-node 启动时自动生成并持久化 nodeId，逻辑在 `apps/agent-node/src/config.ts`：
+
+**nodeId 取值优先级：**
+1. 环境变量 `NODE_ID` —— 若设置则直接使用
+2. `resolveStableNodeId(dbPath)` —— 从本地持久化文件读取或生成
+
+**`resolveStableNodeId(dbPath)` 行为：**
+- 取 `dbPath` 所在目录（如 `~/.agent-node/db.sqlite` → `~/.agent-node/`）
+- 查找该目录下的 `node-id` 文件
+- 若文件存在且非空，直接复用其中的值
+- 若文件不存在或为空，生成 `node-${randomUUID()}` 并写入文件
+
+**hostname 取值优先级：**
+1. 环境变量 `NODE_HOSTNAME` —— 若设置则直接使用
+2. `os.hostname()` —— 系统主机名
+
+**典型场景示例：**
+```
+~/.agent-node/node-id 文件内容：
+node-0eb45b1b-a0f1-42f9-9ed8-52b9b197dfd7
+
+系统主机名：aitopatom-e2eb
+
+最终上报给 core 的节点信息：
+- nodeId: node-0eb45b1b-a0f1-42f9-9ed8-52b9b197dfd7
+- hostname: aitopatom-e2eb
+```
+
+这使得同一台机器多次重启后仍保持相同的 nodeId（便于 core 识别），而 hostname 反映当前实际主机名。
+
 ### agent-node executor FK constraint
 
 When `executor.ts` receives `run.dispatch`, it must call `createSession()` before `upsertBinding()`. The `bindings` table has a FK on `sessions(session_key)`, and the agent-node's local DB starts empty — the session row from core's DB does not exist there. The `sessionKey` sent in `run.dispatch` must be bootstrapped locally on first use.

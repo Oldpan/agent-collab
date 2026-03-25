@@ -1,7 +1,7 @@
 import Fastify from 'fastify';
 import fastifyCors from '@fastify/cors';
 import fastifyWebSocket from '@fastify/websocket';
-import { log } from '@agent-collab/runtime-acp';
+import { log, finishRun } from '@agent-collab/runtime-acp';
 import { handleWebSocket, broadcast } from './wsHandler.js';
 import { handleNodeWebSocket } from './nodeWsHandler.js';
 import { registerInternalAgentRoutes } from './internalAgentRouter.js';
@@ -60,9 +60,8 @@ export async function startServer(params) {
             reply.code(404);
             return { error: 'Not found' };
         }
-        conversationManager.deleteAgent(req.params.id);
-        reply.code(204);
-        return;
+        const result = conversationManager.deleteAgent(req.params.id);
+        return { ok: true, deletedConversations: result.deletedConversations };
     });
     app.get('/api/agents/:id/conversations', async (req, reply) => {
         const agent = conversationManager.getAgent(req.params.id);
@@ -79,6 +78,64 @@ export async function startServer(params) {
             return { error: 'Not found' };
         }
         return thread;
+    });
+    app.post('/api/agents/:id/restart', async (req, reply) => {
+        const agent = conversationManager.getAgent(req.params.id);
+        if (!agent) {
+            reply.code(404);
+            return { error: 'Not found' };
+        }
+        if (!agent.nodeId) {
+            reply.code(409);
+            return { error: 'Agent is not assigned to a remote node.' };
+        }
+        const conversations = conversationManager.listConversations({ agentId: req.params.id });
+        for (const conversation of conversations) {
+            broadcast(conversation.id, { type: 'system.notice', message: 'Agent restarting…' });
+        }
+        const hostKeys = conversationManager.getAgentHostKeys(req.params.id);
+        for (const { nodeId, hostKey } of hostKeys) {
+            nodeRegistry.send(nodeId, { type: 'host.close', hostKey });
+        }
+        const now = Date.now();
+        for (const conversation of conversations) {
+            // Finish any active runs so findBlockingConversation won't treat this conversation as blocking
+            const activeRuns = db.prepare(`SELECT run_id as runId FROM runs WHERE session_key = (
+           SELECT session_key FROM conversations WHERE id = ?
+         ) AND ended_at IS NULL`).all(conversation.id);
+            for (const run of activeRuns) {
+                finishRun(db, { runId: run.runId, error: 'Restarted by user' });
+            }
+            // Update DB status to idle
+            db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
+                .run('idle', now, conversation.id);
+            broadcast(conversation.id, { type: 'conversation.status', conversationId: conversation.id, status: 'idle' });
+            broadcast(conversation.id, { type: 'system.notice', message: 'Agent restarted — ready for new messages.' });
+        }
+        // Drain any queued prompts that were waiting on the now-settled conversations
+        for (const conversation of conversations) {
+            void conversationManager.onConversationSettled(conversation.id);
+        }
+        return { ok: true, conversations };
+    });
+    app.post('/api/agents/:id/clear-chat', async (req, reply) => {
+        const agent = conversationManager.getAgent(req.params.id);
+        if (!agent) {
+            reply.code(404);
+            return { error: 'Not found' };
+        }
+        const hostKeys = conversationManager.getAgentHostKeys(req.params.id);
+        if (agent.nodeId) {
+            for (const { nodeId, hostKey } of hostKeys) {
+                nodeRegistry.send(nodeId, { type: 'host.close', hostKey });
+            }
+        }
+        const conversations = conversationManager.clearAgentChat(req.params.id);
+        for (const conversation of conversations) {
+            broadcast(conversation.id, { type: 'history.reset' });
+            broadcast(conversation.id, { type: 'conversation.status', conversationId: conversation.id, status: 'idle' });
+        }
+        return { ok: true, conversations };
     });
     app.post('/api/agents/:id/reset', async (req, reply) => {
         const agent = conversationManager.getAgent(req.params.id);

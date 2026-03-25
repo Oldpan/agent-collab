@@ -12,6 +12,7 @@ import type { Db } from '@agent-collab/runtime-acp';
 import { getRuntimeDriver, type RunDispatchMsg, type NodeToCore } from '@agent-collab/protocol';
 import type { AgentNodeConfig } from './config.js';
 import { AgentHost } from './agentHost.js';
+import { ensureIsolatedClaudeConfig } from './claudeConfig.js';
 import {
   enqueueDispatch,
   listPendingDispatches,
@@ -49,6 +50,12 @@ export class Executor {
     const bindingKey = `node:${conversationId}:-:node_user`;
     const runtimeKey = hostKey || sessionKey;
     const driver = getRuntimeDriver(msg.agentType);
+    const workspaceRoot = msg.workspacePath ?? this.config.workspaceRoot;
+    const runtimeEnv = { ...(msg.envVars ?? {}) };
+
+    if (msg.agentType === 'claude_acp') {
+      runtimeEnv.CLAUDE_CONFIG_DIR = ensureIsolatedClaudeConfig(workspaceRoot);
+    }
 
     log.info('[executor] dispatch received', {
       runId,
@@ -70,7 +77,7 @@ export class Executor {
         sessionKey,
         agentCommand: driver.command,
         agentArgs: driver.args,
-        cwd: msg.workspacePath ?? this.config.workspaceRoot,
+        cwd: workspaceRoot,
         loadSupported: false,
       });
       log.debug('[executor] created local session', { sessionKey, conversationId });
@@ -120,10 +127,10 @@ export class Executor {
         db: this.db,
         config: this.config,
         toolAuth: this.toolAuth,
-        workspaceRoot: msg.workspacePath ?? this.config.workspaceRoot,
+        workspaceRoot,
         agentCommand: driver.command,
         agentArgs: driver.args,
-        env: msg.envVars,
+        env: runtimeEnv,
         disabledToolKinds: msg.disabledToolKinds,
         channelBridgeMcpEntry,
         send: this.send,
