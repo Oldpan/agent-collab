@@ -73,9 +73,8 @@ export async function startServer(params: {
   app.delete<{ Params: { id: string } }>('/api/agents/:id', async (req, reply) => {
     const agent = conversationManager.getAgent(req.params.id);
     if (!agent) { reply.code(404); return { error: 'Not found' }; }
-    conversationManager.deleteAgent(req.params.id);
-    reply.code(204);
-    return;
+    const result = conversationManager.deleteAgent(req.params.id);
+    return { ok: true, deletedConversations: result.deletedConversations };
   });
 
   app.get<{ Params: { id: string } }>('/api/agents/:id/conversations', async (req, reply) => {

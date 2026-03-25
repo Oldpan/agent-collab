@@ -156,11 +156,37 @@ export class ConversationManager {
     return { ...existing, name, systemPrompt, envVars, disabledToolKinds, updatedAt: now } satisfies AgentInfo;
   }
 
-  deleteAgent(agentId: string): void {
+  deleteAgent(agentId: string): { deletedConversations: number } {
+    // Get all conversations for this agent to cascade delete their data
+    const rows = this.db.prepare(
+      `SELECT id, session_key as sessionKey
+       FROM conversations WHERE agent_id = ?`,
+    ).all(agentId) as Array<{ id: string; sessionKey: string }>;
+
+    // Cascade delete all conversation data
+    for (const row of rows) {
+      const runIds = this.db.prepare(`SELECT run_id as runId FROM runs WHERE session_key = ?`)
+        .all(row.sessionKey) as Array<{ runId: string }>;
+      for (const run of runIds) {
+        this.db.prepare('DELETE FROM events WHERE run_id = ?').run(run.runId);
+      }
+      this.db.prepare('DELETE FROM runs WHERE session_key = ?').run(row.sessionKey);
+      this.db.prepare('DELETE FROM sessions WHERE session_key = ?').run(row.sessionKey);
+      this.db.prepare('DELETE FROM conversation_prompt_queue WHERE conversation_id = ?').run(row.id);
+    }
+
+    // Delete agent-related data
     this.db.prepare(`DELETE FROM conversation_prompt_queue WHERE agent_id = ?`).run(agentId);
-    // Nullify agent_id on conversations before deleting the agent
-    this.db.prepare(`UPDATE conversations SET agent_id = NULL WHERE agent_id = ?`).run(agentId);
+    this.db.prepare(`DELETE FROM channel_messages WHERE channel_id = ?`).run(`dm:${agentId}`);
+    this.db.prepare(`DELETE FROM agent_message_checkpoints WHERE agent_id = ?`).run(agentId);
+
+    // Delete all conversations
+    this.db.prepare(`DELETE FROM conversations WHERE agent_id = ?`).run(agentId);
+
+    // Finally delete the agent
     this.db.prepare(`DELETE FROM agents WHERE agent_id = ?`).run(agentId);
+
+    return { deletedConversations: rows.length };
   }
 
   // ─── CRUD ───

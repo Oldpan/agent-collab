@@ -98,7 +98,7 @@ function replayHistory(
   // 获取所有 runs，按时间正序
   const runs = db
     .prepare(
-      `SELECT run_id as runId, prompt_text as promptText, stop_reason as stopReason, ended_at as endedAt
+      `SELECT run_id as runId, prompt_text as promptText, stop_reason as stopReason, ended_at as endedAt, started_at as startedAt
        FROM runs WHERE session_key = ? ORDER BY started_at ASC`,
     )
     .all(row.sessionKey) as Array<{
@@ -106,6 +106,7 @@ function replayHistory(
     promptText: string;
     stopReason: string | null;
     endedAt: number | null;
+    startedAt: number;
   }>;
 
   const send = (event: ServerEvent) => {
@@ -120,7 +121,7 @@ function replayHistory(
 
     // 发送 turn
     const turnId = `replay-${run.runId}`;
-    send({ type: 'turn.begin', turnId });
+    send({ type: 'turn.begin', turnId, startedAt: run.startedAt });
 
     // 读取 node/event（remote runs）— 直接回放 ServerEvent
     const nodeEvents = db

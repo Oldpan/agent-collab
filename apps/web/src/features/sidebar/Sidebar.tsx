@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 import {
   PlusIcon, TrashIcon, XIcon, ChevronRightIcon, ChevronDownIcon, PencilIcon, Rows3Icon,
@@ -92,6 +93,9 @@ export function Sidebar({
   );
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [showCreateMachine, setShowCreateMachine] = useState(false);
+  const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [agentToDelete, setAgentToDelete] = useState<AgentInfo | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
 
   // Create agent form state (keyed by machineNodeId)
   const [createAgentInMachine, setCreateAgentInMachine] = useState<string | null>(null);
@@ -109,6 +113,28 @@ export function Sidebar({
       return next;
     });
   };
+
+  const handleOpenDeleteDialog = useCallback((agent: AgentInfo) => {
+    setAgentToDelete(agent);
+    setDeleteDialogOpen(true);
+  }, []);
+
+  const handleConfirmDelete = useCallback(async () => {
+    if (!agentToDelete) return;
+    setIsDeleting(true);
+    try {
+      await onDeleteAgent(agentToDelete.agentId);
+      setDeleteDialogOpen(false);
+      setAgentToDelete(null);
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [agentToDelete, onDeleteAgent]);
+
+  const handleCancelDelete = useCallback(() => {
+    setDeleteDialogOpen(false);
+    setAgentToDelete(null);
+  }, []);
 
   const handleCreateAgent = useCallback(() => {
     if (!newAgentName.trim() || !createAgentInMachine) return;
@@ -351,7 +377,7 @@ export function Sidebar({
                             updatedAt={primaryConversation?.updatedAt ?? agent.updatedAt}
                             onOpen={() => onOpenAgentThread(agent.agentId)}
                             onEdit={() => setEditingAgentId(isEditing ? null : agent.agentId)}
-                            onDelete={() => onDeleteAgent(agent.agentId)}
+                            onDelete={() => handleOpenDeleteDialog(agent)}
                           />
 
                           {isEditing && (
@@ -374,6 +400,21 @@ export function Sidebar({
           })}
         </div>
       </ScrollArea>
+
+      <ConfirmDialog
+        isOpen={deleteDialogOpen}
+        title="Delete Agent"
+        message={
+          agentToDelete
+            ? `Are you sure you want to delete "${agentToDelete.name}"? This will permanently delete all conversations, chat history, and session data associated with this agent. This action cannot be undone.`
+            : ""
+        }
+        confirmText={isDeleting ? "Deleting..." : "Delete"}
+        cancelText="Cancel"
+        variant="danger"
+        onConfirm={handleConfirmDelete}
+        onCancel={handleCancelDelete}
+      />
     </div>
   );
 }
@@ -391,18 +432,6 @@ type AgentRowProps = {
 };
 
 function AgentRow({ agent, isEditing, isSelected, updatedAt, onOpen, onEdit, onDelete }: AgentRowProps) {
-  const [confirmDelete, setConfirmDelete] = useState(false);
-
-  const handleDelete = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (confirmDelete) {
-      onDelete();
-    } else {
-      setConfirmDelete(true);
-      setTimeout(() => setConfirmDelete(false), 3000);
-    }
-  };
-
   return (
     <div className={cn(
       "group flex items-center gap-1.5 rounded-md border-2 border-zinc-900 px-2 py-1.5 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]",
@@ -437,10 +466,10 @@ function AgentRow({ agent, isEditing, isSelected, updatedAt, onOpen, onEdit, onD
           type="button"
           className={cn(
             "p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer",
-            confirmDelete ? "opacity-100 text-destructive" : "text-zinc-500 hover:text-destructive",
+            "text-zinc-500 hover:text-red-600",
           )}
-          onClick={handleDelete}
-          title={confirmDelete ? "Click again to confirm" : "Delete agent"}
+          onClick={(e) => { e.stopPropagation(); onDelete(); }}
+          title="Delete agent"
         >
           <TrashIcon className="size-3" />
         </button>

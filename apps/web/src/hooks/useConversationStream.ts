@@ -116,6 +116,7 @@ export function useConversationStream(
             // Replay turns (history) are included but don't change streaming status.
             const runId = event.turnId;
             const isReplay = runId.startsWith("replay-");
+            const startedAt = event.startedAt ?? Date.now();
             currentRunIdRef.current = runId;
             textRef.current = "";
             thinkingRef.current = "";
@@ -124,7 +125,7 @@ export function useConversationStream(
             if (!isReplay) setStatus("streaming");
             setRuns((prev) => [
               ...prev,
-              { id: runId, startedAt: Date.now(), toolCalls: [], isActive: !isReplay },
+              { id: runId, startedAt, toolCalls: [], isActive: !isReplay },
             ]);
             break;
           }

@@ -66,6 +66,7 @@ export type ConversationStatusEvent = {
 export type TurnBeginEvent = {
   type: 'turn.begin';
   turnId: string;
+  startedAt?: number;
 };
 
 export type TurnEndEvent = {

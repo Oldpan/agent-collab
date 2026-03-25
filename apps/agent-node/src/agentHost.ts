@@ -187,11 +187,12 @@ export class AgentHost {
     this.lastError = null;
     this.hooks.onRunStart?.(msg);
 
+    const nowMs = Date.now();
     this.send({
       type: 'run.event',
       runId,
       conversationId,
-      event: { type: 'turn.begin', turnId: runId },
+      event: { type: 'turn.begin', turnId: runId, startedAt: nowMs },
     });
     this.send({
       type: 'run.event',
