@@ -592,7 +592,7 @@ export class ConversationManager {
       `SELECT node_id as nodeId, hostname, agent_types_json as agentTypesJson, version,
               status, last_seen as lastSeen, created_at as createdAt,
               display_name as displayName, env_var_keys as envVarKeysJson, provisioned_at as provisionedAt
-       FROM nodes ORDER BY provisioned_at DESC, created_at ASC`
+       FROM nodes WHERE status != 'deleted' ORDER BY provisioned_at DESC, created_at ASC`
     ).all() as Array<MachineRow>;
 
     return rows.map((row) => {
@@ -606,7 +606,7 @@ export class ConversationManager {
       `SELECT node_id as nodeId, hostname, agent_types_json as agentTypesJson, version,
               status, last_seen as lastSeen, created_at as createdAt,
               display_name as displayName, env_var_keys as envVarKeysJson, provisioned_at as provisionedAt
-       FROM nodes WHERE node_id = ?`
+       FROM nodes WHERE node_id = ? AND status != 'deleted'`
     ).get(nodeId) as MachineRow | undefined;
 
     if (!row) return null;
@@ -616,7 +616,15 @@ export class ConversationManager {
 
   deleteMachine(nodeId: string): void {
     this.db.prepare(`UPDATE agents SET node_id = NULL WHERE node_id = ?`).run(nodeId);
-    this.db.prepare(`DELETE FROM nodes WHERE node_id = ?`).run(nodeId);
+    this.db.prepare(`UPDATE nodes SET status = 'deleted' WHERE node_id = ?`).run(nodeId);
+
+    if (this.nodeRegistry) {
+      const node = this.nodeRegistry.getNode(nodeId);
+      if (node) {
+        node.ws.close(4000, 'Machine has been deleted');
+        this.nodeRegistry.unregister(nodeId);
+      }
+    }
   }
 }
 

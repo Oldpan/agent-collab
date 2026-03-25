@@ -97,6 +97,9 @@ export function Sidebar({
   const [agentToDelete, setAgentToDelete] = useState<AgentInfo | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
+  const [deleteMachineDialogOpen, setDeleteMachineDialogOpen] = useState(false);
+  const [machineToDelete, setMachineToDelete] = useState<MachineInfo | null>(null);
+
   // Create agent form state (keyed by machineNodeId)
   const [createAgentInMachine, setCreateAgentInMachine] = useState<string | null>(null);
   const [newAgentName, setNewAgentName] = useState("");
@@ -134,6 +137,28 @@ export function Sidebar({
   const handleCancelDelete = useCallback(() => {
     setDeleteDialogOpen(false);
     setAgentToDelete(null);
+  }, []);
+
+  const handleOpenDeleteMachineDialog = useCallback((machine: MachineInfo) => {
+    setMachineToDelete(machine);
+    setDeleteMachineDialogOpen(true);
+  }, []);
+
+  const handleConfirmDeleteMachine = useCallback(async () => {
+    if (!machineToDelete) return;
+    setIsDeleting(true);
+    try {
+      await onDeleteMachine(machineToDelete.nodeId);
+      setDeleteMachineDialogOpen(false);
+      setMachineToDelete(null);
+    } finally {
+      setIsDeleting(false);
+    }
+  }, [machineToDelete, onDeleteMachine]);
+
+  const handleCancelDeleteMachine = useCallback(() => {
+    setDeleteMachineDialogOpen(false);
+    setMachineToDelete(null);
   }, []);
 
   const handleCreateAgent = useCallback(() => {
@@ -275,7 +300,7 @@ export function Sidebar({
                       type="button"
                       className="rounded-sm p-0.5 hover:bg-[#ffe27a] cursor-pointer"
                       title="Delete machine"
-                      onClick={(e) => { e.stopPropagation(); onDeleteMachine(machine.nodeId); }}
+                      onClick={(e) => { e.stopPropagation(); handleOpenDeleteMachineDialog(machine); }}
                     >
                       <TrashIcon className="size-3 text-zinc-500 hover:text-destructive" />
                     </button>
@@ -414,6 +439,21 @@ export function Sidebar({
         variant="danger"
         onConfirm={handleConfirmDelete}
         onCancel={handleCancelDelete}
+      />
+
+      <ConfirmDialog
+        isOpen={deleteMachineDialogOpen}
+        title="Delete Machine"
+        message={
+          machineToDelete
+            ? `Are you sure you want to delete the machine "${machineToDelete.name}"? This action cannot be undone and will disconnect the node.`
+            : ""
+        }
+        confirmText={isDeleting ? "Deleting..." : "Delete"}
+        cancelText="Cancel"
+        variant="danger"
+        onConfirm={handleConfirmDeleteMachine}
+        onCancel={handleCancelDeleteMachine}
       />
     </div>
   );

@@ -43,6 +43,14 @@ export function handleNodeWebSocket(
       case 'node.register': {
         nodeId = msg.nodeId;
         const now = Date.now();
+
+        const existing = db.prepare('SELECT node_id, status FROM nodes WHERE node_id = ?').get(msg.nodeId) as { node_id: string; status: string } | undefined;
+        if (existing?.status === 'deleted') {
+          log.warn(`[node-ws] connection rejected: node ${msg.nodeId} was deleted`);
+          socket.close(4000, 'Machine has been deleted');
+          return;
+        }
+
         registry.register({
           nodeId: msg.nodeId,
           hostname: msg.hostname,
@@ -54,7 +62,6 @@ export function handleNodeWebSocket(
 
         // Persist to DB: update existing pre-provisioned row or insert new
         const agentTypesJson = JSON.stringify(msg.agentTypes);
-        const existing = db.prepare('SELECT node_id FROM nodes WHERE node_id = ?').get(msg.nodeId);
         if (existing) {
           db.prepare(
             `UPDATE nodes SET hostname=?, agent_types_json=?, version=?, status='online', last_seen=?,
