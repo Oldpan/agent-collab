@@ -208,14 +208,12 @@ export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps
                 </div>
               )}
 
-              {(status === "queued" || status === "submitted" || status === "recovering" || status === "awaiting_approval") && (
+              {(status === "queued" || status === "recovering" || status === "awaiting_approval") && (
                 <div className="mx-1 mt-2 mb-3 flex items-center gap-2 rounded-md border-2 border-zinc-900 bg-[#fffce8] px-3 py-2 text-sm text-zinc-600 shadow-[4px_4px_0_0_rgba(0,0,0,0.1)]">
                   <Loader size={14} />
                   <span>
                     {status === "queued"
                       ? "Queued behind another thread..."
-                      : status === "submitted"
-                      ? "Thinking..."
                       : status === "recovering"
                         ? "Recovering session..."
                         : "Waiting for approval..."}

@@ -68,7 +68,10 @@ export function useConversationStream(
     currentToolCallsRef.current = currentToolCallsRef.current.map((tc) =>
       tc.completed ? tc : { ...tc, completed: true },
     );
-    updateCurrentMessage();
+    // Only update message if there's an active message being built (non-channel mode)
+    if (currentMsgIdRef.current) {
+      updateCurrentMessage();
+    }
   }, [updateCurrentMessage]);
 
   // Process a single server event
@@ -145,13 +148,20 @@ export function useConversationStream(
 
         case "content.delta": {
           textRef.current += event.text;
-          updateCurrentMessage();
+          // Only update message content in non-channel mode (ACP streaming)
+          // In channel mode, content comes via channel.message event
+          if (!isChannelMode && currentMsgIdRef.current) {
+            updateCurrentMessage();
+          }
           break;
         }
 
         case "thinking.delta": {
           thinkingRef.current += event.text;
-          updateCurrentMessage();
+          // Only update message thinking in non-channel mode (ACP streaming)
+          if (!isChannelMode && currentMsgIdRef.current) {
+            updateCurrentMessage();
+          }
           if (isChannelMode && currentRunIdRef.current) {
             const runId = currentRunIdRef.current;
             const thinking = thinkingRef.current;
@@ -179,7 +189,11 @@ export function useConversationStream(
               { id: event.toolCallId, name: event.name, input: event.input, completed: false },
             ];
           }
-          updateCurrentMessage();
+          // Only update message tool calls in non-channel mode (ACP streaming)
+          // In channel mode, tool calls should only appear in Activity tab (runs)
+          if (!isChannelMode && currentMsgIdRef.current) {
+            updateCurrentMessage();
+          }
           if (isChannelMode && currentRunIdRef.current) {
             const runId = currentRunIdRef.current;
             const toolCalls = [...currentToolCallsRef.current];
@@ -196,7 +210,11 @@ export function useConversationStream(
               ? { ...tc, completed: true, output: event.output, error: event.error }
               : tc,
           );
-          updateCurrentMessage();
+          // Only update message tool calls in non-channel mode (ACP streaming)
+          // In channel mode, tool calls should only appear in Activity tab (runs)
+          if (!isChannelMode && currentMsgIdRef.current) {
+            updateCurrentMessage();
+          }
           if (isChannelMode && currentRunIdRef.current) {
             const runId = currentRunIdRef.current;
             const toolCalls = [...currentToolCallsRef.current];
