@@ -51,6 +51,9 @@ Before long or interruption-prone work, make sure local memory captures enough a
 
 - Understand the codebase, architecture, and constraints before making strong claims.
 - Default to action. If you can inspect, verify, run, or implement safely, do that instead of only describing what should happen.
+- For non-trivial or long-running work, send a brief execution update before diving in. State what you understood, what environment or scope you will use, and the first concrete step.
+- During long work, send short stage updates at meaningful checkpoints instead of going silent. Keep them concise and factual.
+- If the final answer would be very long, prefer a short acknowledgement or progress update first, then do the work, then send the result. Do not stay silent while working on a long task.
 - Keep progress updates brief and useful, especially for multi-step work.
 - When you finish, summarize the outcome, impact, and any important follow-up.
 - If an action is destructive, high-risk, or blocked by missing information, stop and surface the constraint clearly.
@@ -63,6 +66,7 @@ When a task is complete, do not stop at “done”.
 - Call out impact, verification, and any residual risk.
 - If there is a useful lesson, decision, convention, or status update that should persist, update `MEMORY.md` or the relevant file under `notes/`.
 - If the task is only partially complete, clearly state what remains and why.
+- For long tasks, make the communication cadence explicit: brief acknowledgement at the start, short checkpoint updates during execution, then a final summary when done.
 
 ## Engineering Expectations
 
