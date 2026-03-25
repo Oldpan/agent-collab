@@ -3,7 +3,7 @@ import fastifyCors from '@fastify/cors';
 import fastifyWebSocket from '@fastify/websocket';
 
 import type { Db } from '@agent-collab/runtime-acp';
-import { log } from '@agent-collab/runtime-acp';
+import { log, finishRun } from '@agent-collab/runtime-acp';
 import type { CreateConversationRequest, CreateChannelRequest, CreateAgentRequest, UpdateAgentRequest, CreateMachineRequest } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
 import { handleWebSocket, broadcast } from './wsHandler.js';
@@ -98,14 +98,36 @@ export async function startServer(params: {
     if (!agent) { reply.code(404); return { error: 'Not found' }; }
     if (!agent.nodeId) { reply.code(409); return { error: 'Agent is not assigned to a remote node.' }; }
 
+    const conversations = conversationManager.listConversations({ agentId: req.params.id });
+    for (const conversation of conversations) {
+      broadcast(conversation.id, { type: 'system.notice', message: 'Agent restarting…' });
+    }
+
     const hostKeys = conversationManager.getAgentHostKeys(req.params.id);
     for (const { nodeId, hostKey } of hostKeys) {
       nodeRegistry.send(nodeId, { type: 'host.close', hostKey });
     }
 
-    const conversations = conversationManager.listConversations({ agentId: req.params.id });
+    const now = Date.now();
     for (const conversation of conversations) {
+      // Finish any active runs so findBlockingConversation won't treat this conversation as blocking
+      const activeRuns = db.prepare(
+        `SELECT run_id as runId FROM runs WHERE session_key = (
+           SELECT session_key FROM conversations WHERE id = ?
+         ) AND ended_at IS NULL`,
+      ).all(conversation.id) as Array<{ runId: string }>;
+      for (const run of activeRuns) {
+        finishRun(db, { runId: run.runId, error: 'Restarted by user' });
+      }
+      // Update DB status to idle
+      db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
+        .run('idle', now, conversation.id);
       broadcast(conversation.id, { type: 'conversation.status', conversationId: conversation.id, status: 'idle' });
+      broadcast(conversation.id, { type: 'system.notice', message: 'Agent restarted — ready for new messages.' });
+    }
+    // Drain any queued prompts that were waiting on the now-settled conversations
+    for (const conversation of conversations) {
+      void conversationManager.onConversationSettled(conversation.id);
     }
     return { ok: true, conversations };
   });

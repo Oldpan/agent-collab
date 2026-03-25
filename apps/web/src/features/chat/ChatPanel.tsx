@@ -233,7 +233,7 @@ export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps
   );
 }
 
-/** Render a single user or assistant message */
+/** Render a single user, assistant, or system message */
 function MessageRow({
   message,
   agent,
@@ -245,6 +245,18 @@ function MessageRow({
   userName: string;
   userIdentity: { name: string; avatarUrl: string | null };
 }) {
+  if (message.role === "system") {
+    return (
+      <div className="flex items-center gap-2 py-2 px-1">
+        <div className="h-px flex-1 bg-zinc-900/10" />
+        <span className="shrink-0 rounded-sm border border-zinc-900/20 bg-[#fffce8] px-2 py-0.5 text-[11px] text-zinc-500">
+          {message.text}
+        </span>
+        <div className="h-px flex-1 bg-zinc-900/10" />
+      </div>
+    );
+  }
+
   const isUser = message.role === "user";
   const displayName = isUser ? userName : (agent?.name ?? "Agent");
   const displayRole = isUser ? "Owner" : "Agent";

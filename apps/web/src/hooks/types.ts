@@ -11,7 +11,7 @@ export type LiveRun = {
 /** A message in the live chat stream */
 export type LiveMessage = {
   id: string;
-  role: "user" | "assistant";
+  role: "user" | "assistant" | "system";
   text: string;
   createdAt: number;
   thinking?: string;

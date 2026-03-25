@@ -286,6 +286,21 @@ export function useConversationStream(
           // History replay done, ready for interaction
           break;
         }
+
+        case "system.notice": {
+          const noticeId = createId();
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: noticeId,
+              role: "system",
+              text: event.message,
+              createdAt: Date.now(),
+              isStreaming: false,
+            },
+          ]);
+          break;
+        }
       }
     },
     [finalizeCurrentToolCalls, updateCurrentMessage],

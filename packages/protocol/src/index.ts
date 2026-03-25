@@ -136,6 +136,11 @@ export type ChannelMessageEvent = {
   };
 };
 
+export type SystemNoticeEvent = {
+  type: 'system.notice';
+  message: string;
+};
+
 export type ServerEvent =
   | ConversationStatusEvent
   | TurnBeginEvent
@@ -149,7 +154,8 @@ export type ServerEvent =
   | HistoryCompleteEvent
   | HistoryResetEvent
   | HistoryUserMessageEvent
-  | ChannelMessageEvent;
+  | ChannelMessageEvent
+  | SystemNoticeEvent;
 
 // ─── 客户端 → 服务端 事件 ───
 

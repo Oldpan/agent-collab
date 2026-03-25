@@ -80,7 +80,11 @@ export type ChannelMessageEvent = {
         createdAt: string;
     };
 };
-export type ServerEvent = ConversationStatusEvent | TurnBeginEvent | TurnEndEvent | ContentDeltaEvent | ThinkingDeltaEvent | ToolCallEvent | ToolResultEvent | ApprovalRequestEvent | ErrorEvent | HistoryCompleteEvent | HistoryResetEvent | HistoryUserMessageEvent | ChannelMessageEvent;
+export type SystemNoticeEvent = {
+    type: 'system.notice';
+    message: string;
+};
+export type ServerEvent = ConversationStatusEvent | TurnBeginEvent | TurnEndEvent | ContentDeltaEvent | ThinkingDeltaEvent | ToolCallEvent | ToolResultEvent | ApprovalRequestEvent | ErrorEvent | HistoryCompleteEvent | HistoryResetEvent | HistoryUserMessageEvent | ChannelMessageEvent | SystemNoticeEvent;
 export type FileRef = {
     uri: string;
     mimeType?: string;
