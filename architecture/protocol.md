@@ -1,105 +1,183 @@
-# WebSocket 协议
+# 协议
 
-## 前端 ↔ core
+## 浏览器 ↔ core
 
-连接地址：`ws://host:3100/api/conversations/:id/stream`
+连接地址：
 
-### 客户端 → 服务端 (ClientEvent)
+`ws://host:3100/api/conversations/:id/stream`
 
-| 类型 | 说明 |
-|------|------|
-| `{ type: "prompt", text }` | 发送提示词 |
-| `{ type: "approval.response", requestId, decision }` | 回复工具审批 |
-| `{ type: "cancel" }` | 取消当前执行中的 run |
+### ClientEvent
 
-### 服务端 → 客户端 (ServerEvent)
+- `prompt`
+  - `{ type: "prompt", text, attachments? }`
+- `approval.response`
+  - `{ type: "approval.response", requestId, decision }`
+- `cancel`
+  - `{ type: "cancel" }`
 
-| 类型 | 说明 |
-|------|------|
-| `conversation.status` | 状态变更：`idle` / `active` / `recovering` / `awaiting_approval` / `failed` |
-| `turn.begin` / `turn.end` | 一轮对话生命周期 |
-| `content.delta` | 流式文本输出 |
-| `thinking.delta` | 流式思考过程 |
-| `tool.call` / `tool.result` | 工具调用及结果 |
-| `approval.request` | 请求用户授权工具执行 |
-| `history.user_message` | 历史回放：用户消息 |
-| `history.complete` | 历史回放完成 |
-| `error` | 错误消息 |
+### ServerEvent
 
-连接建立后会自动重放该会话的历史 runs，随后进入实时模式。
+- `conversation.status`
+  - `idle | queued | active | recovering | awaiting_approval | failed`
+- `turn.begin`
+  - 含 `turnId`、可选 `startedAt`
+- `turn.end`
+  - 含 `turnId`、`stopReason?`、`endedAt?`
+- `content.delta`
+- `thinking.delta`
+- `tool.call`
+  - 含 `toolCallId`、`name`、`input`、`startedAt?`
+- `tool.result`
+  - 含 `toolCallId`、`output`、`error?`、`endedAt?`
+- `approval.request`
+- `error`
+- `history.user_message`
+- `history.complete`
+- `history.reset`
+- `channel.message`
+- `system.notice`
 
-- 已完成 run：回放 `history.user_message -> turn.begin -> 历史事件 -> turn.end`
-- 未完成 run：回放 `history.user_message -> turn.begin -> 已有历史事件`，不补 `turn.end`
-- 若会话当前状态为 `recovering`，前端应等待 live 事件继续接续该 turn
+## 历史回放
 
----
+连接建立后，core 会先回放历史，再进入 live 流。
 
-## agent-node ↔ core
+### 已结束 run
 
-连接地址：`ws://host:3100/api/nodes/connect`
+回放顺序：
 
-### 节点 → core (NodeToCore)
+`history.user_message -> turn.begin -> 历史事件 -> turn.end`
 
-| 类型 | 说明 |
-|------|------|
-| `node.register` | 注册节点（含 nodeId / hostname / agentTypes / version） |
-| `node.heartbeat` | 心跳保活 |
-| `run.event` | 转发 Agent 产生的 ServerEvent |
-| `run.end` | 本地 run 结束（含 stopReason / error） |
-| `permission.request` | 请求用户授权（工具审批） |
+### 未结束 run
 
-### core → 节点 (CoreToNode)
+回放顺序：
 
-| 类型 | 说明 |
-|------|------|
-| `node.ack` | 注册确认 |
-| `run.dispatch` | 下发任务（含 `runId` / `hostKey` / `dispatchMode` / `prompt` / `sessionKey` / `envVars` 等） |
-| `run.cancel` | 取消执行中的 run |
-| `permission.response` | 用户审批决定转发给节点 |
+`history.user_message -> turn.begin -> 历史事件`
 
-### 协议流程
+不会强行补 `turn.end`。
 
-```
-agent-node                          core                           前端
-    │                                │                               │
-    │──── node.register ────────────▶│                               │
-    │◀─── node.ack ─────────────────│                               │
-    │                                │◀──── prompt (ClientEvent) ────│
-    │◀─── run.dispatch ─────────────│                               │
-    │                                │                               │
-    │──── run.event (content.delta) ▶│──── content.delta ───────────▶│
-    │──── run.event (tool.call) ────▶│──── tool.call ───────────────▶│
-    │──── run.event (recovering) ───▶│──── conversation.status ─────▶│
-    │──── permission.request ───────▶│──── approval.request ────────▶│
-    │                                │◀──── approval.response ───────│
-    │◀─── permission.response ──────│                               │
-    │──── run.end ──────────────────▶│──── turn.end ────────────────▶│
-    │                                │                               │
-    │──── node.heartbeat ───────────▶│ (每 15s)                      │
-```
+### recovering
 
-### `run.dispatch` 关键字段
+若会话当前状态为 `recovering`：
 
-| 字段 | 说明 |
-|------|------|
-| `runId` | 本次执行 ID |
-| `conversationId` | 会话 ID |
-| `agentType` | `claude_acp` / `codex_acp` |
-| `sessionKey` | runtime session 归属键 |
-| `hostKey` | host 归属键，当前格式：`conversation:{conversationId}:{agentType}` |
-| `dispatchMode` | `cold_start` 或 `resume` |
-| `contextText` | 初始上下文（System Prompt + Platform Memory + Local Memory） |
+- 前端会先收到 `conversation.status = recovering`
+- 之后历史事件和 live 事件会继续接到同一 turn 上
 
-### 恢复流程（node 重启）
+## core ↔ agent-node
 
-```
-agent-node(local DB)                core                           前端
-    │                                │                               │
-    │  node_dispatch_queue 中存在 running/queued                     │
-    │                                │                               │
-    │──── node.register ────────────▶│                               │
-    │──── run.event(conversation.status=recovering) ────────────────▶│
-    │                                │──── recovering ──────────────▶│
-    │──── resumePendingDispatches()  │                               │
-    │──── 后续 content.delta / tool.call / run.end ────────────────▶│
-```
+连接地址：
+
+`ws://host:3100/api/nodes/connect`
+
+### NodeToCore
+
+- `node.register`
+- `node.heartbeat`
+- `run.event`
+- `run.end`
+- `permission.request`
+- `workspace.list.response`
+- `workspace.read.response`
+- `workspace.reset.response`
+
+### CoreToNode
+
+- `node.ack`
+- `run.dispatch`
+- `run.cancel`
+- `permission.response`
+- `workspace.list.request`
+- `workspace.read.request`
+- `workspace.reset.request`
+
+## run.dispatch
+
+关键字段：
+
+- `runId`
+- `conversationId`
+- `agentType`
+- `sessionKey`
+- `hostKey`
+- `dispatchMode`
+  - `cold_start`
+  - `resume`
+- `prompt`
+- `contextText`
+- `cwd`
+- `envVars`
+- `disabledToolKinds`
+
+### 语义
+
+- `hostKey` 当前用于 host 归属和复用
+- `dispatchMode` 表示这次是新启动还是恢复已有 host/session
+- `disabledToolKinds` 用于 agent 级禁用权限
+
+## workspace 协议
+
+当前 workspace 统一由远端 node 作为真实来源。
+
+### 请求
+
+- `workspace.list.request`
+  - `requestId`
+  - `workspaceRoot`
+  - `relativePath`
+- `workspace.read.request`
+  - `requestId`
+  - `workspaceRoot`
+  - `relativePath`
+- `workspace.reset.request`
+  - `requestId`
+  - `workspaceRoot`
+
+### 响应
+
+- `workspace.list.response`
+- `workspace.read.response`
+- `workspace.reset.response`
+
+当前行为：
+
+- list / read 只读
+- reset 用于 agent reset 时重建 workspace
+
+## 节点注册流程
+
+1. node 发 `node.register`
+2. core 校验该节点是否已被删除
+3. core 更新 `nodes` 表状态为 `online`
+4. core 回 `node.ack`
+
+断线时：
+
+- `core` 会把对应 node 标成 `offline`
+- 非 idle conversation 会被标成 `failed`
+
+## prompt 调度流程
+
+1. 浏览器发 `prompt`
+2. `wsHandler` 交给 `ExecutionDispatcher`
+3. `ExecutionDispatcher` 判断：
+   - 该 agent 是否已有活跃 thread
+   - 当前 prompt 是立即 dispatch 还是入 `conversation_prompt_queue`
+4. 若立即 dispatch：
+   - 下发 `run.dispatch`
+5. node 运行时持续发：
+   - `run.event`
+   - `permission.request`
+6. 结束时发：
+   - `run.end`
+
+## Activity 时间戳
+
+当前前端 Activity 依赖这些真实时间字段：
+
+- run：
+  - `turn.begin.startedAt`
+  - `turn.end.endedAt`
+- tool：
+  - `tool.call.startedAt`
+  - `tool.result.endedAt`
+
+历史回放也会补齐这些时间，避免刷新后 duration 漂移。

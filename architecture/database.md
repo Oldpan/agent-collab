@@ -1,101 +1,259 @@
 # 数据库
 
-SQLite，当前 migration 版本 **v14**。
+SQLite，当前 migration 版本是 **v20**。
 
-## 表结构
+## 核心表
 
-| 表 | 说明 |
-|----|------|
-| `sessions` | ACP session 状态（command、args、cwd、acp_session_id） |
-| `bindings` | platform + chatId 到 session 的映射（key 格式：`web:{channelId}:{convId}:{agentType}` / `node:{convId}:-:node_user`） |
-| `runs` | 每次 prompt 执行记录 |
-| `events` | ACP session/update + node/event 原始事件（含 seq 用于回放） |
-| `tool_policies` | 工具授权策略 |
-| `channels` | 频道/工作空间（含默认 `default` 频道，当前 UI 不展示，保留兼容） |
-| `conversations` | 会话/线程（含 `channel_id`、`env_vars`、`node_id`、`agent_id`） |
-| `agents` | Agent 实体（名称、类型、system prompt、memory、所属 node、workspace 路径） |
-| `nodes` | 已注册/预置的远端 Machine 记录（含 `display_name`、`env_var_keys`、`provisioned_at`） |
-| `node_dispatch_queue` | agent-node 本地持久 dispatch 队列（用于 node 重启后的恢复） |
+### runtime / execution
 
-## nodes 表结构
+- `sessions`
+  - ACP session 状态
+- `bindings`
+  - platform/binding -> session 映射
+- `runs`
+  - 每次执行记录
+- `events`
+  - 原始事件，含回放所需顺序
+- `tool_policies`
+- `tool_allow_prefixes`
+- `delivery_checkpoints`
+- `ui_prefs`
 
-```sql
-CREATE TABLE nodes (
-  node_id            TEXT PRIMARY KEY,
-  hostname           TEXT NOT NULL,
-  agent_types_json   TEXT NOT NULL,
-  version            TEXT NOT NULL,
-  status             TEXT NOT NULL DEFAULT 'online',  -- 'pending' | 'online' | 'offline'
-  last_seen          INTEGER NOT NULL,
-  created_at         INTEGER NOT NULL,
-  display_name       TEXT,          -- 用户设定的机器名称（v13）
-  env_var_keys       TEXT,          -- JSON string[]，如 ["ANTHROPIC_API_KEY"]（v13）
-  provisioned_at     INTEGER NOT NULL DEFAULT 0  -- 预置时间戳（v13）
-);
-```
+### product model
 
-## agents 表结构
+- `nodes`
+- `agents`
+- `conversations`
+- `channels`
+- `channel_messages`
+- `tasks`
+- `agent_message_checkpoints`
 
-```sql
-CREATE TABLE agents (
-  agent_id       TEXT PRIMARY KEY,
-  name           TEXT NOT NULL,
-  agent_type     TEXT NOT NULL DEFAULT 'claude_acp',
-  channel_id     TEXT NOT NULL DEFAULT 'default',   -- 保留兼容，UI 不展示
-  system_prompt  TEXT NOT NULL DEFAULT '',
-  memory         TEXT NOT NULL DEFAULT '',
-  env_vars       TEXT,
-  node_id        TEXT,              -- 所属 Machine 的 nodeId
-  workspace_path TEXT,              -- agent 专属目录（~/.agent-collab/agents/<id>-<name>/）
-  created_at     INTEGER NOT NULL,
-  updated_at     INTEGER NOT NULL
-);
-```
+### queue / recovery
 
-## Migration 历史
+- `node_dispatch_queue`
+  - node 本地恢复队列
+- `conversation_prompt_queue`
+  - 同一 agent 多 thread 串行队列
 
-| 版本 | 内容 |
-|------|------|
-| v1 | 初始表：`sessions`、`bindings`（FK sessions）、`events` |
-| v2 | `runs` 表（每次执行记录） |
-| v3 | `sessions.load_supported` 列 |
-| v4 | `tool_policies` 表 |
-| v5 | `events.seq` 列 |
-| v6 | `sessions.cwd` 列 |
-| v7 | `conversations` 表，`conversations.env_vars` |
-| v8 | `nodes` 表，`bindings.platform` 新增 `'node'` |
-| v9 | `channels` 表 + 默认 `default` 频道，`conversations.channel_id` 外键，旧 binding key 回填 |
-| v10 | `conversations.node_id TEXT NULL`（标记路由到哪个远端节点） |
-| v11 | `agents` 表，`conversations.agent_id` 外键 |
-| v12 | `agents.channel_id TEXT NOT NULL DEFAULT 'default'` |
-| v13 | `nodes.display_name TEXT`，`nodes.env_var_keys TEXT`，`nodes.provisioned_at INTEGER DEFAULT 0` |
-| v14 | `node_dispatch_queue` 表 + `host/state` 索引，用于 node 本地恢复 |
+## 关键表说明
 
-## agent-node 本地 DB
+### nodes
 
-agent-node 维护独立 SQLite（默认 `~/.agent-node/db.sqlite`），表结构与 runtime-acp migration 保持一致，但只有少数表会真正被运行态使用。
+保存机器/远端 node 记录。
 
-- `sessions` / `bindings` / `runs` / `events` 由 executor 在收到 `run.dispatch` 时按需创建
-- `node_dispatch_queue` 由 executor 在 `queued -> running -> done` 三阶段维护
-- `conversations` / `channels` / `agents` / `nodes` 表虽然存在，但当前 node 侧不直接依赖它们做业务真相
+当前重要字段：
 
-## node_dispatch_queue 表
+- `node_id`
+- `hostname`
+- `agent_types_json`
+- `version`
+- `status`
+  - `pending | online | offline | deleted`
+- `last_seen`
+- `display_name`
+- `env_var_keys`
+- `provisioned_at`
 
-```sql
-CREATE TABLE node_dispatch_queue (
-  run_id          TEXT PRIMARY KEY,
-  host_key        TEXT NOT NULL,
-  session_key     TEXT NOT NULL,
-  conversation_id TEXT NOT NULL,
-  payload_json    TEXT NOT NULL,
-  state           TEXT NOT NULL DEFAULT 'queued', -- 'queued' | 'running'
-  created_at      INTEGER NOT NULL,
-  updated_at      INTEGER NOT NULL
-);
-```
+### agents
+
+保存 agent 长期身份。
+
+当前重要字段：
+
+- `agent_id`
+- `name`
+- `agent_type`
+  - `claude_acp | codex_acp`
+- `channel_id`
+  - 目前保留兼容，不是 direct chat 主路径
+- `system_prompt`
+- `env_vars`
+- `disabled_tool_kinds`
+- `node_id`
+- `workspace_path`
+
+注意：
+
+- `memory` 仍可能在旧 schema/旧代码路径中存在，但当前产品语义上已经不再作为 Platform Memory 使用
+
+### conversations
+
+保存 thread / 会话状态。
+
+当前重要字段：
+
+- `id`
+- `session_key`
+- `status`
+- `agent_id`
+- `node_id`
+- `workspace_path`
+- `env_vars`
+- `channel_id`
+- `thread_kind`
+  - `direct | branch`
+- `is_primary_thread`
+
+当前 direct chat 规则：
+
+- 一个 agent 默认一个 primary direct thread
+
+### runs
+
+保存单次执行记录。
+
+重要点：
+
+- `runs` 通过 `session_key` 关联 conversation
+- 不要假设 `runs` 表里直接有 `conversation_id`
+
+关键字段：
+
+- `run_id`
+- `session_key`
+- `prompt_text`
+- `started_at`
+- `ended_at`
+- `stop_reason`
+- `error`
+
+### events
+
+保存回放事件。
+
+关键字段：
+
+- `run_id`
+- `seq`
+- `method`
+- `payload_json`
+- `created_at`
+
+当前前端 replay 依赖这些事件重建：
+
+- `content.delta`
+- `thinking.delta`
+- `tool.call`
+- `tool.result`
+- 以及 `node/event`
+
+### node_dispatch_queue
+
+node 本地恢复队列。
+
+关键字段：
+
+- `run_id`
+- `host_key`
+- `session_key`
+- `conversation_id`
+- `payload_json`
+- `state`
+  - `queued | running`
+- `created_at`
+- `updated_at`
 
 用途：
 
-- `queued`：已收到 dispatch，但尚未开始执行
-- `running`：host 已开始执行，用于 node 重启后走 `resume`
-- 删除：run 成功结束、失败结束或恢复失败后清理
+- node 收到 dispatch 时落盘
+- node 重启后恢复 pending work
+
+### conversation_prompt_queue
+
+agent 级串行执行队列。
+
+关键字段：
+
+- `queue_id`
+- `agent_id`
+- `conversation_id`
+- `prompt_text`
+- `created_at`
+- `updated_at`
+
+用途：
+
+- 同一 agent 的多个 thread 不并行执行
+- 后续 prompt 入队，等待前一个 thread settle
+
+## migration 历史
+
+### v1-v5
+
+runtime 基础表：
+
+- `sessions`
+- `bindings`
+- `runs`
+- `events`
+- `tool_policies`
+- `delivery_checkpoints`
+- `ui_prefs`
+- `tool_allow_prefixes`
+
+### v6-v10
+
+会话与远端节点基础：
+
+- `conversations`
+- `env_vars`
+- `nodes`
+- `channels`
+- `conversations.channel_id`
+- `conversations.node_id`
+
+### v11-v14
+
+agent 与 node 恢复：
+
+- `agents`
+- `agents.channel_id`
+- `nodes.display_name`
+- `nodes.env_var_keys`
+- `nodes.provisioned_at`
+- `node_dispatch_queue`
+
+### v15-v17
+
+thread 语义与权限：
+
+- `conversations.thread_kind`
+- `conversations.is_primary_thread`
+- `conversation_prompt_queue`
+- `agents.disabled_tool_kinds`
+
+### v18-v20
+
+channel 协作面：
+
+- `channel_messages`
+- `tasks`
+- `agent_message_checkpoints`
+
+## agent-node 本地 DB
+
+agent-node 自己维护独立 SQLite。
+
+实际重要用途：
+
+- 本地 runtime session / binding / run / event
+- 本地 `node_dispatch_queue`
+
+虽然 migration 会建更多表，但 node 侧真正依赖的业务真相主要是：
+
+- `sessions`
+- `bindings`
+- `runs`
+- `events`
+- `node_dispatch_queue`
+
+## 当前注意点
+
+- 改 migration 后要同步更新测试中的 schema version 断言
+- `ALTER TABLE` 仍应谨慎处理，避免多语句混在一起导致迁移行为不稳定
+- 现在的 DB 已经同时承载：
+  - runtime replay
+  - agent/product model
+  - queue/recovery
+  - channel collaboration groundwork
