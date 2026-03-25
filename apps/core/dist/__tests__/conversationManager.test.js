@@ -35,8 +35,8 @@ describe('ConversationManager', () => {
             const session = db
                 .prepare('SELECT agent_command as agentCommand, agent_args_json as agentArgsJson FROM sessions WHERE session_key = ?')
                 .get(row.sessionKey);
-            expect(session.agentCommand).toBe('npx');
-            expect(JSON.parse(session.agentArgsJson)).toEqual(['-y', '@zed-industries/codex-acp@latest']);
+            expect(session.agentCommand).toBe('codex-acp');
+            expect(JSON.parse(session.agentArgsJson)).toEqual([]);
         });
         it('不传参数时使用默认值', () => {
             const conv = manager.createConversation({});

@@ -56,15 +56,17 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
             }
             case 'run.event': {
                 log.debug('[node-ws] run.event', { conversationId: msg.conversationId, eventType: msg.event.type });
+                if (msg.event.type === 'conversation.status') {
+                    db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
+                        .run(msg.event.status, Date.now(), msg.conversationId);
+                    broadcast(msg.conversationId, msg.event);
+                    break;
+                }
                 // Silently discard events for runs that no longer exist (deleted by reset/clear-chat)
                 const runKnown = !!(db.prepare('SELECT 1 FROM runs WHERE run_id = ?').get(msg.runId));
                 if (!runKnown) {
                     log.debug('[node-ws] ignoring run.event for unknown/deleted run', { runId: msg.runId });
                     break;
-                }
-                if (msg.event.type === 'conversation.status') {
-                    db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
-                        .run(msg.event.status, Date.now(), msg.conversationId);
                 }
                 broadcast(msg.conversationId, msg.event);
                 // Persist replay-worthy events to core DB immediately
