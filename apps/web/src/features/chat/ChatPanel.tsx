@@ -95,9 +95,9 @@ export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps
   }, [conversation.id]);
 
   return (
-    <div className="flex h-full flex-col bg-[#fffce8]">
+    <div className="flex h-full flex-col bg-[#fff9d0]">
       {/* Header */}
-      <div className="border-b-2 border-black bg-[#fffce8] px-4 py-3">
+      <div className="border-b-2 border-black bg-[#fff5b8] px-4 py-3 shadow-[0_2px_0_0_rgba(0,0,0,0.1)]">
         <div className="flex items-center gap-3">
           {onOpenSidebar && (
             <button
@@ -178,7 +178,7 @@ export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps
         <AgentActivityPanel runs={runs} />
       ) : (
         <>
-          <Conversation className="min-h-0 flex-1 bg-[#fffce8]">
+          <Conversation className="min-h-0 flex-1 bg-[#fff9d0]">
             <ConversationContent className="px-3 py-4">
               {messages.length === 0 ? (
                 <ConversationEmptyState

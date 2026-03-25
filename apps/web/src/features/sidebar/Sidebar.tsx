@@ -161,9 +161,9 @@ export function Sidebar({
   }, [agents, conversations, selectedId]);
 
   return (
-    <div className="flex h-full flex-col bg-[#ffd000]">
+    <div className="flex h-full flex-col bg-[#ffc800]">
       {/* Header */}
-      <div className="flex items-center justify-between border-b-2 border-black bg-[#ffd000] px-3 py-3">
+      <div className="flex items-center justify-between border-b-2 border-black bg-[#ffb800] px-3 py-3 shadow-[0_2px_0_0_rgba(0,0,0,0.15)]">
         <h1 className="text-xs font-semibold uppercase tracking-wider text-zinc-800">
           Machines &amp; Agents
         </h1>
@@ -206,8 +206,8 @@ export function Sidebar({
         />
       )}
 
-      <ScrollArea className="flex-1">
-        <div className="flex flex-col gap-1 p-2">
+      <ScrollArea className="flex-1 bg-[#ffc800]">
+        <div className="flex flex-col gap-2 p-3">
           {machines.length === 0 && (
             <p className="rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-3 py-4 text-center text-[10px] text-zinc-500 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]">
               No machines yet — click + to add one

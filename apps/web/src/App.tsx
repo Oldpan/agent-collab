@@ -142,7 +142,7 @@ export function App() {
   };
 
   return (
-    <div className="flex h-full bg-[linear-gradient(180deg,#fff4a0_0%,#ffe07a_100%)] text-foreground">
+    <div className="flex h-full bg-[#e8dcc8] text-foreground">
       {/* Mobile: backdrop */}
       {isMobile && mobileSidebarOpen && (
         <div
@@ -171,7 +171,7 @@ export function App() {
               defaultSize={25}
               minSize={15}
               maxSize={40}
-              className="bg-[linear-gradient(180deg,#ffe06d_0%,#ffca43_100%)] text-zinc-950"
+              className="bg-[#ffc800] text-zinc-950 shadow-[4px_0_0_0_rgba(0,0,0,0.3)]"
             >
               <Sidebar {...sidebarProps} />
             </ResizablePanel>
