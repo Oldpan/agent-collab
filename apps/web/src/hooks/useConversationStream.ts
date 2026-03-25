@@ -235,6 +235,10 @@ export function useConversationStream(
         }
 
         case "turn.end": {
+          const endedAt =
+            typeof (event as { endedAt?: unknown }).endedAt === "number"
+              ? ((event as { endedAt?: number }).endedAt ?? Date.now())
+              : Date.now();
           finalizeCurrentToolCalls();
           const msgId = currentMsgIdRef.current;
           if (msgId) {
@@ -251,7 +255,15 @@ export function useConversationStream(
             const toolCalls = [...currentToolCallsRef.current];
             setRuns((prev) =>
               prev.map((r) =>
-                r.id === runId ? { ...r, isActive: false, endedAt: Date.now(), toolCalls } : r,
+                r.id === runId
+                  ? {
+                      ...r,
+                      isActive: false,
+                      endedAt,
+                      stopReason: event.stopReason,
+                      toolCalls,
+                    }
+                  : r,
               ),
             );
             currentRunIdRef.current = null;

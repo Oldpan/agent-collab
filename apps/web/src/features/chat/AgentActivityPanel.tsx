@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Collapsible,
   CollapsibleContent,
@@ -27,6 +27,22 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
   second: "2-digit",
 });
 
+function formatDurationMs(ms: number): string {
+  const totalSeconds = Math.max(0, Math.floor(ms / 1000));
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (hours > 0) return `${hours}h ${minutes}m ${seconds}s`;
+  if (minutes > 0) return `${minutes}m ${seconds}s`;
+  return `${seconds}s`;
+}
+
+function formatStopReason(reason?: string): string | null {
+  if (!reason) return null;
+  if (reason === "end_turn") return "completed";
+  return reason.replaceAll("_", " ");
+}
+
 function getToolState(tc: LiveToolCall): ToolState {
   if (tc.error) return "error";
   if (tc.completed || tc.output !== undefined) return "result";
@@ -35,11 +51,25 @@ function getToolState(tc: LiveToolCall): ToolState {
 
 function RunRow({ run }: { run: LiveRun }) {
   const [open, setOpen] = useState(run.isActive);
+  const [now, setNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    if (!run.isActive) return;
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, [run.isActive]);
+
   const toolCount = run.toolCalls.length;
-  const duration =
-    run.endedAt && run.startedAt
-      ? ((run.endedAt - run.startedAt) / 1000).toFixed(1) + "s"
-      : null;
+  const failedToolCount = run.toolCalls.filter((tc) => tc.error).length;
+  const completedToolCount = run.toolCalls.filter((tc) => tc.completed || tc.output !== undefined).length;
+  const duration = useMemo(() => {
+    const end = run.endedAt ?? (run.isActive ? now : undefined);
+    if (!end || !run.startedAt) return null;
+    return formatDurationMs(end - run.startedAt);
+  }, [now, run.endedAt, run.isActive, run.startedAt]);
+  const stopReason = formatStopReason(run.stopReason);
+  const runShortId = run.id.slice(0, 8);
+  const statusLabel = run.isActive ? "running" : stopReason ?? "finished";
 
   return (
     <Collapsible open={open || run.isActive} onOpenChange={setOpen}>
@@ -58,24 +88,54 @@ function RunRow({ run }: { run: LiveRun }) {
             (open || run.isActive) && "rotate-90",
           )}
         />
-        <span className="text-zinc-500 tabular-nums">
-          {timeFormatter.format(run.startedAt)}
-        </span>
-        {run.isActive ? (
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-zinc-500 tabular-nums">
+              {timeFormatter.format(run.startedAt)}
+            </span>
+            <span
+              className={cn(
+                "rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide",
+                run.isActive
+                  ? "border-amber-300 bg-amber-100 text-amber-700"
+                  : "border-zinc-300 bg-white/70 text-zinc-600",
+              )}
+            >
+              {statusLabel}
+            </span>
+            <span className="truncate font-mono text-[10px] text-zinc-400">
+              #{runShortId}
+            </span>
+          </div>
+          <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-zinc-500">
+            <span>
+              {toolCount} tool{toolCount !== 1 ? "s" : ""}
+            </span>
+            <span>{completedToolCount} done</span>
+            {failedToolCount > 0 && <span>{failedToolCount} failed</span>}
+            {duration && <span>{duration}</span>}
+            {run.thinking && <span>reasoning</span>}
+          </div>
+        </div>
+        {run.isActive && (
           <span className="flex items-center gap-1.5 text-amber-600 font-semibold">
             <Loader size={10} />
-            Running
-          </span>
-        ) : (
-          <span className="text-zinc-400">
-            {toolCount} tool{toolCount !== 1 ? "s" : ""}
-            {duration && <span className="ml-1.5">· {duration}</span>}
           </span>
         )}
       </CollapsibleTrigger>
 
       <CollapsibleContent>
         <div className="ml-3 mt-1 flex flex-col gap-1 border-l-2 border-zinc-200 pl-3">
+          <div className="mb-1 rounded border border-zinc-200 bg-[#fffdf0] px-2.5 py-2 text-[11px] text-zinc-600">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+              <span className="font-mono text-zinc-500">run #{runShortId}</span>
+              <span>started {timeFormatter.format(run.startedAt)}</span>
+              {run.endedAt && <span>ended {timeFormatter.format(run.endedAt)}</span>}
+              {duration && <span>duration {duration}</span>}
+              {stopReason && <span>stop {stopReason}</span>}
+            </div>
+          </div>
+
           {run.thinking && (
             <Collapsible className="mb-1">
               <CollapsibleTrigger className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700">

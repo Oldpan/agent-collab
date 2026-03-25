@@ -205,7 +205,12 @@ function replayHistory(
     }
 
     if (run.endedAt !== null) {
-      send({ type: 'turn.end', turnId, stopReason: run.stopReason ?? 'end_turn' });
+      send({
+        type: 'turn.end',
+        turnId,
+        stopReason: run.stopReason ?? 'end_turn',
+        endedAt: run.endedAt,
+      });
     }
   }
 }

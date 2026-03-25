@@ -29,6 +29,7 @@ export type TurnEndEvent = {
     type: 'turn.end';
     turnId: string;
     stopReason?: string;
+    endedAt?: number;
 };
 export type ContentDeltaEvent = {
     type: 'content.delta';

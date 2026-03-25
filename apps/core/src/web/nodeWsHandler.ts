@@ -111,6 +111,7 @@ export function handleNodeWebSocket(
       case 'run.end': {
         log.info('[node-ws] run.end', { runId: msg.runId, conversationId: msg.conversationId, error: msg.error ?? null });
         runSeq.delete(msg.runId);
+        const endedAt = Date.now();
         // Check if this run still exists in core's DB.
         // After reset/clear-chat the run rows are deleted — ignore stale run.end messages
         // so they don't overwrite the conversation status set by the reset operation.
@@ -128,11 +129,12 @@ export function handleNodeWebSocket(
           : { runId: msg.runId, stopReason: msg.stopReason ?? 'end_turn' });
         // Update conversation status in DB
         db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
-          .run(msg.error ? 'failed' : 'idle', Date.now(), msg.conversationId);
+          .run(msg.error ? 'failed' : 'idle', endedAt, msg.conversationId);
         broadcast(msg.conversationId, {
           type: 'turn.end',
           turnId: msg.runId,
           stopReason: msg.error ? 'error' : (msg.stopReason ?? 'end_turn'),
+          endedAt,
         });
         if (msg.error) {
           broadcast(msg.conversationId, { type: 'error', message: msg.error });

@@ -6,6 +6,7 @@ export type LiveRun = {
   toolCalls: LiveToolCall[];
   thinking?: string;
   isActive: boolean;
+  stopReason?: string;
 };
 
 /** A message in the live chat stream */
