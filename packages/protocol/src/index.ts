@@ -91,6 +91,7 @@ export type ToolCallEvent = {
   toolCallId: string;
   name: string;
   input: unknown;
+  startedAt?: number;
 };
 
 export type ToolResultEvent = {
@@ -98,6 +99,7 @@ export type ToolResultEvent = {
   toolCallId: string;
   output: string;
   error?: boolean;
+  endedAt?: number;
 };
 
 export type ApprovalRequestEvent = {

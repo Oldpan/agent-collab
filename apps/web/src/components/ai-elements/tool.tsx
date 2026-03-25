@@ -84,6 +84,7 @@ export type ToolHeaderProps = {
   name: string;
   state: ToolState;
   input?: unknown;
+  meta?: ReactNode;
   className?: string;
 };
 
@@ -92,6 +93,7 @@ export const ToolHeader = ({
   name,
   state,
   input,
+  meta,
 }: ToolHeaderProps) => {
   const icon = TOOL_ICONS[name];
   const primaryParam = getPrimaryParam(input);
@@ -109,6 +111,7 @@ export const ToolHeader = ({
           ({primaryParam})
         </span>
       )}
+      {meta ? <span className="text-xs text-muted-foreground">{meta}</span> : null}
       <span className="ml-0.5">{getStatusIcon(state)}</span>
     </CollapsibleTrigger>
   );

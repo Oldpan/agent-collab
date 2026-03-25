@@ -44,12 +44,14 @@ export type ToolCallEvent = {
     toolCallId: string;
     name: string;
     input: unknown;
+    startedAt?: number;
 };
 export type ToolResultEvent = {
     type: 'tool.result';
     toolCallId: string;
     output: string;
     error?: boolean;
+    endedAt?: number;
 };
 export type ApprovalRequestEvent = {
     type: 'approval.request';

@@ -77,6 +77,10 @@ export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps
     conversationAgentId: conversation.agentId,
   });
 
+  const hasAssistantReply = messages.some(
+    (message) => message.role === "assistant" && message.text.trim().length > 0,
+  );
+
   const displayStatus =
     status === "submitted" || status === "streaming"
       ? "active"
@@ -87,8 +91,12 @@ export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps
       : status === "awaiting_approval"
         ? "awaiting_approval"
         : status === "error"
-          ? "failed"
-          : conversation.status;
+          ? hasAssistantReply
+            ? "idle"
+            : "failed"
+          : conversation.status === "failed" && hasAssistantReply
+            ? "idle"
+            : conversation.status;
 
   useEffect(() => {
     setActiveTab("chat");
@@ -97,7 +105,7 @@ export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps
   return (
     <div className="flex h-full flex-col bg-[#fff9d0]">
       {/* Header */}
-      <div className="border-b-2 border-black bg-[#fff5b8] px-4 py-3 shadow-[0_2px_0_0_rgba(0,0,0,0.1)]">
+      <div className="border-b-2 border-black bg-[#fffdf5] px-4 py-3 shadow-[0_2px_0_0_rgba(0,0,0,0.1)]">
         <div className="flex items-center gap-3">
           {onOpenSidebar && (
             <button
@@ -110,14 +118,16 @@ export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps
             </button>
           )}
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-sm font-semibold tracking-tight text-zinc-950">
-              {agent?.name ?? "Agent"}
-            </h2>
+            <div className="flex items-center gap-2">
+              <StatusDot status={displayStatus} />
+              <h2 className="truncate text-sm font-semibold tracking-tight text-zinc-950">
+                {agent?.name ?? "Agent"}
+              </h2>
+            </div>
             <div className="mt-1 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
               {conversation.isPrimaryThread ? "Private chat" : "Channel branch"}
             </div>
           </div>
-          <StatusDot status={displayStatus} />
         </div>
         <div className="mt-3 flex items-center gap-2 flex-wrap">
           <Button

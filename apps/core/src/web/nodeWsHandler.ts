@@ -98,12 +98,18 @@ export function handleNodeWebSocket(
           log.debug('[node-ws] ignoring run.event for unknown/deleted run', { runId: msg.runId });
           break;
         }
-        broadcast(msg.conversationId, msg.event);
+        const broadcastEvent =
+          msg.event.type === 'tool.call'
+            ? { ...msg.event, startedAt: msg.event.startedAt ?? Date.now() }
+            : msg.event.type === 'tool.result'
+              ? { ...msg.event, endedAt: msg.event.endedAt ?? Date.now() }
+              : msg.event;
+        broadcast(msg.conversationId, broadcastEvent);
         // Persist replay-worthy events to core DB immediately
         if (REPLAY_EVENT_TYPES.has(msg.event.type)) {
           const seq = (runSeq.get(msg.runId) ?? 0) + 1;
           runSeq.set(msg.runId, seq);
-          appendNodeEvent(db, msg.runId, seq, msg.event);
+          appendNodeEvent(db, msg.runId, seq, broadcastEvent);
         }
         break;
       }

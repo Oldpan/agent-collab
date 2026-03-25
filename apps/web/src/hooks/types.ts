@@ -25,6 +25,8 @@ export type LiveToolCall = {
   id: string;
   name: string;
   input: unknown;
+  startedAt?: number;
+  endedAt?: number;
   completed?: boolean;
   output?: string;
   error?: boolean;

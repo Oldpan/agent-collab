@@ -66,7 +66,7 @@ export function useConversationStream(
   const finalizeCurrentToolCalls = useCallback(() => {
     if (currentToolCallsRef.current.length === 0) return;
     currentToolCallsRef.current = currentToolCallsRef.current.map((tc) =>
-      tc.completed ? tc : { ...tc, completed: true },
+      tc.completed ? tc : { ...tc, completed: true, endedAt: tc.endedAt ?? Date.now() },
     );
     // Only update message if there's an active message being built (non-channel mode)
     if (currentMsgIdRef.current) {
@@ -173,6 +173,8 @@ export function useConversationStream(
         }
 
         case "tool.call": {
+          const startedAt =
+            typeof event.startedAt === "number" ? event.startedAt : Date.now();
           const existingIndex = currentToolCallsRef.current.findIndex(
             (tc) => tc.id === event.toolCallId,
           );
@@ -180,13 +182,25 @@ export function useConversationStream(
           if (existingIndex >= 0) {
             currentToolCallsRef.current = currentToolCallsRef.current.map((tc, index) =>
               index === existingIndex
-                ? { ...tc, name: event.name, input: event.input, completed: false }
+                ? {
+                    ...tc,
+                    name: event.name,
+                    input: event.input,
+                    completed: false,
+                    startedAt: tc.startedAt ?? startedAt,
+                  }
                 : tc,
             );
           } else {
             currentToolCallsRef.current = [
               ...currentToolCallsRef.current,
-              { id: event.toolCallId, name: event.name, input: event.input, completed: false },
+              {
+                id: event.toolCallId,
+                name: event.name,
+                input: event.input,
+                completed: false,
+                startedAt,
+              },
             ];
           }
           // Only update message tool calls in non-channel mode (ACP streaming)
@@ -205,9 +219,18 @@ export function useConversationStream(
         }
 
         case "tool.result": {
+          const endedAt =
+            typeof event.endedAt === "number" ? event.endedAt : Date.now();
           currentToolCallsRef.current = currentToolCallsRef.current.map((tc) =>
             tc.id === event.toolCallId
-              ? { ...tc, completed: true, output: event.output, error: event.error }
+              ? {
+                  ...tc,
+                  completed: true,
+                  output: event.output,
+                  error: event.error,
+                  endedAt,
+                  startedAt: tc.startedAt ?? endedAt,
+                }
               : tc,
           );
           // Only update message tool calls in non-channel mode (ACP streaming)
@@ -239,6 +262,9 @@ export function useConversationStream(
             typeof (event as { endedAt?: unknown }).endedAt === "number"
               ? ((event as { endedAt?: number }).endedAt ?? Date.now())
               : Date.now();
+          currentToolCallsRef.current = currentToolCallsRef.current.map((tc) =>
+            tc.completed ? tc : { ...tc, completed: true, endedAt: tc.endedAt ?? endedAt },
+          );
           finalizeCurrentToolCalls();
           const msgId = currentMsgIdRef.current;
           if (msgId) {
@@ -266,8 +292,8 @@ export function useConversationStream(
                   : r,
               ),
             );
-            currentRunIdRef.current = null;
           }
+          currentRunIdRef.current = null;
           currentMsgIdRef.current = null;
           setStatus("idle");
           break;

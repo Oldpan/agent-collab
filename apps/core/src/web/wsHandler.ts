@@ -126,16 +126,23 @@ function replayHistory(
     // 读取 node/event（remote runs）— 直接回放 ServerEvent
     const nodeEvents = db
       .prepare(
-        `SELECT payload_json as payloadJson FROM events
+        `SELECT payload_json as payloadJson, created_at as createdAt FROM events
          WHERE run_id = ? AND method = 'node/event'
          ORDER BY seq ASC`,
       )
-      .all(run.runId) as Array<{ payloadJson: string }>;
+      .all(run.runId) as Array<{ payloadJson: string; createdAt: number }>;
 
     if (nodeEvents.length > 0) {
       for (const evt of nodeEvents) {
         try {
-          send(JSON.parse(evt.payloadJson));
+          const parsed = JSON.parse(evt.payloadJson) as ServerEvent;
+          if (parsed.type === 'tool.call') {
+            send({ ...parsed, startedAt: parsed.startedAt ?? evt.createdAt });
+          } else if (parsed.type === 'tool.result') {
+            send({ ...parsed, endedAt: parsed.endedAt ?? evt.createdAt });
+          } else {
+            send(parsed);
+          }
         } catch {
           // skip malformed
         }
@@ -144,15 +151,15 @@ function replayHistory(
       // 本地 run：读取 session/update 事件并重新合并
       const events = db
         .prepare(
-          `SELECT payload_json as payloadJson FROM events
+          `SELECT payload_json as payloadJson, created_at as createdAt FROM events
            WHERE run_id = ? AND method = 'session/update'
            ORDER BY seq ASC`,
         )
-        .all(run.runId) as Array<{ payloadJson: string }>;
+        .all(run.runId) as Array<{ payloadJson: string; createdAt: number }>;
 
       let agentText = '';
       let thinkingText = '';
-      const toolCalls = new Map<string, { name: string; output?: string; error?: boolean }>();
+      const toolCalls = new Map<string, { name: string; startedAt?: number; output?: string; error?: boolean; endedAt?: number }>();
 
       for (const evt of events) {
         try {
@@ -171,7 +178,7 @@ function replayHistory(
           if (update.sessionUpdate === 'tool_call') {
             const toolCallId = extractToolCallIdFromUpdate(update) ?? '';
             const name = String(update.title ?? toolCallId ?? 'tool');
-            toolCalls.set(toolCallId, { name });
+            toolCalls.set(toolCallId, { name, startedAt: evt.createdAt });
           }
 
           if (update.sessionUpdate === 'tool_call_update') {
@@ -182,6 +189,7 @@ function replayHistory(
               if (existing) {
                 existing.output = update.output ?? status;
                 existing.error = status.includes('error') || status.includes('fail');
+                existing.endedAt = evt.createdAt;
               }
             }
           }
@@ -197,9 +205,9 @@ function replayHistory(
         send({ type: 'thinking.delta', text: thinkingText });
       }
       for (const [toolCallId, tc] of toolCalls) {
-        send({ type: 'tool.call', toolCallId, name: tc.name, input: null });
+        send({ type: 'tool.call', toolCallId, name: tc.name, input: null, startedAt: tc.startedAt });
         if (tc.output !== undefined) {
-          send({ type: 'tool.result', toolCallId, output: tc.output, error: tc.error });
+          send({ type: 'tool.result', toolCallId, output: tc.output, error: tc.error, endedAt: tc.endedAt });
         }
       }
     }

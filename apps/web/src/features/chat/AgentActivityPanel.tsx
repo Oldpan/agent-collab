@@ -49,6 +49,13 @@ function getToolState(tc: LiveToolCall): ToolState {
   return "calling";
 }
 
+function getToolDurationLabel(toolCall: LiveToolCall, now: number): string | null {
+  if (!toolCall.startedAt) return null;
+  const end = toolCall.endedAt ?? (toolCall.completed ? undefined : now);
+  if (!end) return null;
+  return formatDurationMs(end - toolCall.startedAt);
+}
+
 function RunRow({ run }: { run: LiveRun }) {
   const [open, setOpen] = useState(run.isActive);
   const [now, setNow] = useState(() => Date.now());
@@ -159,7 +166,12 @@ function RunRow({ run }: { run: LiveRun }) {
 
           {run.toolCalls.map((tc) => (
             <Tool key={tc.id} className="mb-0.5">
-              <ToolHeader name={tc.name} state={getToolState(tc)} input={tc.input} />
+              <ToolHeader
+                name={tc.name}
+                state={getToolState(tc)}
+                input={tc.input}
+                meta={getToolDurationLabel(tc, now)}
+              />
               <ToolContent>
                 <ToolInput input={tc.input} />
                 <ToolOutput output={tc.output} isError={tc.error} />

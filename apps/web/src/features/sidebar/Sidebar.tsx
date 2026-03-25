@@ -15,6 +15,7 @@ import { AgentDetailPanel } from "./AgentDetailPanel";
 import { MachineCreatePanel } from "./MachineCreatePanel";
 import { AgentEnvVarsEditor } from "./AgentEnvVarsEditor";
 import { AgentPermissionSettings } from "./AgentPermissionSettings";
+import { ChatAvatar } from "../chat/ChatAvatar";
 import defaultSystemPrompt from "@/prompts/default-system-prompt.md?raw";
 
 const EXPANDED_MACHINES_STORAGE_KEY = "agent-collab:expanded-machines";
@@ -212,9 +213,9 @@ export function Sidebar({
   }, [agents, conversations, selectedId]);
 
   return (
-    <div className="flex h-full flex-col bg-[#ffc800]">
+    <div className="flex h-full flex-col bg-[#ffe135]">
       {/* Header */}
-      <div className="flex items-center justify-between border-b-2 border-black bg-[#ffb800] px-3 py-3 shadow-[0_2px_0_0_rgba(0,0,0,0.15)]">
+      <div className="flex items-center justify-between border-b-2 border-black bg-[#ffd700] px-3 py-3 shadow-[0_2px_0_0_rgba(0,0,0,0.15)]">
         <h1 className="text-xs font-semibold uppercase tracking-wider text-zinc-800">
           Machines &amp; Agents
         </h1>
@@ -257,7 +258,7 @@ export function Sidebar({
         />
       )}
 
-      <ScrollArea className="flex-1 bg-[#ffc800]">
+      <ScrollArea className="flex-1 bg-[#ffe135]">
         <div className="flex flex-col gap-2 p-3">
           {machines.length === 0 && (
             <p className="rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-3 py-4 text-center text-[10px] text-zinc-500 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]">
@@ -475,14 +476,15 @@ function AgentRow({ agent, isEditing, isSelected, updatedAt, onOpen, onEdit, onD
   return (
     <div className={cn(
       "group flex items-center gap-1.5 rounded-md border-2 border-zinc-900 px-2 py-1.5 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]",
-      isSelected ? "bg-[#ffd54a] text-zinc-950" : "bg-[#fff8d8] hover:bg-[#fff1a9]",
+      isSelected ? "bg-[#c4b5fd] text-zinc-950" : "bg-[#fff8d8] hover:bg-[#fff1a9]",
     )}>
       <button
         type="button"
-        className="flex min-w-0 flex-1 items-center gap-1.5 text-left cursor-pointer"
+        className="flex min-w-0 flex-1 items-center gap-2.5 text-left cursor-pointer"
         onClick={onOpen}
         title="Open private chat"
       >
+        <ChatAvatar role="assistant" agent={agent} size={30} className="shrink-0" />
         <div className="min-w-0 flex-1">
           <div className="truncate text-xs font-medium">{agent.name}</div>
           <div className="text-[10px] text-zinc-500">
