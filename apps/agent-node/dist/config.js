@@ -24,6 +24,8 @@ export function loadConfig() {
             : ['-y', '@zed-industries/claude-code-acp@latest'],
         uiJsonMaxChars: Number(process.env.UI_JSON_MAX_CHARS ?? 3000),
         heartbeatIntervalMs: Number(process.env.HEARTBEAT_INTERVAL_MS ?? 15_000),
+        reconnectInitialDelayMs: Number(process.env.RECONNECT_INITIAL_DELAY_MS ?? 1_000),
+        reconnectMaxDelayMs: Number(process.env.RECONNECT_MAX_DELAY_MS ?? 30_000),
     };
 }
 function resolveStableNodeId(dbPath) {

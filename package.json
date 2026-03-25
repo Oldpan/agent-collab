@@ -10,6 +10,11 @@
     "dev": "pnpm -r --parallel run dev",
     "dev:core": "pnpm --filter @agent-collab/core run dev",
     "dev:web": "pnpm --filter @agent-collab/web run dev",
+    "dev:node": "pnpm --filter @agent-collab/agent-node run dev",
+    "dev:restart:core": "node scripts/restart-dev.mjs core",
+    "dev:restart:node": "node scripts/restart-dev.mjs node",
+    "dev:restart:web": "node scripts/restart-dev.mjs web",
+    "dev:restart": "node scripts/restart-dev.mjs all",
     "build": "pnpm -r run build",
     "test": "pnpm -r run test",
     "lint": "pnpm -r run lint"

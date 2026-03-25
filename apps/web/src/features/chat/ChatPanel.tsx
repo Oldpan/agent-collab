@@ -60,6 +60,10 @@ const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
+function isDispatchFailureError(error?: string): boolean {
+  return error === "Node not connected" || error === "Node disconnected during dispatch";
+}
+
 /** Main chat panel: header + messages + composer */
 export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "activity" | "workspace" | "profile">("chat");
@@ -80,9 +84,13 @@ export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps
   const hasAssistantReply = messages.some(
     (message) => message.role === "assistant" && message.text.trim().length > 0,
   );
+  const latestRun = runs.at(-1);
+  const hasDispatchFailure = Boolean(latestRun?.error && isDispatchFailureError(latestRun.error));
 
   const displayStatus =
-    status === "submitted" || status === "streaming"
+    hasDispatchFailure && status !== "submitted" && status !== "streaming"
+      ? "unavailable"
+      : status === "submitted" || status === "streaming"
       ? "active"
       : status === "queued"
         ? "queued"
@@ -376,6 +384,7 @@ function StatusDot({ status }: { status: string }) {
       className={cn(
         "size-2 rounded-full shrink-0",
         status === "idle" && "bg-success",
+        status === "unavailable" && "bg-zinc-400",
         status === "queued" && "bg-blue-500",
         status === "active" && "bg-warning",
         status === "recovering" && "bg-sky-500",

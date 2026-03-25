@@ -28,6 +28,7 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
 });
 
 function formatDurationMs(ms: number): string {
+  if (ms < 1000) return "<1s";
   const totalSeconds = Math.max(0, Math.floor(ms / 1000));
   const hours = Math.floor(totalSeconds / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -41,6 +42,28 @@ function formatStopReason(reason?: string): string | null {
   if (!reason) return null;
   if (reason === "end_turn") return "completed";
   return reason.replaceAll("_", " ");
+}
+
+function isDispatchFailed(run: LiveRun): boolean {
+  return Boolean(
+    run.error &&
+      (run.error === "Node not connected" ||
+        run.error === "Node disconnected during dispatch"),
+  );
+}
+
+function formatRunStatus(run: LiveRun): string {
+  if (run.isActive) return "running";
+  if (isDispatchFailed(run)) return "not dispatched";
+  if (run.error) return "failed";
+  return formatStopReason(run.stopReason) ?? "finished";
+}
+
+function formatRunError(error?: string): string | null {
+  if (!error) return null;
+  if (error === "Node not connected") return "node offline";
+  if (error === "Node disconnected during dispatch") return "node disconnected during dispatch";
+  return error;
 }
 
 function getToolState(tc: LiveToolCall): ToolState {
@@ -69,14 +92,14 @@ function RunRow({ run }: { run: LiveRun }) {
   const toolCount = run.toolCalls.length;
   const failedToolCount = run.toolCalls.filter((tc) => tc.error).length;
   const completedToolCount = run.toolCalls.filter((tc) => tc.completed || tc.output !== undefined).length;
+  const runError = formatRunError(run.error);
   const duration = useMemo(() => {
     const end = run.endedAt ?? (run.isActive ? now : undefined);
     if (!end || !run.startedAt) return null;
     return formatDurationMs(end - run.startedAt);
   }, [now, run.endedAt, run.isActive, run.startedAt]);
-  const stopReason = formatStopReason(run.stopReason);
   const runShortId = run.id.slice(0, 8);
-  const statusLabel = run.isActive ? "running" : stopReason ?? "finished";
+  const statusLabel = formatRunStatus(run);
 
   return (
     <Collapsible open={open || run.isActive} onOpenChange={setOpen}>
@@ -122,6 +145,7 @@ function RunRow({ run }: { run: LiveRun }) {
             {failedToolCount > 0 && <span>{failedToolCount} failed</span>}
             {duration && <span>{duration}</span>}
             {run.thinking && <span>reasoning</span>}
+            {runError && <span className="text-rose-600">{runError}</span>}
           </div>
         </div>
         {run.isActive && (
@@ -139,7 +163,8 @@ function RunRow({ run }: { run: LiveRun }) {
               <span>started {timeFormatter.format(run.startedAt)}</span>
               {run.endedAt && <span>ended {timeFormatter.format(run.endedAt)}</span>}
               {duration && <span>duration {duration}</span>}
-              {stopReason && <span>stop {stopReason}</span>}
+              <span>status {statusLabel}</span>
+              {runError && <span className="text-rose-600">error {runError}</span>}
             </div>
           </div>
 

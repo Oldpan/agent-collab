@@ -106,6 +106,13 @@ describe('nodeWsHandler', () => {
     expect(row.status).toBe('failed');
     expect(events.some((event) => event.type === 'conversation.status' && event.status === 'failed')).toBe(true);
     expect(events.some((event) => event.type === 'error' && event.message === 'runtime crashed')).toBe(true);
+    expect(events).toContainEqual({
+      type: 'turn.end',
+      turnId: 'run-1',
+      stopReason: 'error',
+      endedAt: expect.any(Number),
+      error: 'runtime crashed',
+    });
   });
 
   it('run.event 中的 recovering 状态应更新会话状态', () => {

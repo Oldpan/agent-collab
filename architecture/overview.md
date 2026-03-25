@@ -60,6 +60,10 @@ Agent Collab 当前是一套 **remote-only** 的多 Agent 协作平台：
   - 管理 runtime 生命周期、状态、inbox、cancel、permission response
 - `dispatchQueueStore`
   - `node_dispatch_queue` 读写
+- `CoreConnection`
+  - 长连接管理
+  - core 断开后自动重连
+  - 使用指数退避 + 抖动
 - `workspaceFs`
   - 远端 workspace list / read / reset
 - `claudeConfig`
@@ -80,6 +84,7 @@ Agent Collab 当前是一套 **remote-only** 的多 Agent 协作平台：
   - `Chat / Activity / Workspace / Profile`
 - `AgentActivityPanel`
   - run、tool call、duration、reasoning 摘要
+  - 对基础设施层失败显示 `not dispatched`
 - `AgentWorkspacePanel`
   - 左树右预览，读取远端 node 上的 workspace
 - `AgentProfilePanel`
@@ -113,6 +118,7 @@ Agent Collab 当前是一套 **remote-only** 的多 Agent 协作平台：
 - host 内部有 inbox
 - node 进程重启后可从 `node_dispatch_queue` 恢复 pending work
 - 前端会看到 `recovering` 状态
+- node 与 core 断线后会自动重连并重新注册
 
 ### Agent 串行
 
@@ -123,6 +129,21 @@ Agent Collab 当前是一套 **remote-only** 的多 Agent 协作平台：
 - 当前 thread settle 后再调度下一个
 
 ## 当前产品行为
+
+### 开发期重启
+
+当前开发环境默认按 `tmux` session `agent-collab` 运行：
+
+- `0`: core
+- `1`: web
+- `2`: node
+
+统一重启入口：
+
+- `pnpm run dev:restart:core`
+- `pnpm run dev:restart:node`
+- `pnpm run dev:restart:web`
+- `pnpm run dev:restart`
 
 ### 私聊
 
@@ -218,6 +239,14 @@ conversation 状态：
 - `recovering`
 - `awaiting_approval`
 - `failed`
+
+此外，Activity 中的 run 展示还会派生一类状态：
+
+- `not dispatched`
+  - 表示 run 在真正开始执行前就失败
+  - 典型错误：
+    - `Node not connected`
+    - `Node disconnected during dispatch`
 
 前端右上角状态点是会话级状态，不是 agent 全局健康状态。
 

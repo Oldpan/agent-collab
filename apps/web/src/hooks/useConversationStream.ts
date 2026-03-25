@@ -258,6 +258,7 @@ export function useConversationStream(
         }
 
         case "turn.end": {
+          const turnError = "error" in event ? event.error : undefined;
           const endedAt =
             typeof (event as { endedAt?: unknown }).endedAt === "number"
               ? ((event as { endedAt?: number }).endedAt ?? Date.now())
@@ -287,6 +288,7 @@ export function useConversationStream(
                       isActive: false,
                       endedAt,
                       stopReason: event.stopReason,
+                      error: turnError,
                       toolCalls,
                     }
                   : r,
@@ -319,6 +321,17 @@ export function useConversationStream(
         case "error": {
           finalizeCurrentToolCalls();
           setStatus("error");
+          const errorId = createId();
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: errorId,
+              role: "system",
+              text: event.message,
+              createdAt: Date.now(),
+              isStreaming: false,
+            },
+          ]);
           break;
         }
 

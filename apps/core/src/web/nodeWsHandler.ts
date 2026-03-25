@@ -141,6 +141,7 @@ export function handleNodeWebSocket(
           turnId: msg.runId,
           stopReason: msg.error ? 'error' : (msg.stopReason ?? 'end_turn'),
           endedAt,
+          error: msg.error,
         });
         if (msg.error) {
           broadcast(msg.conversationId, { type: 'error', message: msg.error });

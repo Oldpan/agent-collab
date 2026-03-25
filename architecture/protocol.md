@@ -22,7 +22,7 @@
 - `turn.begin`
   - 含 `turnId`、可选 `startedAt`
 - `turn.end`
-  - 含 `turnId`、`stopReason?`、`endedAt?`
+  - 含 `turnId`、`stopReason?`、`endedAt?`、`error?`
 - `content.delta`
 - `thinking.delta`
 - `tool.call`
@@ -154,6 +154,12 @@
 - `core` 会把对应 node 标成 `offline`
 - 非 idle conversation 会被标成 `failed`
 
+当前 node 行为：
+
+- `agent-node` 与 `core` 断线后不会直接退出
+- 会按指数退避自动重连
+- 重连成功后重新 `node.register`
+
 ## prompt 调度流程
 
 1. 浏览器发 `prompt`
@@ -181,3 +187,14 @@
   - `tool.result.endedAt`
 
 历史回放也会补齐这些时间，避免刷新后 duration 漂移。
+
+## Activity 状态语义
+
+前端对 run 会派生一类显示状态：
+
+- `not dispatched`
+  - 不是协议里的独立枚举，而是 UI 根据 `run.error` 派生
+  - 当前主要覆盖：
+    - `Node not connected`
+    - `Node disconnected during dispatch`
+  - 语义是：run 在真正开始执行前就失败，不应显示为 `completed`

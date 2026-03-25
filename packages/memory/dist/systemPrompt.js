@@ -15,9 +15,10 @@ export function buildAgentSystemPrompt(config, opts) {
     const startupSteps = [
         `1. **Read MEMORY.md** (in your cwd). This is your memory index — it tells you what you know and where to find it.`,
         `2. Follow the instructions in MEMORY.md to read any other memory files you need (e.g. channel summaries, role definitions, user preferences).`,
-        `3. Stop and wait. New messages will be delivered to you automatically via stdin.`,
-        `4. When you receive a message, process it and reply with ${tool('send_message')}.`,
-        `5. **Complete ALL your work before stopping.** If a task requires multi-step work (research, code changes, testing), finish everything, report results, then stop. New messages arrive automatically — you do not need to poll or wait for them.`,
+        `3. **Restore conversation context** — call ${tool('read_history')}(channel="dm:@User") to retrieve recent DM history. This is critical after a restart: your in-process context may have been cleared, but the message history is always persisted in the platform. If the result is empty, you are in a fresh session with no prior messages.`,
+        `4. Stop and wait. New messages will be delivered to you automatically via stdin.`,
+        `5. When you receive a message, process it and reply with ${tool('send_message')}.`,
+        `6. **Complete ALL your work before stopping.** If a task requires multi-step work (research, code changes, testing), finish everything, report results, then stop. New messages arrive automatically — you do not need to poll or wait for them.`,
     ];
     const agentName = config.displayName || config.name;
     let prompt = `You are "${agentName}", an AI agent in Agent Collab — a collaborative platform for human-AI collaboration.

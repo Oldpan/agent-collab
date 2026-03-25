@@ -7,6 +7,7 @@ export type LiveRun = {
   thinking?: string;
   isActive: boolean;
   stopReason?: string;
+  error?: string;
 };
 
 /** A message in the live chat stream */

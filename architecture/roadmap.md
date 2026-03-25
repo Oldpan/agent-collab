@@ -58,6 +58,7 @@
 - 远端 workspace 浏览已落地
 - Profile 已集中展示 agent 基础信息
 - Activity 已展示 runs、tool calls、run duration、tool duration、reasoning
+- `Node not connected` / `Node disconnected during dispatch` 这类 0s run 已显示为 `not dispatched`
 
 ### 8. Claude 隔离配置
 
@@ -79,26 +80,30 @@
   - 中途短更新
   - 完成后总结并写记忆
 
+### 10. 开发运行时收敛
+
+- 已增加统一 tmux 重启入口：
+  - `dev:restart:core`
+  - `dev:restart:node`
+  - `dev:restart:web`
+  - `dev:restart`
+- `agent-node` 已支持与 `core` 断线后的自动重连 / backoff
+
 ## 当前缺口
 
-### 1. 节点连接恢复仍不够稳
-
-- 重启 `core` 后，当前 `agent-node` 可能不会稳定自动重连
-- 目前实践上需要重启 `agent-node`
-
-### 2. 恢复语义还没完全收口
+### 1. 恢复语义还没完全收口
 
 - recovering 下的 pending approval 恢复还不完整
 - recovering 下的 cancel 语义还没完全明确
 - host 的 idle TTL / 淘汰策略还没做
 
-### 3. 前端自动化不足
+### 2. 前端自动化不足
 
 - 后端测试已经较完整
 - 前端组件 / 交互自动化仍偏弱
 - 缺少黑盒端到端回归
 
-### 4. Activity 聚合还可以继续优化
+### 3. Activity 聚合还可以继续优化
 
 - 重复工具调用仍可聚合得更紧凑
 - run / tool 的状态说明还可以更清晰
@@ -107,26 +112,23 @@
 
 ### P1
 
-- 增加统一重启脚本：
-  - `core`
-  - `agent-node`
-  - `web`
-- 补 node 自动重连 / backoff
-- 把 “Node not connected” 这类 0s run 在 UI 中显示得更准确
-
-### P2
-
 - 完成 recovering + approval / cancel 的恢复语义
 - 给 host 增加 idle timeout / 回收
 - 继续收敛 run / tool 状态机
 
-### P3
+### P2
 
 - 补前端关键回归：
   - 无 agent 空状态
   - agent 主线程打开
   - machine 删除级联后的 UI 一致性
   - workspace / profile / activity 关键视图
+
+### P3
+
+- 改善 Activity 聚合：
+  - 重复 `send_message/check_messages` 归并
+  - dispatch failed / runtime failed / completed 的说明更清楚
 
 ### P4
 

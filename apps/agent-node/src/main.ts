@@ -109,12 +109,18 @@ async function main(): Promise<void> {
     }
   };
 
-  const connection = new CoreConnection(config, handleMessage);
+  const connection = new CoreConnection(config, handleMessage, {
+    onConnected: () => {
+      log.info(`[agent-node] connected to ${config.coreUrl} as ${config.nodeId}`);
+      executor.resumePendingDispatches();
+    },
+    onDisconnected: () => {
+      log.warn('[agent-node] disconnected from core, waiting to reconnect');
+    },
+  });
   executor = new Executor({ db, config, send: (msg) => connection.send(msg) });
 
   await connection.connect();
-  log.info(`[agent-node] connected to ${config.coreUrl} as ${config.nodeId}`);
-  executor.resumePendingDispatches();
 
   const shutdown = (): void => {
     log.warn('[agent-node] shutting down');

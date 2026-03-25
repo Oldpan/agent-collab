@@ -22,6 +22,8 @@ export function createTestConfig(): AgentNodeConfig {
     workspaceRoot: '/tmp',
     dbPath: join(tmpdir(), `agent-node-config-${randomUUID()}.db`),
     heartbeatIntervalMs: 1_000,
+    reconnectInitialDelayMs: 10,
+    reconnectMaxDelayMs: 100,
     acpAgentCommand: 'npx',
     acpAgentArgs: ['-y', '@zed-industries/claude-code-acp@latest'],
     uiJsonMaxChars: 3_000,

@@ -99,6 +99,7 @@ function replayHistory(
   const runs = db
     .prepare(
       `SELECT run_id as runId, prompt_text as promptText, stop_reason as stopReason, ended_at as endedAt, started_at as startedAt
+              , error
        FROM runs WHERE session_key = ? ORDER BY started_at ASC`,
     )
     .all(row.sessionKey) as Array<{
@@ -107,6 +108,7 @@ function replayHistory(
     stopReason: string | null;
     endedAt: number | null;
     startedAt: number;
+    error: string | null;
   }>;
 
   const send = (event: ServerEvent) => {
@@ -216,8 +218,9 @@ function replayHistory(
       send({
         type: 'turn.end',
         turnId,
-        stopReason: run.stopReason ?? 'end_turn',
+        stopReason: run.error ? 'error' : (run.stopReason ?? 'end_turn'),
         endedAt: run.endedAt,
+        error: run.error ?? undefined,
       });
     }
   }

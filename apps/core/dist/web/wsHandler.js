@@ -77,6 +77,7 @@ function replayHistory(socket, conversationId, manager) {
     // 获取所有 runs，按时间正序
     const runs = db
         .prepare(`SELECT run_id as runId, prompt_text as promptText, stop_reason as stopReason, ended_at as endedAt, started_at as startedAt
+              , error
        FROM runs WHERE session_key = ? ORDER BY started_at ASC`)
         .all(row.sessionKey);
     const send = (event) => {
@@ -176,8 +177,9 @@ function replayHistory(socket, conversationId, manager) {
             send({
                 type: 'turn.end',
                 turnId,
-                stopReason: run.stopReason ?? 'end_turn',
+                stopReason: run.error ? 'error' : (run.stopReason ?? 'end_turn'),
                 endedAt: run.endedAt,
+                error: run.error ?? undefined,
             });
         }
     }

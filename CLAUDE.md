@@ -19,6 +19,7 @@ Current private-chat UX:
 - `Workspace` reads files from the agent's remote machine workspace.
 - `Profile` shows agent metadata, runtime type, node id, workspace path, memory path, env-var keys, and Claude config dir when applicable.
 - `Activity` shows run history, tool calls, run durations, and tool durations.
+- Dispatch failures such as `Node not connected` are shown as `not dispatched`, not `completed`.
 
 Current memory model:
 
@@ -69,8 +70,13 @@ This repo has multiple long-running dev processes in tmux. Build success is not 
 
 Important current behavior:
 
-- Restarting `core` can leave the existing `agent-node` disconnected.
-- In practice, after restarting `core`, also restart `agent-node`.
+- `agent-node` now auto-reconnects to `core` with exponential backoff after disconnect.
+- Use the unified restart commands from repo root:
+  - `pnpm run dev:restart:core`
+  - `pnpm run dev:restart:node`
+  - `pnpm run dev:restart:web`
+  - `pnpm run dev:restart`
+- `pnpm run dev:restart` uses the safe order: `core -> node -> web`.
 
 ### tmux layout
 
@@ -146,6 +152,10 @@ Key pieces:
   - manages hosts
   - persists dispatches into `node_dispatch_queue`
   - restores pending work on restart
+- `CoreConnection`
+  - maintains a long-lived websocket to `core`
+  - auto-reconnects with backoff + jitter
+  - re-registers the node after reconnect
 - `AgentHost`
   - one host per conversation/runtime key
   - keeps runtime, inbox, host state
@@ -294,7 +304,7 @@ Current weak areas:
 These have recently existed and are worth remembering:
 
 - Activity duration bugs on replay were caused by missing real timestamps during history replay.
-- Restarting `core` without restarting `agent-node` can leave node status offline and cause instant `Node not connected` runs.
+- `Node not connected` / `Node disconnected during dispatch` runs are now treated as dispatch failures in Activity instead of `completed`.
 - Codex may return partial tool activity and then fail with transport errors; UI status should not blindly treat all failed runs as "chat has no useful history".
 - Workspace / memory operations must be treated as regular workspace file operations, not MCP resource reads.
 
@@ -302,8 +312,6 @@ These have recently existed and are worth remembering:
 
 Highest-value remaining items:
 
-- add unified restart scripts for `core/node/web`
-- improve node auto-reconnect after core restart
 - tighten recovering / pending-approval recovery semantics
 - expand frontend automated tests
 - improve Activity aggregation for repetitive tool calls
