@@ -119,11 +119,12 @@ export class ExecutionDispatcher {
       hostKey,
     });
 
-    let channelBridgeConfig: { agentId: string; serverUrl: string } | undefined;
+    let channelBridgeConfig: { agentId: string; conversationId: string; serverUrl: string } | undefined;
     if (row.agentId) {
       const cbHost = this.config.webHost === '0.0.0.0' ? '127.0.0.1' : this.config.webHost;
       channelBridgeConfig = {
         agentId: row.agentId,
+        conversationId,
         serverUrl: `http://${cbHost}:${this.config.webPort}`,
       };
     }

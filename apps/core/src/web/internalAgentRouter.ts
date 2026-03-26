@@ -40,7 +40,7 @@ export function registerInternalAgentRoutes(
   app: FastifyInstance,
   db: Db,
   conversationManager: ConversationManager,
-  broadcastToAgent: (agentId: string, event: ServerEvent) => void,
+  broadcastToAgent: (agentId: string, event: ServerEvent, conversationId?: string) => void,
 ): void {
   // ─── Messaging ───────────────────────────────────────────────────────────
 
@@ -51,7 +51,7 @@ export function registerInternalAgentRoutes(
    */
   app.post<{
     Params: { agentId: string };
-    Body: { target: string; content: string; attachmentIds?: string[] };
+    Body: { target: string; content: string; attachmentIds?: string[]; conversationId?: string };
   }>('/api/internal/agent/:agentId/send', async (req, reply) => {
     const { agentId } = req.params;
     const agent = conversationManager.getAgent(agentId);
@@ -60,10 +60,18 @@ export function registerInternalAgentRoutes(
       return { error: 'Agent not found' };
     }
 
-    const { target, content } = req.body ?? {};
+    const { target, content, conversationId } = req.body ?? {};
     if (!target || !content) {
       reply.code(400);
       return { error: 'target and content are required' };
+    }
+
+    if (conversationId) {
+      const conversation = conversationManager.getConversation(conversationId);
+      if (!conversation || conversation.agentId !== agentId) {
+        reply.code(400);
+        return { error: 'conversationId does not belong to this agent' };
+      }
     }
 
     // For DM targets that don't resolve to a known agent (e.g. dm:@User — a human),
@@ -77,11 +85,12 @@ export function registerInternalAgentRoutes(
     const now = Date.now();
     const messageId = randomUUID();
     const seq = nextSeq(db, channelId);
+    const runId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
 
     db.prepare(
-      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
-       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?)`,
-    ).run(messageId, channelId, agentId, agent.name, target, content, seq, now);
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`,
+    ).run(messageId, channelId, agentId, agent.name, target, content, seq, now, runId);
 
     broadcastToAgent(agentId, {
       type: 'channel.message',
@@ -92,9 +101,9 @@ export function registerInternalAgentRoutes(
         content,
         createdAt: new Date(now).toISOString(),
       },
-    });
+    }, conversationId);
 
-    return { messageId, seq };
+    return { messageId, seq, runId };
   });
 
   /**
@@ -616,6 +625,20 @@ function nextSeq(db: Db, channelId: string): number {
     .prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?')
     .get(channelId) as { maxSeq: number | null };
   return (row.maxSeq ?? 0) + 1;
+}
+
+function findActiveConversationRunId(db: Db, conversationId: string): string | null {
+  const row = db
+    .prepare(
+      `SELECT r.run_id as runId
+       FROM conversations c
+       JOIN runs r ON r.session_key = c.session_key
+       WHERE c.id = ? AND r.ended_at IS NULL
+       ORDER BY r.started_at DESC
+       LIMIT 1`,
+    )
+    .get(conversationId) as { runId: string } | undefined;
+  return row?.runId ?? null;
 }
 
 function nextTaskNumber(db: Db, channelId: string): number {

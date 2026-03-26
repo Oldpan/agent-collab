@@ -19,17 +19,19 @@ import { z } from 'zod';
 
 const args = process.argv.slice(2);
 let agentId = '';
+let conversationId = '';
 let serverUrl = 'http://localhost:3100';
 let authToken = '';
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--agent-id' && args[i + 1]) agentId = args[++i];
+  if (args[i] === '--conversation-id' && args[i + 1]) conversationId = args[++i];
   if (args[i] === '--server-url' && args[i + 1]) serverUrl = args[++i];
   if (args[i] === '--auth-token' && args[i + 1]) authToken = args[++i];
 }
 
-if (!agentId) {
-  console.error('[channel-bridge] Missing --agent-id');
+if (!agentId || !conversationId) {
+  console.error('[channel-bridge] Missing --agent-id or --conversation-id');
   process.exit(1);
 }
 
@@ -80,7 +82,10 @@ server.tool(
   },
   async ({ target, content }) => {
     try {
-      const { ok, data } = await apiFetch('/send', { method: 'POST', body: { target, content } });
+      const { ok, data } = await apiFetch('/send', {
+        method: 'POST',
+        body: { target, content, conversationId },
+      });
       if (!ok) return toText(`Error: ${errText(data, 'send failed')}`);
       const d = data as Record<string, unknown>;
       const msgId = String(d.messageId ?? '');

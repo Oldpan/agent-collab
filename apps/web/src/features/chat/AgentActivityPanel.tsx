@@ -95,7 +95,7 @@ function RunRow({ run }: { run: LiveRun }) {
     if (!end || !run.startedAt) return null;
     return formatDurationMs(end - run.startedAt);
   }, [now, run.endedAt, run.isActive, run.startedAt]);
-  const runShortId = run.id.slice(0, 8);
+  const runShortId = run.runId.slice(0, 8);
   const statusLabel = formatRunStatus(run);
 
   return (

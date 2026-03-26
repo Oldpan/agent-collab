@@ -319,6 +319,7 @@ export type RunDispatchMsg = {
   contextText?: string;
   channelBridgeConfig?: {
     agentId: string;
+    conversationId: string;
     serverUrl: string;
     authToken?: string;
   };

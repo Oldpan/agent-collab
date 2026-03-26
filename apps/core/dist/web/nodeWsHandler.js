@@ -5,6 +5,34 @@ function appendNodeEvent(db, runId, seq, event) {
 }
 /** Event types worth persisting for history replay */
 const REPLAY_EVENT_TYPES = new Set(['content.delta', 'tool.call', 'tool.result', 'thinking.delta']);
+function requiresMcpReplyContract(db, conversationId) {
+    const row = db
+        .prepare('SELECT agent_id as agentId, thread_kind as threadKind FROM conversations WHERE id = ?')
+        .get(conversationId);
+    return Boolean(row?.agentId) && row?.threadKind === 'direct';
+}
+function hasRunReplyMessage(db, conversationId, runId) {
+    const row = db
+        .prepare(`SELECT COUNT(1) as count
+       FROM channel_messages
+       WHERE run_id = ?
+         AND channel_id = (
+           SELECT 'dm:' || agent_id
+           FROM conversations
+           WHERE id = ?
+         )`)
+        .get(runId, conversationId);
+    return (row?.count ?? 0) > 0;
+}
+function shouldEnforceReplyContract(msg, db, conversationId, runId) {
+    if (msg.error)
+        return false;
+    if (msg.stopReason?.includes('cancel'))
+        return false;
+    if (!requiresMcpReplyContract(db, conversationId))
+        return false;
+    return !hasRunReplyMessage(db, conversationId, runId);
+}
 export function handleNodeWebSocket(socket, registry, broadcast, db, manager, workspaceBroker) {
     let nodeId = null;
     // Sequence counter per runId for node/event persistence
@@ -97,27 +125,31 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
                     void manager.onConversationSettled(msg.conversationId);
                     break;
                 }
+                const replyContractError = shouldEnforceReplyContract(msg, db, msg.conversationId, msg.runId)
+                    ? 'Agent did not reply via send_message'
+                    : null;
+                const terminalError = msg.error ?? replyContractError ?? undefined;
                 // Mark run as finished in core DB
-                finishRun(db, msg.error
-                    ? { runId: msg.runId, error: msg.error }
+                finishRun(db, terminalError
+                    ? { runId: msg.runId, error: terminalError }
                     : { runId: msg.runId, stopReason: msg.stopReason ?? 'end_turn' });
                 // Update conversation status in DB
                 db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
-                    .run(msg.error ? 'failed' : 'idle', endedAt, msg.conversationId);
+                    .run(terminalError ? 'failed' : 'idle', endedAt, msg.conversationId);
                 broadcast(msg.conversationId, {
                     type: 'turn.end',
                     turnId: msg.runId,
-                    stopReason: msg.error ? 'error' : (msg.stopReason ?? 'end_turn'),
+                    stopReason: terminalError ? 'error' : (msg.stopReason ?? 'end_turn'),
                     endedAt,
-                    error: msg.error,
+                    error: terminalError,
                 });
-                if (msg.error) {
-                    broadcast(msg.conversationId, { type: 'error', message: msg.error });
+                if (terminalError) {
+                    broadcast(msg.conversationId, { type: 'error', message: terminalError });
                 }
                 broadcast(msg.conversationId, {
                     type: 'conversation.status',
                     conversationId: msg.conversationId,
-                    status: msg.error ? 'failed' : 'idle',
+                    status: terminalError ? 'failed' : 'idle',
                 });
                 void manager.onConversationSettled(msg.conversationId);
                 break;

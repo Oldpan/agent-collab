@@ -16,6 +16,7 @@ export type LiveToolStatus =
 /** A single agent run (one ACP turn), containing tool calls and optional thinking */
 export type LiveRun = {
   id: string;
+  runId: string;
   startedAt: number;
   endedAt?: number;
   toolCalls: LiveToolCall[];

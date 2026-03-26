@@ -57,6 +57,7 @@ describe('ExecutionDispatcher', () => {
     expect(sent[0].msg.dispatchMode).toBe('cold_start');
     expect(sent[0].msg.hostKey).toBe(`conversation:${conv.id}:codex_acp`);
     expect(sent[0].msg.agentType).toBe('codex_acp');
+    expect(sent[0].msg.channelBridgeConfig).toBeUndefined();
   });
 
   it('dispatchToNode 后续应发送 resume', async () => {
@@ -163,6 +164,10 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.contextText).toContain('Do not use MCP resource-reading tools');
     expect(dispatch.contextText).toContain('MEMORY.md');
     expect(dispatch.contextText).toContain('notes/*.md');
+    expect(dispatch.channelBridgeConfig).toMatchObject({
+      agentId: agent.agentId,
+      conversationId: conv.id,
+    });
   });
 
   it('cancelConversationRun 应发送 run.cancel 到节点', () => {

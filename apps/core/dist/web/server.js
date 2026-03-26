@@ -341,7 +341,11 @@ export async function startServer(params) {
         return;
     });
     // ─── Internal agent routes (used by channel-bridge MCP server) ───
-    function broadcastToAgent(agentId, event) {
+    function broadcastToAgent(agentId, event, conversationId) {
+        if (conversationId) {
+            broadcast(conversationId, event);
+            return;
+        }
         const rows = db
             .prepare('SELECT id FROM conversations WHERE agent_id = ?')
             .all(agentId);

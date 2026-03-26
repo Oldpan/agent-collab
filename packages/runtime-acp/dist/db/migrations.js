@@ -1,4 +1,4 @@
-const LATEST_VERSION = 20;
+const LATEST_VERSION = 21;
 export function migrate(db) {
     db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -385,5 +385,13 @@ export function migrate(db) {
       );
     `);
         db.exec(`UPDATE schema_version SET version = 20;`);
+    }
+    if (current < 21) {
+        const channelMessageCols = db.prepare("PRAGMA table_info('channel_messages')").all();
+        if (!channelMessageCols.some((c) => c.name === 'run_id')) {
+            db.exec(`ALTER TABLE channel_messages ADD COLUMN run_id TEXT;`);
+        }
+        db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_messages_run ON channel_messages(run_id, created_at);`);
+        db.exec(`UPDATE schema_version SET version = 21;`);
     }
 }

@@ -27,6 +27,11 @@ export function createTestDb(): Db {
       updated_at       INTEGER NOT NULL
     );
   `);
+  const channelMessageCols = db.prepare("PRAGMA table_info('channel_messages')").all() as Array<{ name: string }>;
+  if (!channelMessageCols.some((col) => col.name === 'run_id')) {
+    db.exec(`ALTER TABLE channel_messages ADD COLUMN run_id TEXT;`);
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_messages_run ON channel_messages(run_id, created_at);`);
+  }
   return db;
 }
 

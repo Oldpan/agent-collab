@@ -63,14 +63,22 @@ export class Executor {
         upsertBinding(this.db, { platform: 'node', chatId: conversationId, threadId: null, userId: 'node_user' }, sessionKey);
         let channelBridgeMcpEntry;
         if (msg.channelBridgeConfig) {
-            const { agentId, serverUrl, authToken } = msg.channelBridgeConfig;
+            const { agentId, conversationId, serverUrl, authToken } = msg.channelBridgeConfig;
             try {
                 const req = createRequire(import.meta.url);
                 const binPath = req.resolve('@agent-collab/channel-bridge');
                 channelBridgeMcpEntry = {
                     name: 'chat',
                     command: 'node',
-                    args: [binPath, '--agent-id', agentId, '--server-url', serverUrl],
+                    args: [
+                        binPath,
+                        '--agent-id',
+                        agentId,
+                        '--conversation-id',
+                        conversationId,
+                        '--server-url',
+                        serverUrl,
+                    ],
                     env: authToken ? [{ name: 'CHANNEL_BRIDGE_AUTH_TOKEN', value: authToken }] : [],
                 };
             }

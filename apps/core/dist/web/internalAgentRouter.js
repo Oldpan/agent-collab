@@ -19,10 +19,17 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
             reply.code(404);
             return { error: 'Agent not found' };
         }
-        const { target, content } = req.body ?? {};
+        const { target, content, conversationId } = req.body ?? {};
         if (!target || !content) {
             reply.code(400);
             return { error: 'target and content are required' };
+        }
+        if (conversationId) {
+            const conversation = conversationManager.getConversation(conversationId);
+            if (!conversation || conversation.agentId !== agentId) {
+                reply.code(400);
+                return { error: 'conversationId does not belong to this agent' };
+            }
         }
         // For DM targets that don't resolve to a known agent (e.g. dm:@User — a human),
         // fall back to the sending agent's own DM channel so the reply is visible to frontend.
@@ -34,8 +41,9 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
         const now = Date.now();
         const messageId = randomUUID();
         const seq = nextSeq(db, channelId);
-        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
-       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?)`).run(messageId, channelId, agentId, agent.name, target, content, seq, now);
+        const runId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`).run(messageId, channelId, agentId, agent.name, target, content, seq, now, runId);
         broadcastToAgent(agentId, {
             type: 'channel.message',
             message: {
@@ -45,8 +53,8 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
                 content,
                 createdAt: new Date(now).toISOString(),
             },
-        });
-        return { messageId, seq };
+        }, conversationId);
+        return { messageId, seq, runId };
     });
     /**
      * GET /api/internal/agent/:agentId/receive
@@ -443,6 +451,17 @@ function nextSeq(db, channelId) {
         .prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?')
         .get(channelId);
     return (row.maxSeq ?? 0) + 1;
+}
+function findActiveConversationRunId(db, conversationId) {
+    const row = db
+        .prepare(`SELECT r.run_id as runId
+       FROM conversations c
+       JOIN runs r ON r.session_key = c.session_key
+       WHERE c.id = ? AND r.ended_at IS NULL
+       ORDER BY r.started_at DESC
+       LIMIT 1`)
+        .get(conversationId);
+    return row?.runId ?? null;
 }
 function nextTaskNumber(db, channelId) {
     const row = db

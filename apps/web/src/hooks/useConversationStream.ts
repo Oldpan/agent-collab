@@ -6,6 +6,10 @@ import * as api from "@/lib/api";
 let nextId = 1;
 const createId = () => `msg-${nextId++}`;
 
+function getDisplayRunId(turnId: string): string {
+  return turnId.startsWith("replay-") ? turnId.slice("replay-".length) : turnId;
+}
+
 function isDispatchFailureError(error?: string): boolean {
   return error === "Node not connected" || error === "Node disconnected during dispatch";
 }
@@ -173,6 +177,7 @@ export function useConversationStream(
             setRuns((prev) =>
               upsertRun(prev, runId, (current) => ({
                 id: runId,
+                runId: current?.runId ?? getDisplayRunId(runId),
                 startedAt: current?.startedAt ?? startedAt,
                 endedAt: current?.endedAt,
                 toolCalls: current?.toolCalls ?? [],
@@ -509,6 +514,7 @@ export function useConversationStream(
         setRuns(
           historyRuns.map((run) => ({
             id: `replay-${run.runId}`,
+            runId: run.runId,
             startedAt: run.startedAt,
             endedAt: run.endedAt ?? undefined,
             toolCalls: [],

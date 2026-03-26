@@ -391,7 +391,15 @@ export async function startServer(params: {
 
   // ─── Internal agent routes (used by channel-bridge MCP server) ───
 
-  function broadcastToAgent(agentId: string, event: import('@agent-collab/protocol').ServerEvent): void {
+  function broadcastToAgent(
+    agentId: string,
+    event: import('@agent-collab/protocol').ServerEvent,
+    conversationId?: string,
+  ): void {
+    if (conversationId) {
+      broadcast(conversationId, event);
+      return;
+    }
     const rows = db
       .prepare('SELECT id FROM conversations WHERE agent_id = ?')
       .all(agentId) as Array<{ id: string }>;
