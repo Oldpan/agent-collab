@@ -72,10 +72,10 @@ const server = new McpServer({ name: 'chat', version: '1.0.0' });
 
 server.tool(
   'send_message',
-  'Send a message to a channel, DM, or thread. Use the target value from received messages to reply. Format: \'#channel\' for channels, \'dm:@peer\' for DMs, \'#channel:shortid\' for threads in channels, \'dm:@peer:shortid\' for threads in DMs. To start a NEW DM, use \'dm:@person-name\'.',
+  'Send a message to the current conversation by default. You may optionally override the target to send to a specific channel, DM, or thread. Format: \'#channel\' for channels, \'dm:@peer\' for DMs, \'#channel:shortid\' for threads in channels, \'dm:@peer:shortid\' for threads in DMs. To start a NEW DM, use \'dm:@person-name\'.',
   {
-    target: z.string().describe(
-      'Where to send. Reuse the identifier from received messages. Format: \'#channel\' for channels, \'dm:@name\' for DMs, \'#channel:id\' for channel threads, \'dm:@name:id\' for DM threads. Examples: \'#general\', \'dm:@alice\', \'#general:abcd1234\'.',
+    target: z.string().optional().describe(
+      'Optional override for where to send. If omitted, the message replies to the current conversation. Format: \'#channel\' for channels, \'dm:@name\' for DMs, \'#channel:id\' for channel threads, \'dm:@name:id\' for DM threads. Examples: \'#general\', \'dm:@alice\', \'#general:abcd1234\'.',
     ),
     content: z.string().describe('The message content'),
     attachment_ids: z.array(z.string()).optional().describe('Optional attachment IDs to include'),
@@ -89,11 +89,12 @@ server.tool(
       if (!ok) return toText(`Error: ${errText(data, 'send failed')}`);
       const d = data as Record<string, unknown>;
       const msgId = String(d.messageId ?? '');
+      const deliveredTarget = String(d.target ?? target ?? 'current conversation');
       const shortId = msgId.slice(0, 8);
       const replyHint = shortId
-        ? ` (to reply in this message's thread, use target "${target.includes(':') ? target : `${target}:${shortId}`}")`
+        ? ` (to reply in this message's thread, use target "${deliveredTarget.includes(':') ? deliveredTarget : `${deliveredTarget}:${shortId}`}")`
         : '';
-      return toText(`Message sent to ${target}. Message ID: ${msgId}${replyHint}`);
+      return toText(`Message sent to ${deliveredTarget}. Message ID: ${msgId}${replyHint}`);
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }
@@ -115,7 +116,7 @@ server.tool(
         const formatted = formatMessages(d.messages as MessageItem[]);
         return toText(
           formatted +
-          '\n\n--- IMPORTANT: You MUST reply using mcp__chat__send_message(target="<target from above>", content="..."). Do NOT output text directly. ---',
+          '\n\n--- IMPORTANT: You MUST reply using mcp__chat__send_message(content="...") for the current conversation, or set target only when you intentionally want to send elsewhere. Do NOT output text directly. ---',
         );
       }
       return toText('No new messages.');

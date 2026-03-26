@@ -20,9 +20,9 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
             return { error: 'Agent not found' };
         }
         const { target, content, conversationId } = req.body ?? {};
-        if (!target || !content) {
+        if (!content) {
             reply.code(400);
-            return { error: 'target and content are required' };
+            return { error: 'content is required' };
         }
         if (conversationId) {
             const conversation = conversationManager.getConversation(conversationId);
@@ -31,19 +31,24 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
                 return { error: 'conversationId does not belong to this agent' };
             }
         }
+        const resolvedTarget = target?.trim() || (conversationId ? resolveDefaultReplyTarget(db, conversationId) : null);
+        if (!resolvedTarget) {
+            reply.code(400);
+            return { error: 'target is required unless conversationId is provided for the current conversation reply' };
+        }
         // For DM targets that don't resolve to a known agent (e.g. dm:@User — a human),
         // fall back to the sending agent's own DM channel so the reply is visible to frontend.
-        const channelId = resolveChannelFromTarget(target, db) ?? (target.startsWith('dm:') ? `dm:${agentId}` : null);
+        const channelId = resolveChannelFromTarget(resolvedTarget, db) ?? (resolvedTarget.startsWith('dm:') ? `dm:${agentId}` : null);
         if (!channelId) {
             reply.code(400);
-            return { error: `Cannot resolve channel from target: ${target}` };
+            return { error: `Cannot resolve channel from target: ${resolvedTarget}` };
         }
         const now = Date.now();
         const messageId = randomUUID();
         const seq = nextSeq(db, channelId);
         const runId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
         db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id)
-       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`).run(messageId, channelId, agentId, agent.name, target, content, seq, now, runId);
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`).run(messageId, channelId, agentId, agent.name, resolvedTarget, content, seq, now, runId);
         broadcastToAgent(agentId, {
             type: 'channel.message',
             message: {
@@ -54,7 +59,7 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
                 createdAt: new Date(now).toISOString(),
             },
         }, conversationId);
-        return { messageId, seq, runId };
+        return { messageId, seq, runId, target: resolvedTarget };
     });
     /**
      * GET /api/internal/agent/:agentId/receive
@@ -445,6 +450,23 @@ function resolveChannelFromTarget(target, db) {
         return null;
     }
     return null;
+}
+function resolveDefaultReplyTarget(db, conversationId) {
+    const row = db.prepare(`SELECT c.id as conversationId, c.channel_id as channelId, c.thread_kind as threadKind,
+            c.is_primary_thread as isPrimaryThread, ch.name as channelName
+     FROM conversations c
+     LEFT JOIN channels ch ON ch.channel_id = c.channel_id
+     WHERE c.id = ?`).get(conversationId);
+    if (!row)
+        return null;
+    if (row.threadKind === 'direct') {
+        return row.isPrimaryThread
+            ? 'dm:@User'
+            : `dm:@User:${row.conversationId.slice(0, 8)}`;
+    }
+    const channelName = row.channelName ?? row.channelId;
+    const baseTarget = `#${channelName}`;
+    return row.isPrimaryThread ? baseTarget : `${baseTarget}:${row.conversationId.slice(0, 8)}`;
 }
 function nextSeq(db, channelId) {
     const row = db

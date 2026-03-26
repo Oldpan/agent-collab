@@ -70,4 +70,86 @@ describe('internalAgentRouter', () => {
     expect(row.runId).toBe('run-router-1');
     expect(row.channelId).toBe(`dm:${agent.agentId}`);
   });
+
+  it('未提供 target 时应默认回复当前私聊会话', async () => {
+    const agent = manager.createAgent({
+      name: 'Tab',
+      agentType: 'codex_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/tab-router',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-2',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'reply',
+    });
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'ack',
+        conversationId: conv.id,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { runId?: string; target?: string };
+    expect(body.runId).toBe('run-router-2');
+    expect(body.target).toBe('dm:@User');
+
+    const row = db.prepare(
+      'SELECT run_id as runId, channel_id as channelId, target FROM channel_messages WHERE sender_id = ? ORDER BY created_at DESC LIMIT 1',
+    ).get(agent.agentId) as { runId: string | null; channelId: string; target: string };
+    expect(row.runId).toBe('run-router-2');
+    expect(row.channelId).toBe(`dm:${agent.agentId}`);
+    expect(row.target).toBe('dm:@User');
+  });
+
+  it('branch thread 未提供 target 时应默认回复当前 channel thread', async () => {
+    const agent = manager.createAgent({
+      name: 'Viber',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/viber-router',
+      channelId: 'default',
+    });
+    const conv = manager.createConversation({
+      agentId: agent.agentId,
+      threadKind: 'branch',
+      isPrimaryThread: false,
+    });
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-3',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'reply branch',
+    });
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'branch ack',
+        conversationId: conv.id,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { target?: string };
+    expect(body.target).toBe(`#default:${conv.id.slice(0, 8)}`);
+
+    const row = db.prepare(
+      'SELECT channel_id as channelId, target FROM channel_messages WHERE sender_id = ? ORDER BY created_at DESC LIMIT 1',
+    ).get(agent.agentId) as { channelId: string; target: string };
+    expect(row.channelId).toBe('default');
+    expect(row.target).toBe(`#default:${conv.id.slice(0, 8)}`);
+  });
 });

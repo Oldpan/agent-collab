@@ -81,6 +81,14 @@ Important current behavior:
   - `pnpm run dev:restart`
 - `pnpm run dev:restart` uses the safe order: `core -> node -> web`.
 
+### Changelog discipline
+
+Record meaningful product, architecture, protocol, runtime, or UX changes in:
+
+- `changelog.md`
+
+This should be updated as part of the same change, not deferred.
+
 ### tmux layout
 
 Current dev sessions typically live in `tmux` session `agent-collab`:

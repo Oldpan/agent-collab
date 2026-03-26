@@ -17,10 +17,10 @@ describe('migrations', () => {
         expect(colNames).toContain('updated_at');
         db.close();
     });
-    it('schema_version 应为最新版本 20', () => {
+    it('schema_version 应为最新版本 21', () => {
         const db = createTestDb();
         const row = db.prepare('SELECT version FROM schema_version').get();
-        expect(row.version).toBe(20);
+        expect(row.version).toBe(21);
         db.close();
     });
     it('nodes 表应包含 display_name, env_var_keys, provisioned_at 列', () => {
