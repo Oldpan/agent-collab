@@ -306,6 +306,32 @@ describe('ConversationManager', () => {
       expect(ch.description).toBe('channel description');
       expect(manager.getChannel(ch.channelId)?.description).toBe('channel description');
     });
+
+    it('openAgentChannelThread 应为同一 agent/channel/threadRootId 复用 branch thread', () => {
+      const channel = manager.createChannel({ name: 'eng-thread' });
+      const agent = manager.createAgent({
+        name: 'Bob',
+        agentType: 'claude_acp',
+        nodeId: 'node-1',
+        workspacePath: '/tmp/bob-eng-thread',
+      });
+      manager.joinChannel(agent.agentId, channel.channelId);
+
+      const first = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'abcd1234');
+      const second = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'abcd1234');
+      const third = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'efgh5678');
+
+      expect(first).not.toBeNull();
+      expect(second).not.toBeNull();
+      expect(third).not.toBeNull();
+      expect(first?.id).toBe(second?.id);
+      expect(first?.id).not.toBe(third?.id);
+      expect(first?.threadKind).toBe('branch');
+      expect(first?.isPrimaryThread).toBe(false);
+      expect(first?.channelId).toBe(channel.channelId);
+      expect(first?.threadRootId).toBe('abcd1234');
+      expect(third?.threadRootId).toBe('efgh5678');
+    });
   });
 
   // ─── envVars ───

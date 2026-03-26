@@ -471,7 +471,8 @@ function resolveChannelFromTarget(target, db) {
 }
 function resolveDefaultReplyTarget(db, conversationId) {
     const row = db.prepare(`SELECT c.id as conversationId, c.channel_id as channelId, c.thread_kind as threadKind,
-            c.is_primary_thread as isPrimaryThread, ch.name as channelName
+            c.is_primary_thread as isPrimaryThread, c.thread_root_id as threadRootId,
+            ch.name as channelName
      FROM conversations c
      LEFT JOIN channels ch ON ch.channel_id = c.channel_id
      WHERE c.id = ?`).get(conversationId);
@@ -484,6 +485,9 @@ function resolveDefaultReplyTarget(db, conversationId) {
     }
     const channelName = row.channelName ?? row.channelId;
     const baseTarget = `#${channelName}`;
+    if (row.threadRootId) {
+        return `${baseTarget}:${row.threadRootId}`;
+    }
     return row.isPrimaryThread ? baseTarget : `${baseTarget}:${row.conversationId.slice(0, 8)}`;
 }
 /** Extracts the thread shortId from targets like "#general:a1b2c3d4". Returns null for non-thread targets. */

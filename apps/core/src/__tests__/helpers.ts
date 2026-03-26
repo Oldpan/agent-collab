@@ -17,6 +17,9 @@ export function createTestDb(): Db {
   if (!convCols.some((col) => col.name === 'is_primary_thread')) {
     db.exec(`ALTER TABLE conversations ADD COLUMN is_primary_thread INTEGER NOT NULL DEFAULT 0;`);
   }
+  if (!convCols.some((col) => col.name === 'thread_root_id')) {
+    db.exec(`ALTER TABLE conversations ADD COLUMN thread_root_id TEXT;`);
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS conversation_prompt_queue (
       queue_id         INTEGER PRIMARY KEY AUTOINCREMENT,

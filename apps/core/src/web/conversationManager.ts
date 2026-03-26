@@ -248,6 +248,7 @@ export class ConversationManager {
     channelId?: string;
     threadKind?: ThreadKind;
     isPrimaryThread?: boolean;
+    threadRootId?: string | null;
     envVars?: Record<string, string>;
     nodeId?: string;
     agentId?: string;
@@ -263,6 +264,7 @@ export class ConversationManager {
     const nodeId = params.nodeId ?? agent?.nodeId ?? null;
     const threadKind: ThreadKind = params.threadKind ?? 'direct';
     const isPrimaryThread = params.isPrimaryThread ?? false;
+    const threadRootId = params.threadRootId ?? null;
     const envVarsJson = (() => {
       const ev = params.envVars ?? agent?.envVars;
       return ev && Object.keys(ev).length > 0 ? JSON.stringify(ev) : null;
@@ -292,10 +294,10 @@ export class ConversationManager {
     // Create conversations row
     this.db
       .prepare(
-        `INSERT INTO conversations(id, channel_id, title, agent_type, workspace_path, session_key, status, thread_kind, is_primary_thread, env_vars, node_id, agent_id, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO conversations(id, channel_id, title, agent_type, workspace_path, session_key, status, thread_kind, is_primary_thread, thread_root_id, env_vars, node_id, agent_id, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, channelId, title, agentType, workspacePath, sessionKey, threadKind, isPrimaryThread ? 1 : 0, envVarsJson, nodeId, params.agentId ?? null, now, now);
+      .run(id, channelId, title, agentType, workspacePath, sessionKey, threadKind, isPrimaryThread ? 1 : 0, threadRootId, envVarsJson, nodeId, params.agentId ?? null, now, now);
 
     return {
       id,
@@ -304,6 +306,7 @@ export class ConversationManager {
       agentType,
       threadKind,
       isPrimaryThread,
+      threadRootId,
       workspacePath,
       status: 'idle',
       createdAt: now,
@@ -320,6 +323,7 @@ export class ConversationManager {
     const existing = this.db.prepare(
       `SELECT id, channel_id as channelId, title, agent_type as agentType,
               thread_kind as threadKind, is_primary_thread as isPrimaryThread,
+              thread_root_id as threadRootId,
               workspace_path as workspacePath, status, node_id as nodeId,
               agent_id as agentId, created_at as createdAt, updated_at as updatedAt
        FROM conversations
@@ -334,6 +338,7 @@ export class ConversationManager {
     const fallback = this.db.prepare(
       `SELECT id, channel_id as channelId, title, agent_type as agentType,
               thread_kind as threadKind, is_primary_thread as isPrimaryThread,
+              thread_root_id as threadRootId,
               workspace_path as workspacePath, status, node_id as nodeId,
               agent_id as agentId, created_at as createdAt, updated_at as updatedAt
        FROM conversations
@@ -362,9 +367,42 @@ export class ConversationManager {
     });
   }
 
+  openAgentChannelThread(agentId: string, channelId: string, threadRootId: string): ConversationInfo | null {
+    const agent = this.getAgent(agentId);
+    if (!agent) return null;
+
+    const existing = this.db.prepare(
+      `SELECT id, channel_id as channelId, title, agent_type as agentType,
+              thread_kind as threadKind, is_primary_thread as isPrimaryThread,
+              thread_root_id as threadRootId,
+              workspace_path as workspacePath, status, node_id as nodeId,
+              agent_id as agentId, created_at as createdAt, updated_at as updatedAt
+       FROM conversations
+       WHERE agent_id = ? AND channel_id = ? AND thread_kind = 'branch' AND thread_root_id = ?
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+    ).get(agentId, channelId, threadRootId) as ConversationInfo | undefined;
+    if (existing) {
+      return { ...existing, isPrimaryThread: !!existing.isPrimaryThread, threadRootId: existing.threadRootId ?? null };
+    }
+
+    return this.createConversation({
+      agentId,
+      agentType: agent.agentType,
+      workspacePath: agent.workspacePath ?? undefined,
+      channelId,
+      nodeId: agent.nodeId ?? undefined,
+      threadKind: 'branch',
+      isPrimaryThread: false,
+      threadRootId,
+      title: '',
+    });
+  }
+
   listConversations(filter?: { channelId?: string; agentId?: string }): ConversationInfo[] {
     const convSelect = `SELECT id, channel_id as channelId, title, agent_type as agentType,
                 thread_kind as threadKind, is_primary_thread as isPrimaryThread,
+                thread_root_id as threadRootId,
                 workspace_path as workspacePath, status, node_id as nodeId,
                 agent_id as agentId, created_at as createdAt, updated_at as updatedAt
          FROM conversations`;
@@ -372,6 +410,7 @@ export class ConversationManager {
     const mapRows = (rows: ConversationInfo[]) => rows.map((row) => ({
       ...row,
       isPrimaryThread: !!row.isPrimaryThread,
+      threadRootId: row.threadRootId ?? null,
     }));
 
     if (filter?.channelId && filter?.agentId) {
@@ -394,12 +433,13 @@ export class ConversationManager {
       .prepare(
         `SELECT id, channel_id as channelId, title, agent_type as agentType,
                 thread_kind as threadKind, is_primary_thread as isPrimaryThread,
+                thread_root_id as threadRootId,
                 workspace_path as workspacePath, status, node_id as nodeId,
                 agent_id as agentId, created_at as createdAt, updated_at as updatedAt
          FROM conversations WHERE id = ?`,
       )
       .get(id) as ConversationInfo | undefined;
-    return row ? { ...row, isPrimaryThread: !!row.isPrimaryThread } : null;
+    return row ? { ...row, isPrimaryThread: !!row.isPrimaryThread, threadRootId: row.threadRootId ?? null } : null;
   }
 
   deleteConversation(id: string): void {

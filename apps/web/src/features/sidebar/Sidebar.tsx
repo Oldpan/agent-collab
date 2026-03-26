@@ -1,23 +1,22 @@
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { CreateDialog } from "@/components/ui/create-dialog";
 import { cn } from "@/lib/utils";
 import {
-  PlusIcon, TrashIcon, XIcon, ChevronRightIcon, ChevronDownIcon, PencilIcon, Rows3Icon, HashIcon,
+  PlusIcon, TrashIcon, ChevronRightIcon, ChevronDownIcon, PencilIcon, Rows3Icon, HashIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type {
   AgentInfo, MachineInfo, ChannelInfo,
-  AgentType, CreateAgentRequest,
+  CreateAgentRequest,
   UpdateAgentRequest, CreateMachineRequest, ConversationInfo,
 } from "@agent-collab/protocol";
 import { AgentDetailPanel } from "./AgentDetailPanel";
 import { MachineCreatePanel } from "./MachineCreatePanel";
 import { ChannelCreatePanel } from "./ChannelCreatePanel";
-import { AgentEnvVarsEditor } from "./AgentEnvVarsEditor";
-import { AgentPermissionSettings } from "./AgentPermissionSettings";
+import { AgentCreateDialog } from "./AgentCreateDialog";
 import { ChatAvatar } from "../chat/ChatAvatar";
-import defaultSystemPrompt from "@/prompts/default-system-prompt.md?raw";
 
 const EXPANDED_MACHINES_STORAGE_KEY = "agent-collab:expanded-machines";
 
@@ -100,23 +99,15 @@ export function Sidebar({
   );
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [showCreateMachine, setShowCreateMachine] = useState(false);
+  const [showCreateAgent, setShowCreateAgent] = useState(false);
+  const [createAgentMachineId, setCreateAgentMachineId] = useState<string | null>(null);
+  const [showCreateChannel, setShowCreateChannel] = useState(false);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [agentToDelete, setAgentToDelete] = useState<AgentInfo | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
 
   const [deleteMachineDialogOpen, setDeleteMachineDialogOpen] = useState(false);
   const [machineToDelete, setMachineToDelete] = useState<MachineInfo | null>(null);
-
-  // Channel creation state
-  const [showCreateChannel, setShowCreateChannel] = useState(false);
-
-  // Create agent form state (keyed by machineNodeId)
-  const [createAgentInMachine, setCreateAgentInMachine] = useState<string | null>(null);
-  const [newAgentName, setNewAgentName] = useState("");
-  const [newAgentType, setNewAgentType] = useState<AgentType>("claude_acp");
-  const [newAgentSystemPrompt, setNewAgentSystemPrompt] = useState(defaultSystemPrompt);
-  const [newAgentEnvVars, setNewAgentEnvVars] = useState<Record<string, string> | undefined>();
-  const [newAgentDisabledToolKinds, setNewAgentDisabledToolKinds] = useState<CreateAgentRequest["disabledToolKinds"]>();
 
   const toggleMachine = (nodeId: string) => {
     setExpandedMachines((prev) => {
@@ -171,30 +162,16 @@ export function Sidebar({
     setMachineToDelete(null);
   }, []);
 
-  const handleCreateAgent = useCallback(() => {
-    if (!newAgentName.trim() || !createAgentInMachine) return;
-    onCreateAgent({
-      name: newAgentName.trim(),
-      agentType: newAgentType,
-      systemPrompt: newAgentSystemPrompt.trim() || undefined,
-      envVars: newAgentEnvVars,
-      disabledToolKinds: newAgentDisabledToolKinds,
-      nodeId: createAgentInMachine,
-    });
-    setCreateAgentInMachine(null);
-    setNewAgentName("");
-    setNewAgentSystemPrompt(defaultSystemPrompt);
-    setNewAgentEnvVars(undefined);
-    setNewAgentDisabledToolKinds(undefined);
-  }, [newAgentName, newAgentType, newAgentSystemPrompt, newAgentEnvVars, newAgentDisabledToolKinds, createAgentInMachine, onCreateAgent]);
+  const handleCreateAgent = useCallback((req: CreateAgentRequest) => {
+    onCreateAgent(req);
+    setShowCreateAgent(false);
+    setCreateAgentMachineId(null);
+  }, [onCreateAgent]);
 
-  const openCreateAgentForm = (nodeId: string, e: React.MouseEvent) => {
+  const openCreateAgentDialog = (nodeId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    setCreateAgentInMachine(nodeId);
-    setNewAgentName("");
-    setNewAgentSystemPrompt(defaultSystemPrompt);
-    setNewAgentEnvVars(undefined);
-    setNewAgentDisabledToolKinds(undefined);
+    setCreateAgentMachineId(nodeId);
+    setShowCreateAgent(true);
     setExpandedMachines((prev) => {
       const next = new Set(prev).add(nodeId);
       writeStoredSet(EXPANDED_MACHINES_STORAGE_KEY, next);
@@ -248,15 +225,19 @@ export function Sidebar({
             variant="outline"
             className="rounded-sm border-2 border-zinc-900 bg-[#fff9d8] text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff1a9]"
             title="Add machine"
-            onClick={() => setShowCreateMachine((v) => !v)}
+            onClick={() => setShowCreateMachine(true)}
           >
             <PlusIcon className="size-3" />
           </Button>
         </div>
       </div>
 
-      {/* Create machine panel */}
-      {showCreateMachine && (
+      {/* Create machine dialog */}
+      <CreateDialog
+        isOpen={showCreateMachine}
+        title="New Machine"
+        onClose={() => setShowCreateMachine(false)}
+      >
         <MachineCreatePanel
           onClose={() => setShowCreateMachine(false)}
           onCreate={async (req) => {
@@ -265,7 +246,42 @@ export function Sidebar({
             return m;
           }}
         />
-      )}
+      </CreateDialog>
+
+      {/* Create agent dialog */}
+      <CreateDialog
+        isOpen={showCreateAgent}
+        title="New Agent"
+        onClose={() => {
+          setShowCreateAgent(false);
+          setCreateAgentMachineId(null);
+        }}
+      >
+        {createAgentMachineId && (
+          <AgentCreateDialog
+            machineNodeId={createAgentMachineId}
+            onClose={() => {
+              setShowCreateAgent(false);
+              setCreateAgentMachineId(null);
+            }}
+            onCreate={handleCreateAgent}
+          />
+        )}
+      </CreateDialog>
+
+      {/* Create channel dialog */}
+      <CreateDialog
+        isOpen={showCreateChannel}
+        title="New Channel"
+        onClose={() => setShowCreateChannel(false)}
+      >
+        <ChannelCreatePanel
+          agents={agents}
+          onClose={() => setShowCreateChannel(false)}
+          onCreate={onCreateChannel}
+          onCreated={(channel) => onSelectChannel(channel.channelId)}
+        />
+      </CreateDialog>
 
       <ScrollArea className="flex-1 bg-[#ffe135]">
         <div className="flex flex-col items-start gap-2 p-3">
@@ -302,7 +318,7 @@ export function Sidebar({
                       type="button"
                       className="rounded-sm p-0.5 hover:bg-[#ffe27a] cursor-pointer"
                       title="Add agent to this machine"
-                      onClick={(e) => openCreateAgentForm(machine.nodeId, e)}
+                      onClick={(e) => openCreateAgentDialog(machine.nodeId, e)}
                     >
                       <PlusIcon className="size-3 text-zinc-500" />
                     </button>
@@ -320,78 +336,7 @@ export function Sidebar({
                 {/* Machine content */}
                 {isExpanded && (
                   <div className="ml-3 mt-1 flex flex-col items-start gap-1">
-                    {/* Create agent form */}
-                    {createAgentInMachine === machine.nodeId && (
-                      <div className="my-1 space-y-1.5 rounded-md border-2 border-zinc-900 bg-[#fff8d8] p-2 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]">
-                        <input
-                          autoFocus
-                          className="w-full rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs placeholder:text-zinc-400"
-                          placeholder="Agent name"
-                          value={newAgentName}
-                          onChange={(e) => setNewAgentName(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === "Enter") handleCreateAgent();
-                            if (e.key === "Escape") setCreateAgentInMachine(null);
-                          }}
-                        />
-                        <div className="flex gap-1">
-                          {(["claude_acp", "codex_acp"] as AgentType[]).map((t) => (
-                            <button
-                              key={t}
-                              type="button"
-                              className={cn(
-                                "flex-1 rounded-sm border-2 px-1 py-0.5 text-[10px] cursor-pointer",
-                                newAgentType === t
-                                  ? "border-zinc-900 bg-[#ffd54a] text-zinc-950"
-                                  : "border-zinc-900 bg-white text-zinc-700 hover:bg-[#fff1a9]",
-                              )}
-                              onClick={() => setNewAgentType(t)}
-                            >
-                              {t === "claude_acp" ? "Claude" : "Codex"}
-                            </button>
-                          ))}
-                        </div>
-                        <textarea
-                          className="min-h-[40px] w-full resize-none rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs placeholder:text-zinc-400"
-                          placeholder="System prompt (optional)"
-                          value={newAgentSystemPrompt}
-                          onChange={(e) => setNewAgentSystemPrompt(e.target.value)}
-                        />
-                        <AgentEnvVarsEditor
-                          editorKey={`${machine.nodeId}:${newAgentType}:${createAgentInMachine ?? "closed"}`}
-                          value={newAgentEnvVars}
-                          onChange={setNewAgentEnvVars}
-                        />
-                        <AgentPermissionSettings
-                          value={newAgentDisabledToolKinds}
-                          onChange={setNewAgentDisabledToolKinds}
-                        />
-                        <div className="flex gap-1">
-                          <Button
-                            size="sm"
-                            className="h-6 flex-1 rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-xs text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
-                            onClick={handleCreateAgent}
-                            disabled={!newAgentName.trim()}
-                          >
-                            Create
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            className="h-6 rounded-sm border-2 border-zinc-900 bg-white px-2 text-xs text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#fff1a9]"
-                            onClick={() => {
-                              setCreateAgentInMachine(null);
-                              setNewAgentEnvVars(undefined);
-                              setNewAgentDisabledToolKinds(undefined);
-                            }}
-                          >
-                            <XIcon className="size-3" />
-                          </Button>
-                        </div>
-                      </div>
-                    )}
-
-                    {machineAgents.length === 0 && createAgentInMachine !== machine.nodeId && (
+                    {machineAgents.length === 0 && (
                       <p className="rounded-md border-2 border-dashed border-zinc-900/40 bg-[#fff8d8] px-2 py-2 text-[10px] text-zinc-500">
                         No agents — click + to create one
                       </p>
@@ -449,16 +394,7 @@ export function Sidebar({
               </button>
             </div>
 
-            {showCreateChannel && (
-              <ChannelCreatePanel
-                agents={agents}
-                onClose={() => setShowCreateChannel(false)}
-                onCreate={onCreateChannel}
-                onCreated={(channel) => onSelectChannel(channel.channelId)}
-              />
-            )}
-
-            {channels.length === 0 && !showCreateChannel && (
+            {channels.length === 0 && (
               <p className="rounded-md border-2 border-dashed border-zinc-900/40 bg-[#fff8d8] px-2 py-2 text-[10px] text-zinc-500">
                 No channels — click + to create one
               </p>

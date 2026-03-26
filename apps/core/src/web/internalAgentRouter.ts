@@ -652,7 +652,8 @@ function resolveChannelFromTarget(target: string, db: Db): string | null {
 function resolveDefaultReplyTarget(db: Db, conversationId: string): string | null {
   const row = db.prepare(
     `SELECT c.id as conversationId, c.channel_id as channelId, c.thread_kind as threadKind,
-            c.is_primary_thread as isPrimaryThread, ch.name as channelName
+            c.is_primary_thread as isPrimaryThread, c.thread_root_id as threadRootId,
+            ch.name as channelName
      FROM conversations c
      LEFT JOIN channels ch ON ch.channel_id = c.channel_id
      WHERE c.id = ?`,
@@ -661,6 +662,7 @@ function resolveDefaultReplyTarget(db: Db, conversationId: string): string | nul
     channelId: string;
     threadKind: 'direct' | 'branch';
     isPrimaryThread: number;
+    threadRootId: string | null;
     channelName: string | null;
   } | undefined;
 
@@ -674,6 +676,9 @@ function resolveDefaultReplyTarget(db: Db, conversationId: string): string | nul
 
   const channelName = row.channelName ?? row.channelId;
   const baseTarget = `#${channelName}`;
+  if (row.threadRootId) {
+    return `${baseTarget}:${row.threadRootId}`;
+  }
   return row.isPrimaryThread ? baseTarget : `${baseTarget}:${row.conversationId.slice(0, 8)}`;
 }
 

@@ -57,6 +57,13 @@
 - 前端 ChannelPanel Composer 支持 `@` 触发 autocomplete 下拉（↑↓ 选择，Enter/点击 确认，Esc 关闭）。
 - 消息气泡中 `@mention` 文字高亮显示为紫色。
 
+## 2026-03-26 (channel mention thread routing)
+
+- 频道内 `@agent` 和 agent message 的 thread reply 不再复用 agent 的私聊主 thread。
+- `ConversationManager` 新增 `openAgentChannelThread(agentId, channelId, threadRootId)`，会为 `agent + channel + root message` 复用或创建对应的 branch conversation。
+- `conversations` 新增 `thread_root_id` 元数据；`send_message()` 在 channel branch 中默认回复到 `#channel:threadRootId`，而不是回私聊或生成孤立 thread id。
+- 修复了“在 `#default` 里 `@Bob`，Bob 却在私聊里回复”的问题，并补了服务端与内部路由回归测试。
+
 ## 2026-03-26 (channel window)
 
 - 新增前端 Channel 窗口：侧边栏添加 Channels 区块，点击频道名打开 ChannelPanel。

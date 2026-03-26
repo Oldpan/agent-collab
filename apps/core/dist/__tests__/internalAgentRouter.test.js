@@ -100,11 +100,9 @@ describe('internalAgentRouter', () => {
             workspacePath: '/tmp/viber-router',
             channelId: 'default',
         });
-        const conv = manager.createConversation({
-            agentId: agent.agentId,
-            threadKind: 'branch',
-            isPrimaryThread: false,
-        });
+        const conv = manager.openAgentChannelThread(agent.agentId, 'default', 'abcd1234');
+        if (!conv)
+            throw new Error('missing channel conversation');
         const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
             .get(conv.id);
         createRun(db, {
@@ -122,10 +120,10 @@ describe('internalAgentRouter', () => {
         });
         expect(res.status).toBe(200);
         const body = await res.json();
-        expect(body.target).toBe(`#default:${conv.id.slice(0, 8)}`);
+        expect(body.target).toBe('#default:abcd1234');
         const row = db.prepare('SELECT channel_id as channelId, target FROM channel_messages WHERE sender_id = ? ORDER BY created_at DESC LIMIT 1').get(agent.agentId);
         expect(row.channelId).toBe('default');
-        expect(row.target).toBe(`#default:${conv.id.slice(0, 8)}`);
+        expect(row.target).toBe('#default:abcd1234');
     });
     it('read_history 对已加入的 channel 应返回历史', async () => {
         const agent = manager.createAgent({

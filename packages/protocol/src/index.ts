@@ -386,6 +386,7 @@ export type ConversationInfo = {
   agentType: AgentType;
   threadKind: ThreadKind;
   isPrimaryThread: boolean;
+  threadRootId?: string | null;
   workspacePath: string | null;
   status: ConversationStatus;
   createdAt: number;
@@ -401,6 +402,7 @@ export type CreateConversationRequest = {
   channelId?: string;
   threadKind?: ThreadKind;
   isPrimaryThread?: boolean;
+  threadRootId?: string | null;
   envVars?: Record<string, string>;
   nodeId?: string;
   agentId?: string;

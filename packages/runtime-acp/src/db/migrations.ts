@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 24;
+const LATEST_VERSION = 25;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -497,5 +497,14 @@ export function migrate(db: Db): void {
       db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN record_as_user_message INTEGER NOT NULL DEFAULT 1;`);
     }
     db.exec(`UPDATE schema_version SET version = 24;`);
+  }
+
+  if (current < 25) {
+    const convCols = db.prepare("PRAGMA table_info('conversations')").all() as Array<{ name: string }>;
+    if (!convCols.some((c) => c.name === 'thread_root_id')) {
+      db.exec(`ALTER TABLE conversations ADD COLUMN thread_root_id TEXT;`);
+    }
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_conversations_agent_channel_thread ON conversations(agent_id, channel_id, thread_kind, thread_root_id, updated_at DESC);`);
+    db.exec(`UPDATE schema_version SET version = 25;`);
   }
 }

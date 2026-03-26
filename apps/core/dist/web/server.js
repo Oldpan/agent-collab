@@ -455,9 +455,9 @@ export async function startServer(params) {
            WHERE channel_id = ? AND substr(message_id, 1, 8) = ?
            LIMIT 1`).get(req.params.id, threadRootId);
             if (rootMsg?.sender_type === 'agent') {
-                const conv = conversationManager.openAgentThread(rootMsg.sender_id);
+                const conv = conversationManager.openAgentChannelThread(rootMsg.sender_id, req.params.id, threadRootId);
                 if (conv) {
-                    conversationManager.submitPrompt(conv.id, `[System: Your message in #${channel.name} received a reply from ${senderName}. Call check_messages with target "#${channel.name}:${threadRootId}" to read the thread.]`, { recordAsUserMessage: false }).catch(() => { });
+                    conversationManager.submitPrompt(conv.id, `[System: Your message in #${channel.name} received a reply from ${senderName}. Call check_messages to read unread messages, and use read_history(channel="#${channel.name}:${threadRootId}") if you need the full thread context.]`, { recordAsUserMessage: false }).catch(() => { });
                 }
             }
         }
@@ -465,14 +465,15 @@ export async function startServer(params) {
         void (async () => {
             const channelAgents = conversationManager.listAgents(req.params.id);
             const mentionedAgents = findMentionedAgents(content, channelAgents);
+            const effectiveThreadRootId = threadRootId ?? messageId.slice(0, 8);
             for (const agent of mentionedAgents) {
                 // Ensure checkpoint is behind the new message so check_messages returns it
                 db.prepare(`INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
              VALUES(?, ?, ?)
              ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`).run(agent.agentId, req.params.id, seq - 1);
-                const conv = conversationManager.openAgentThread(agent.agentId);
+                const conv = conversationManager.openAgentChannelThread(agent.agentId, req.params.id, effectiveThreadRootId);
                 if (conv) {
-                    const prompt = `[System: You were @mentioned in #${channel.name} by ${senderName}. Call check_messages to read the message.]`;
+                    const prompt = `[System: You were @mentioned in #${channel.name} by ${senderName}. Call check_messages to read unread messages, and use read_history(channel="#${channel.name}:${effectiveThreadRootId}") if you need the full thread context.]`;
                     broadcastToChannel(req.params.id, {
                         type: 'channel.notice',
                         notice: {

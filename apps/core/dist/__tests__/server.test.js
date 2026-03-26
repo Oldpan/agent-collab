@@ -1,8 +1,10 @@
+import { randomUUID } from 'node:crypto';
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import { createTestDb, createTestConfig } from './helpers.js';
 import { ConversationManager } from '../web/conversationManager.js';
 import { createRun } from '@agent-collab/runtime-acp';
 import WebSocket from 'ws';
+import { findMentionedAgents } from '../web/channelMentions.js';
 let db;
 let manager;
 let baseUrl;
@@ -47,6 +49,50 @@ beforeAll(async () => {
             reply.code(409);
             return { error: 'Channel name already exists' };
         }
+    });
+    app.post('/api/channels/:id/messages', async (req, reply) => {
+        const channel = manager.getChannel(req.params.id);
+        if (!channel) {
+            reply.code(404);
+            return { error: 'Channel not found' };
+        }
+        const { content, senderName = 'User', replyTo } = req.body ?? {};
+        if (!content) {
+            reply.code(400);
+            return { error: 'content is required' };
+        }
+        const now = Date.now();
+        const messageId = `msg-${randomUUID()}`;
+        const seqRow = db.prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?').get(req.params.id);
+        const seq = (seqRow.maxSeq ?? 0) + 1;
+        const threadRootId = replyTo ?? null;
+        const target = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+         VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, NULL, ?)`).run(messageId, req.params.id, senderName, target, content, seq, now, threadRootId);
+        if (threadRootId) {
+            const rootMsg = db.prepare(`SELECT sender_id, sender_type FROM channel_messages
+           WHERE channel_id = ? AND substr(message_id, 1, 8) = ?
+           LIMIT 1`).get(req.params.id, threadRootId);
+            if (rootMsg?.sender_type === 'agent') {
+                const conv = manager.openAgentChannelThread(rootMsg.sender_id, req.params.id, threadRootId);
+                if (conv) {
+                    void manager.submitPrompt(conv.id, `[System: Your message in #${channel.name} received a reply from ${senderName}. Call check_messages to read unread messages, and use read_history(channel="#${channel.name}:${threadRootId}") if you need the full thread context.]`, { recordAsUserMessage: false }).catch(() => { });
+                }
+            }
+        }
+        const mentionedAgents = findMentionedAgents(content, manager.listAgents(req.params.id));
+        const effectiveThreadRootId = threadRootId ?? messageId.slice(0, 8);
+        for (const agent of mentionedAgents) {
+            db.prepare(`INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
+           VALUES(?, ?, ?)
+           ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`).run(agent.agentId, req.params.id, seq - 1);
+            const conv = manager.openAgentChannelThread(agent.agentId, req.params.id, effectiveThreadRootId);
+            if (conv) {
+                void manager.submitPrompt(conv.id, `[System: You were @mentioned in #${channel.name} by ${senderName}. Call check_messages to read unread messages, and use read_history(channel="#${channel.name}:${effectiveThreadRootId}") if you need the full thread context.]`, { recordAsUserMessage: false }).catch(() => { });
+            }
+        }
+        reply.code(201);
+        return { messageId, seq };
     });
     app.post('/api/conversations', async (req, reply) => {
         const body = (req.body ?? {});
@@ -211,6 +257,31 @@ describe('REST API', () => {
         expect(first.body.isPrimaryThread).toBe(true);
         const rows = manager.listConversations({ agentId: agent.agentId });
         expect(rows).toHaveLength(1);
+    });
+    it('POST /api/channels/:id/messages 在 @agent 时应创建 channel branch thread，而不是复用私聊主 thread', async () => {
+        const agent = manager.createAgent({
+            name: 'BobMention',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/bob-mention-thread',
+        });
+        manager.joinChannel(agent.agentId, 'default');
+        const dmThread = manager.openAgentThread(agent.agentId);
+        expect(dmThread).not.toBeNull();
+        if (!dmThread)
+            throw new Error('missing dm thread');
+        const response = await fetchJson('/api/channels/default/messages', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ content: '@BobMention 请看下这个问题', senderName: 'User' }),
+        });
+        expect(response.status).toBe(201);
+        const conversations = manager.listConversations({ agentId: agent.agentId });
+        const branch = conversations.find((item) => item.threadKind === 'branch');
+        expect(branch).toBeTruthy();
+        expect(branch?.channelId).toBe('default');
+        expect(branch?.threadRootId).toBe(String(response.body.messageId).slice(0, 8));
+        expect(branch?.id).not.toBe(dmThread.id);
     });
     it('GET /api/conversations 应列出已创建的会话', async () => {
         const { body } = await fetchJson('/api/conversations');
