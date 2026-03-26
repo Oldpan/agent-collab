@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 21;
+const LATEST_VERSION = 22;
 
 export function migrate(db: Db): void {
   db.exec(

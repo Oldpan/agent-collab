@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { AgentEnvVarsEditor } from "./AgentEnvVarsEditor";
 import { AgentPermissionSettings } from "./AgentPermissionSettings";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
+import { useChannels } from "@/hooks/useChannels";
 
 type Props = {
   agent: AgentInfo;
@@ -18,10 +19,12 @@ type Props = {
 
 export function AgentDetailPanel({ agent, onUpdate, onRestart, onClearChat, onReset, onClose }: Props) {
   const [name, setName] = useState(agent.name);
+  const [channelId, setChannelId] = useState(agent.channelId);
   const [envVars, setEnvVars] = useState<Record<string, string> | undefined>(agent.envVars);
   const [disabledToolKinds, setDisabledToolKinds] = useState(agent.disabledToolKinds);
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
+  const { channels } = useChannels();
 
   // Dialog states
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -46,7 +49,7 @@ export function AgentDetailPanel({ agent, onUpdate, onRestart, onClearChat, onRe
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
-      await onUpdate({ name, envVars, disabledToolKinds });
+      await onUpdate({ name, envVars, disabledToolKinds, channelId });
       onClose();
     } finally {
       setSaving(false);
@@ -169,6 +172,22 @@ export function AgentDetailPanel({ agent, onUpdate, onRestart, onClearChat, onRe
             onChange={(e) => setName(e.target.value)}
           />
         </div>
+
+        {/* Channel assignment */}
+        {channels.length > 0 && (
+          <div className="space-y-0.5">
+            <label className="text-[10px] text-zinc-500">Channel</label>
+            <select
+              value={channelId}
+              onChange={(e) => setChannelId(e.target.value)}
+              className="w-full rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs"
+            >
+              {channels.map((c) => (
+                <option key={c.channelId} value={c.channelId}>#{c.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
 
         {/* Workspace local memory path (read-only info) */}
         {workspaceMemoryPath && (

@@ -305,6 +305,9 @@ Migration rules:
 - migrations live in `packages/runtime-acp/src/db/migrations.ts`
 - use sequential `if (current < N)` blocks
 - keep `ALTER TABLE` statements isolated when needed
+- **CRITICAL: always update `LATEST_VERSION` at the top of `migrations.ts` to match the new version number** — if `LATEST_VERSION` is not updated, core will refuse to start with `"DB schema version N is newer than app"` after the migration has already run on the DB. This error looks like data loss (machines/channels disappear) but is actually just a startup guard failing.
+- after changing `migrations.ts`, always run `pnpm --filter @agent-collab/runtime-acp build` before restarting core
+- also update the `schema_version 应为最新版本 N` test in `apps/core/src/__tests__/migrations.test.ts`
 
 ## Testing Status
 

@@ -1,5 +1,21 @@
 # Changelog
 
+## 2026-03-26 (P0/P1 roadmap items)
+
+- **P0: Channel 消息通知所有 channel 内 agent**
+  - 之前只有被 `@` 的 agent 才被唤醒；现在 channel 内所有 agent 都会收到 `[System: New message ...]` 通知，被 `@` 的 agent 仍获得更高优先级的 checkpoint 重置。
+- **P0: Thread 回复通知被回复的 agent**
+  - `POST /api/channels/:id/messages` 带 `replyTo` 时，查询根消息的 sender；若为 agent，自动 submitPrompt 唤醒该 agent，提示其调 `check_messages` 读取该 thread。
+- **P1: Agent channel 重新分配**
+  - `UpdateAgentRequest` 新增 `channelId?` 字段。
+  - `ConversationManager.updateAgent` 现在支持更新 `channel_id`。
+  - `AgentDetailPanel` 编辑界面新增 Channel 下拉选择器，可修改 agent 所属频道。
+- **P1: Channel / Thread 历史消息分页**
+  - `GET /api/channels/:id/messages` 和 `GET /api/channels/:id/threads/:shortId/messages` 新增 `before` query 参数（基于 seq 锚定），支持加载更早消息。
+  - 响应消息新增 `seq` 字段用于分页锚定。
+  - 前端 `useChannelStream` / `useThreadStream` 新增 `loadMore` / `hasMore`。
+  - `ChannelPanel` / `ThreadPanel` 顶部显示"Load earlier messages / replies"按钮（消息不足时自动隐藏）。
+
 ## 2026-03-26 (channel threads)
 
 - Channel 消息支持 Thread（Slack 风格）：

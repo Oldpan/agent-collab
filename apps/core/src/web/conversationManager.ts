@@ -140,6 +140,7 @@ export class ConversationManager {
     const systemPrompt = req.systemPrompt ?? existing.systemPrompt;
     const envVars = req.envVars ?? existing.envVars;
     const disabledToolKinds = req.disabledToolKinds ?? existing.disabledToolKinds;
+    const channelId = req.channelId ?? existing.channelId;
     const envVarsJson = envVars && Object.keys(envVars).length > 0
       ? JSON.stringify(envVars)
       : null;
@@ -149,11 +150,11 @@ export class ConversationManager {
 
     this.db.prepare(
       `UPDATE agents
-       SET name = ?, system_prompt = ?, env_vars = ?, disabled_tool_kinds = ?, updated_at = ?
+       SET name = ?, system_prompt = ?, env_vars = ?, disabled_tool_kinds = ?, channel_id = ?, updated_at = ?
        WHERE agent_id = ?`
-    ).run(name, systemPrompt, envVarsJson, disabledToolKindsJson, now, agentId);
+    ).run(name, systemPrompt, envVarsJson, disabledToolKindsJson, channelId, now, agentId);
 
-    return { ...existing, name, systemPrompt, envVars, disabledToolKinds, updatedAt: now } satisfies AgentInfo;
+    return { ...existing, name, systemPrompt, envVars, disabledToolKinds, channelId, updatedAt: now } satisfies AgentInfo;
   }
 
   deleteAgent(agentId: string): { deletedConversations: number } {

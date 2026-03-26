@@ -325,7 +325,7 @@ function MembersTab({ members }: { members: AgentInfo[] }) {
 
 export function ChannelPanel({ channel, agents, onOpenSidebar }: ChannelPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "members">("chat");
-  const { messages, sendMessage } = useChannelStream(channel.channelId);
+  const { messages, sendMessage, loadMore, hasMore } = useChannelStream(channel.channelId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const channelMembers = useMemo(
     () => agents.filter((a) => a.channelId === channel.channelId),
@@ -428,13 +428,26 @@ export function ChannelPanel({ channel, agents, onOpenSidebar }: ChannelPanelPro
                   </div>
                 </div>
               ) : (
-                messages.map((message) => (
-                  <MessageRow
-                    key={message.id}
-                    message={message}
-                    onReply={setOpenThread}
-                  />
-                ))
+                <>
+                  {hasMore && (
+                    <div className="flex justify-center py-2">
+                      <button
+                        type="button"
+                        onClick={() => void loadMore()}
+                        className="rounded border border-zinc-300 px-3 py-1 text-xs text-zinc-400 hover:border-zinc-500 hover:text-zinc-600"
+                      >
+                        Load earlier messages
+                      </button>
+                    </div>
+                  )}
+                  {messages.map((message) => (
+                    <MessageRow
+                      key={message.id}
+                      message={message}
+                      onReply={setOpenThread}
+                    />
+                  ))}
+                </>
               )}
             </div>
             <ChannelComposer onSend={sendMessage} channelMembers={channelMembers} />

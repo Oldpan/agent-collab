@@ -64,6 +64,8 @@ export type ChannelMessage = {
   senderType: 'user' | 'agent';
   content: string;
   createdAt: string; // ISO string
+  /** DB sequence number — used for pagination (before= param). */
+  seq?: number;
   /** Present only for thread replies. First 8 chars of root message ID. */
   threadRootId?: string;
   /** Present only on top-level messages. Number of thread replies. */
@@ -80,8 +82,14 @@ export async function createChannel(req: { name: string; workspacePath?: string 
   return res.json();
 }
 
-export async function getChannelMessages(channelId: string, limit = 50): Promise<{ messages: ChannelMessage[] }> {
-  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}`);
+export async function getChannelMessages(
+  channelId: string,
+  limit = 50,
+  before?: number,
+): Promise<{ messages: ChannelMessage[] }> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (before !== undefined) params.set('before', String(before));
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/messages?${params}`);
   if (!res.ok) throw new Error(`Failed to get channel messages: ${res.statusText}`);
   return res.json();
 }
@@ -105,9 +113,12 @@ export async function getThreadMessages(
   channelId: string,
   shortId: string,
   limit = 100,
+  before?: number,
 ): Promise<{ messages: ChannelMessage[] }> {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (before !== undefined) params.set('before', String(before));
   const res = await fetch(
-    `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/messages?limit=${limit}`,
+    `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/messages?${params}`,
   );
   if (!res.ok) throw new Error(`Failed to get thread messages: ${res.statusText}`);
   return res.json();

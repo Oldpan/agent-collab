@@ -14,12 +14,16 @@ function readUserName(): string {
 export function useChannelStream(channelId: string | null): {
   messages: ChannelMessage[];
   sendMessage: (content: string) => Promise<void>;
+  loadMore: () => Promise<void>;
+  hasMore: boolean;
 } {
   const [messages, setMessages] = useState<ChannelMessage[]>([]);
+  const [hasMore, setHasMore] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
 
   useLayoutEffect(() => {
     setMessages([]);
+    setHasMore(true);
     if (!channelId) {
       wsRef.current = null;
       return;
@@ -28,7 +32,12 @@ export function useChannelStream(channelId: string | null): {
 
     api
       .getChannelMessages(channelId, 100)
-      .then((d) => { if (!cancelled) setMessages(d.messages); })
+      .then((d) => {
+        if (!cancelled) {
+          setMessages(d.messages);
+          if (d.messages.length < 100) setHasMore(false);
+        }
+      })
       .catch(() => {});
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -75,6 +84,22 @@ export function useChannelStream(channelId: string | null): {
     };
   }, [channelId]);
 
+  const loadMore = useCallback(async () => {
+    if (!channelId || !hasMore) return;
+    const oldest = messages[0];
+    const before = oldest?.seq;
+    const data = await api.getChannelMessages(channelId, 50, before);
+    if (data.messages.length < 50) setHasMore(false);
+    if (data.messages.length > 0) {
+      setMessages((prev) => {
+        // Deduplicate in case of overlap
+        const existingIds = new Set(prev.map((m) => m.id));
+        const newMsgs = data.messages.filter((m) => !existingIds.has(m.id));
+        return [...newMsgs, ...prev];
+      });
+    }
+  }, [channelId, messages, hasMore]);
+
   const sendMessage = useCallback(
     async (content: string) => {
       if (!channelId) return;
@@ -98,5 +123,5 @@ export function useChannelStream(channelId: string | null): {
     [channelId],
   );
 
-  return { messages, sendMessage };
+  return { messages, sendMessage, loadMore, hasMore };
 }

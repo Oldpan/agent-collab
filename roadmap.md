@@ -6,12 +6,12 @@
 
 ## P0 — 核心体验缺口（改动小，价值高）
 
-- [ ] **Channel 消息通知所有 channel 内 agent**
+- [x] **Channel 消息通知所有 channel 内 agent**
   - 现状：用户发消息到 channel，只有被 `@` 的 agent 才被唤醒
   - 目标：channel 内所有 agent 都收到通知（可配置：全通知 or 仅 @mention）
   - 改动：`POST /api/channels/:id/messages` 后端加一段逻辑
 
-- [ ] **Thread 回复通知被回复的 agent**
+- [x] **Thread 回复通知被回复的 agent**
   - 现状：用户在 agent 消息下回复 thread，agent 不会收到任何通知
   - 目标：thread 回复时，若根消息的发送者是 agent，自动 submitPrompt 唤醒该 agent
   - 改动：`POST /api/channels/:id/messages` 在 `replyTo` 存在时查询根消息 sender 并通知
@@ -20,15 +20,15 @@
 
 ## P1 — 功能完善
 
-- [ ] **Agent channel 重新分配**
+- [x] **Agent channel 重新分配**
   - 现状：`UpdateAgentRequest` 无 `channelId`，agent 创建后无法换频道
   - 目标：在 AgentDetailPanel 里可以修改 agent 所属 channel
   - 改动：protocol + core PATCH handler + 前端 UI
 
-- [ ] **Channel / Thread 历史消息分页**
+- [x] **Channel / Thread 历史消息分页**
   - 现状：固定加载最新 100 条，更早的历史消息无法访问
-  - 目标：channel 和 thread 面板支持"加载更多"（向上滚动触发）
-  - 改动：`useChannelStream` / `useThreadStream` 加 `loadMore`；后端已支持 `before` 参数
+  - 目标：channel 和 thread 面板支持"加载更多"按钮
+  - 改动：`useChannelStream` / `useThreadStream` 加 `loadMore`/`hasMore`；后端加 `before` 参数
 
 ---
 

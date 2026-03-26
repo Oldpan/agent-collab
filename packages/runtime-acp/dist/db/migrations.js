@@ -1,4 +1,4 @@
-const LATEST_VERSION = 21;
+const LATEST_VERSION = 22;
 export function migrate(db) {
     db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (

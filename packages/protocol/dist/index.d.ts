@@ -300,6 +300,7 @@ export type UpdateAgentRequest = {
     systemPrompt?: string;
     envVars?: Record<string, string>;
     disabledToolKinds?: AgentPermissionKind[];
+    channelId?: string;
 };
 export type ChannelInfo = {
     channelId: string;

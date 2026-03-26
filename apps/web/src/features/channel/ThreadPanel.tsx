@@ -210,7 +210,7 @@ type ThreadPanelProps = {
 
 export function ThreadPanel({ channelId, channelName, rootMessage, channelMembers, onClose }: ThreadPanelProps) {
   const threadRootId = rootMessage.id.slice(0, 8);
-  const { messages, sendMessage } = useThreadStream(channelId, threadRootId);
+  const { messages, sendMessage, loadMore, hasMore } = useThreadStream(channelId, threadRootId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isRootUser = rootMessage.senderType === "user";
 
@@ -273,7 +273,20 @@ export function ThreadPanel({ channelId, channelName, rootMessage, channelMember
             No replies yet. Be the first to reply!
           </div>
         ) : (
-          messages.map((msg) => <ThreadMessage key={msg.id} message={msg} />)
+          <>
+            {hasMore && (
+              <div className="flex justify-center py-2">
+                <button
+                  type="button"
+                  onClick={() => void loadMore()}
+                  className="rounded border border-zinc-300 px-3 py-1 text-xs text-zinc-400 hover:border-zinc-500 hover:text-zinc-600"
+                >
+                  Load earlier replies
+                </button>
+              </div>
+            )}
+            {messages.map((msg) => <ThreadMessage key={msg.id} message={msg} />)}
+          </>
         )}
       </div>
 

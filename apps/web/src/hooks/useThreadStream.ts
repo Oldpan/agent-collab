@@ -21,18 +21,27 @@ export function useThreadStream(
 ): {
   messages: ChannelMessage[];
   sendMessage: (content: string) => Promise<void>;
+  loadMore: () => Promise<void>;
+  hasMore: boolean;
 } {
   const [messages, setMessages] = useState<ChannelMessage[]>([]);
+  const [hasMore, setHasMore] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
 
   useLayoutEffect(() => {
     setMessages([]);
+    setHasMore(true);
     if (!channelId || !threadRootId) return;
     let cancelled = false;
 
     api
       .getThreadMessages(channelId, threadRootId, 100)
-      .then((d) => { if (!cancelled) setMessages(d.messages); })
+      .then((d) => {
+        if (!cancelled) {
+          setMessages(d.messages);
+          if (d.messages.length < 100) setHasMore(false);
+        }
+      })
       .catch(() => {});
 
     // Reuse the channel-level WS stream; filter by threadRootId
@@ -64,6 +73,21 @@ export function useThreadStream(
     };
   }, [channelId, threadRootId]);
 
+  const loadMore = useCallback(async () => {
+    if (!channelId || !threadRootId || !hasMore) return;
+    const oldest = messages[0];
+    const before = oldest?.seq;
+    const data = await api.getThreadMessages(channelId, threadRootId, 50, before);
+    if (data.messages.length < 50) setHasMore(false);
+    if (data.messages.length > 0) {
+      setMessages((prev) => {
+        const existingIds = new Set(prev.map((m) => m.id));
+        const newMsgs = data.messages.filter((m) => !existingIds.has(m.id));
+        return [...newMsgs, ...prev];
+      });
+    }
+  }, [channelId, threadRootId, messages, hasMore]);
+
   const sendMessage = useCallback(
     async (content: string) => {
       if (!channelId || !threadRootId) return;
@@ -87,5 +111,5 @@ export function useThreadStream(
     [channelId, threadRootId],
   );
 
-  return { messages, sendMessage };
+  return { messages, sendMessage, loadMore, hasMore };
 }
