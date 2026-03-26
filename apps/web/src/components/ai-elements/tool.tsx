@@ -60,28 +60,79 @@ const getStatusIcon = (state: ToolState): ReactNode => {
   }
 };
 
-/** Get the primary param for inline display */
-const getPrimaryParam = (input: unknown): string | null => {
-  if (!input || typeof input !== "object") return null;
-  const entries = Object.entries(input as Record<string, unknown>);
-  if (entries.length === 0) return null;
+function truncateInline(value: string, max = 80): string {
+  return value.length > max ? `${value.slice(0, max)}...` : value;
+}
 
-  const priorityKeys = ["path", "command", "pattern", "url", "query"];
-  for (const key of priorityKeys) {
-    const value = (input as Record<string, unknown>)[key];
-    if (typeof value === "string" && value.length > 0) {
-      return value.length > 50 ? `${value.slice(0, 50)}...` : value;
-    }
+function stringifyInline(value: unknown): string | null {
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    const rendered = value
+      .map((item) => (typeof item === "string" || typeof item === "number" ? String(item) : null))
+      .filter(Boolean)
+      .join(", ");
+    return rendered || null;
   }
-
-  const firstString = entries.find(([, v]) => typeof v === "string");
-  if (firstString) {
-    const value = firstString[1] as string;
-    return value.length > 50 ? `${value.slice(0, 50)}...` : value;
-  }
-
   return null;
-};
+}
+
+function humanizeKey(key: string): string {
+  return key
+    .replaceAll(/_/g, " ")
+    .replaceAll(/([a-z0-9])([A-Z])/g, "$1 $2")
+    .toLowerCase();
+}
+
+function getToolSummaryParts(name: string, input: unknown): Array<{ label: string; value: string }> {
+  if (!input || typeof input !== "object") return [];
+  const record = input as Record<string, unknown>;
+
+  const toolLower = name.toLowerCase();
+  const priorityKeys = [
+    "path",
+    "file_path",
+    "source_path",
+    "destination_path",
+    "cwd",
+    "command",
+    "url",
+    "query",
+    "pattern",
+    "channel",
+    "target",
+    "title",
+    "task_numbers",
+  ];
+
+  const parts: Array<{ label: string; value: string }> = [];
+  for (const key of priorityKeys) {
+    const raw = record[key];
+    const text = stringifyInline(raw);
+    if (!text) continue;
+
+    let label = humanizeKey(key);
+    if (toolLower.includes("send_message") && key === "target") label = "to";
+    if (toolLower.includes("read_history") && key === "channel") label = "from";
+    if ((toolLower.includes("read") || toolLower.includes("write") || toolLower.includes("edit")) && key === "path") {
+      label = "file";
+    }
+    if (toolLower.includes("execute") && key === "command") label = "cmd";
+
+    parts.push({ label, value: truncateInline(text) });
+  }
+
+  if (parts.length > 0) return parts.slice(0, 3);
+
+  for (const [key, raw] of Object.entries(record)) {
+    const text = stringifyInline(raw);
+    if (!text) continue;
+    parts.push({ label: humanizeKey(key), value: truncateInline(text) });
+    if (parts.length >= 2) break;
+  }
+
+  return parts;
+}
 
 export type ToolHeaderProps = {
   name: string;
@@ -99,7 +150,7 @@ export const ToolHeader = ({
   meta,
 }: ToolHeaderProps) => {
   const icon = TOOL_ICONS[name];
-  const primaryParam = getPrimaryParam(input);
+  const summaryParts = getToolSummaryParts(name, input);
 
   return (
     <CollapsibleTrigger className={cn("flex items-center gap-1.5 text-sm group", className)}>
@@ -109,9 +160,14 @@ export const ToolHeader = ({
         <span className="size-2 rounded-full bg-muted-foreground/60 shrink-0" />
       )}
       <span className="text-primary font-medium">{name}</span>
-      {primaryParam && (
-        <span className="text-muted-foreground group-data-[state=open]:hidden">
-          ({primaryParam})
+      {summaryParts.length > 0 && (
+        <span className="flex min-w-0 flex-wrap items-center gap-1.5 text-muted-foreground group-data-[state=open]:hidden">
+          {summaryParts.map((part) => (
+            <span key={`${part.label}:${part.value}`} className="truncate">
+              <span className="text-zinc-400">{part.label}</span>{" "}
+              <span>{part.value}</span>
+            </span>
+          ))}
         </span>
       )}
       {meta ? <span className="text-xs text-muted-foreground">{meta}</span> : null}

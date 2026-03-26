@@ -57,6 +57,12 @@
 - 前端 ChannelPanel Composer 支持 `@` 触发 autocomplete 下拉（↑↓ 选择，Enter/点击 确认，Esc 关闭）。
 - 消息气泡中 `@mention` 文字高亮显示为紫色。
 
+## 2026-03-26 (activity tool summaries)
+
+- Activity 里的 tool call 头部现在会优先展示更完整的关键参数摘要，而不只是工具名。
+- 常见操作会显示更明确的目标，例如文件路径、命令、URL、channel/target、task 编号等。
+- 这让 `read file`、`send_message`、`read_history`、`execute` 一类操作在不展开详情时也能看出具体作用对象。
+
 ## 2026-03-26 (channel mention thread routing)
 
 - 频道内 `@agent` 和 agent message 的 thread reply 不再复用 agent 的私聊主 thread。
