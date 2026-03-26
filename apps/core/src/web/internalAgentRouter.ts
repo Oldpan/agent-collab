@@ -3,6 +3,11 @@ import type { FastifyInstance } from 'fastify';
 import type { Db } from '@agent-collab/runtime-acp';
 import type { ServerEvent } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
+import {
+  checkpointThreadKey,
+  getAgentMessageCheckpoint,
+  setAgentMessageCheckpoint,
+} from './messageCheckpoints.js';
 
 type MessageRow = {
   messageId: string;
@@ -14,6 +19,7 @@ type MessageRow = {
   content: string;
   seq: number;
   createdAt: number;
+  threadRootId: string | null;
 };
 
 type TaskRow = {
@@ -147,38 +153,52 @@ export function registerInternalAgentRoutes(
 
       let allRows: MessageRow[] = [];
       for (const channelId of channelsToQuery) {
-        const checkpoint = (db
-          .prepare(
-            `SELECT last_seq as lastSeq FROM agent_message_checkpoints
-             WHERE agent_id = ? AND channel_id = ?`,
-          )
-          .get(agentId, channelId) as { lastSeq: number } | undefined)?.lastSeq ?? 0;
+        const threadKeys = (
+          db.prepare(
+            `SELECT DISTINCT COALESCE(thread_root_id, '') as threadKey
+             FROM channel_messages
+             WHERE channel_id = ? AND sender_id != ?
+             ORDER BY threadKey ASC`,
+          ).all(channelId, agentId) as Array<{ threadKey: string }>
+        ).map((row) => row.threadKey);
 
-        const rows = db
+        for (const threadKey of threadKeys) {
+          const checkpoint = getAgentMessageCheckpoint(db, agentId, channelId, threadKey || null);
+          const rows = db
           .prepare(
             `SELECT message_id as messageId, channel_id as channelId, sender_id as senderId,
                     sender_name as senderName, sender_type as senderType,
-                    target, content, seq, created_at as createdAt
+                    target, content, seq, created_at as createdAt, thread_root_id as threadRootId
              FROM channel_messages
-             WHERE channel_id = ? AND seq > ? AND sender_id != ?
+             WHERE channel_id = ? AND seq > ? AND sender_id != ? AND COALESCE(thread_root_id, '') = ?
              ORDER BY seq ASC
              LIMIT 50`,
           )
-          .all(channelId, checkpoint, agentId) as MessageRow[];
+          .all(channelId, checkpoint, agentId, threadKey) as MessageRow[];
 
-        if (rows.length > 0) {
-          const maxSeq = rows[rows.length - 1].seq;
-          db.prepare(
-            `INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
-             VALUES(?, ?, ?)
-             ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = excluded.last_seq`,
-          ).run(agentId, channelId, maxSeq);
+          allRows = allRows.concat(rows);
         }
-        allRows = allRows.concat(rows);
       }
 
       // Merge and sort by createdAt
-      const rows = allRows.sort((a, b) => a.createdAt - b.createdAt);
+      const rows = allRows
+        .sort((a, b) => (a.createdAt - b.createdAt) || (a.seq - b.seq))
+        .slice(0, 50);
+
+      if (rows.length > 0) {
+        const maxSeqByThread = new Map<string, { channelId: string; threadKey: string; maxSeq: number }>();
+        for (const row of rows) {
+          const threadKey = checkpointThreadKey(row.threadRootId);
+          const aggregateKey = `${row.channelId}::${threadKey}`;
+          const current = maxSeqByThread.get(aggregateKey);
+          if (!current || row.seq > current.maxSeq) {
+            maxSeqByThread.set(aggregateKey, { channelId: row.channelId, threadKey, maxSeq: row.seq });
+          }
+        }
+        for (const { channelId, threadKey, maxSeq } of maxSeqByThread.values()) {
+          setAgentMessageCheckpoint(db, agentId, channelId, maxSeq, threadKey || null);
+        }
+      }
 
       const messages = rows.map((r) => ({
         message_id: r.messageId,
@@ -714,7 +734,7 @@ function normalizeTargetForConversation(db: Db, conversationId: string, target: 
 
 /** Extracts the thread shortId from targets like "#general:a1b2c3d4". Returns null for non-thread targets. */
 function resolveThreadRootId(target: string): string | null {
-  const match = target.match(/^#[^:]+:([a-zA-Z0-9]+)$/);
+  const match = target.match(/^(?:#[^:]+|dm:@[^:]+):([a-zA-Z0-9]+)$/);
   return match ? match[1] : null;
 }
 

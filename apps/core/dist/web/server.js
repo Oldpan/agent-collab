@@ -10,6 +10,8 @@ import { NodeRegistry } from '../services/nodeRegistry.js';
 import { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/agentWorkspaceService.js';
 import { findMentionedAgents } from './channelMentions.js';
+import { buildChannelActivationPrompt } from './channelActivationPrompt.js';
+import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
 export async function startServer(params) {
     const { port, host, conversationManager, db } = params;
     const nodeRegistry = params.nodeRegistry ?? new NodeRegistry();
@@ -457,7 +459,14 @@ export async function startServer(params) {
             if (rootMsg?.sender_type === 'agent') {
                 const conv = conversationManager.openAgentChannelThread(rootMsg.sender_id, req.params.id, threadRootId);
                 if (conv) {
-                    conversationManager.submitPrompt(conv.id, `[System: Your message in #${channel.name} received a reply from ${senderName}. Call check_messages to read unread messages, and use read_history(channel="#${channel.name}:${threadRootId}") if you need the full thread context.]`, { recordAsUserMessage: false }).catch(() => { });
+                    bumpAgentMessageCheckpoint(db, rootMsg.sender_id, req.params.id, seq, threadRootId);
+                    conversationManager.submitPrompt(conv.id, buildChannelActivationPrompt({
+                        channelName: channel.name,
+                        target: `#${channel.name}:${threadRootId}`,
+                        senderName,
+                        content,
+                        reason: 'thread_reply',
+                    }), { recordAsUserMessage: false }).catch(() => { });
                 }
             }
         }
@@ -466,14 +475,10 @@ export async function startServer(params) {
             const channelAgents = conversationManager.listAgents(req.params.id);
             const mentionedAgents = findMentionedAgents(content, channelAgents);
             for (const agent of mentionedAgents) {
-                // Ensure checkpoint is behind the new message so check_messages returns it
-                db.prepare(`INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
-             VALUES(?, ?, ?)
-             ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`).run(agent.agentId, req.params.id, seq - 1);
                 const conv = conversationManager.openAgentChannelThread(agent.agentId, req.params.id, threadRootId ?? null);
                 if (conv) {
                     const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
-                    const prompt = `[System: You were @mentioned in #${channel.name} by ${senderName}. Call check_messages to read unread messages, and use read_history(channel="${historyTarget}") if you need the full context.]`;
+                    bumpAgentMessageCheckpoint(db, agent.agentId, req.params.id, seq, threadRootId ?? null);
                     broadcastToChannel(req.params.id, {
                         type: 'channel.notice',
                         notice: {
@@ -481,7 +486,13 @@ export async function startServer(params) {
                             createdAt: new Date(now).toISOString(),
                         },
                     });
-                    conversationManager.submitPrompt(conv.id, prompt, { recordAsUserMessage: false }).catch(() => { });
+                    conversationManager.submitPrompt(conv.id, buildChannelActivationPrompt({
+                        channelName: channel.name,
+                        target: historyTarget,
+                        senderName,
+                        content,
+                        reason: 'mention',
+                    }), { recordAsUserMessage: false }).catch(() => { });
                 }
             }
         })();

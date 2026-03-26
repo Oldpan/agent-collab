@@ -20,7 +20,7 @@ describe('migrations', () => {
     it('schema_version 应至少包含最新迁移所需版本', () => {
         const db = createTestDb();
         const row = db.prepare('SELECT version FROM schema_version').get();
-        expect(row.version).toBeGreaterThanOrEqual(23);
+        expect(row.version).toBeGreaterThanOrEqual(26);
         db.close();
     });
     it('nodes 表应包含 display_name, env_var_keys, provisioned_at 列', () => {
@@ -95,6 +95,12 @@ describe('migrations', () => {
         expect(tableNames).toContain('channel_messages');
         expect(tableNames).toContain('tasks');
         expect(tableNames).toContain('agent_message_checkpoints');
+        db.close();
+    });
+    it('agent_message_checkpoints 表应包含 thread_root_id 列', () => {
+        const db = createTestDb();
+        const cols = db.prepare("PRAGMA table_info('agent_message_checkpoints')").all();
+        expect(cols.map((c) => c.name)).toContain('thread_root_id');
         db.close();
     });
 });

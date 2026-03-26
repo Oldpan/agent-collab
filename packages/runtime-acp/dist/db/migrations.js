@@ -1,4 +1,4 @@
-const LATEST_VERSION = 25;
+const LATEST_VERSION = 26;
 export function migrate(db) {
     db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -440,5 +440,46 @@ export function migrate(db) {
         }
         db.exec(`CREATE INDEX IF NOT EXISTS idx_conversations_agent_channel_thread ON conversations(agent_id, channel_id, thread_kind, thread_root_id, updated_at DESC);`);
         db.exec(`UPDATE schema_version SET version = 25;`);
+    }
+    if (current < 26) {
+        const checkpointCols = db.prepare("PRAGMA table_info('agent_message_checkpoints')").all();
+        const hasThreadRootId = checkpointCols.some((c) => c.name === 'thread_root_id');
+        if (!hasThreadRootId) {
+            db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_message_checkpoints_v2 (
+          agent_id       TEXT NOT NULL,
+          channel_id     TEXT NOT NULL,
+          thread_root_id TEXT NOT NULL DEFAULT '',
+          last_seq       INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (agent_id, channel_id, thread_root_id)
+        );
+      `);
+            db.exec(`
+        INSERT INTO agent_message_checkpoints_v2(agent_id, channel_id, thread_root_id, last_seq)
+        SELECT agent_id, channel_id, '', last_seq
+        FROM agent_message_checkpoints;
+      `);
+            db.exec(`DROP TABLE agent_message_checkpoints;`);
+            db.exec(`ALTER TABLE agent_message_checkpoints_v2 RENAME TO agent_message_checkpoints;`);
+        }
+        else {
+            db.exec(`
+        CREATE TABLE IF NOT EXISTS agent_message_checkpoints_v2 (
+          agent_id       TEXT NOT NULL,
+          channel_id     TEXT NOT NULL,
+          thread_root_id TEXT NOT NULL DEFAULT '',
+          last_seq       INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (agent_id, channel_id, thread_root_id)
+        );
+      `);
+            db.exec(`
+        INSERT OR REPLACE INTO agent_message_checkpoints_v2(agent_id, channel_id, thread_root_id, last_seq)
+        SELECT agent_id, channel_id, COALESCE(thread_root_id, ''), last_seq
+        FROM agent_message_checkpoints;
+      `);
+            db.exec(`DROP TABLE agent_message_checkpoints;`);
+            db.exec(`ALTER TABLE agent_message_checkpoints_v2 RENAME TO agent_message_checkpoints;`);
+        }
+        db.exec(`UPDATE schema_version SET version = 26;`);
     }
 }

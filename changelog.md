@@ -12,6 +12,13 @@
 - 动态 system prompt 同步补充规则：`target/msg/time/type` 仅用于路由与上下文，不要原样回给用户。
 - 这减少了 agent 回复开头出现 `[target=...] @User: ...` 这类系统头泄漏的概率。
 
+## 2026-03-27 (channel activation + thread checkpoints)
+
+- Channel 中的 `@mention` 和 thread reply 不再只发一条“去 `check_messages`”的系统通知；激活 prompt 现在会直接携带触发消息本身和 exact target，agent 只在需要更多上下文时再调用 `read_history(...)`。
+- `agent_message_checkpoints` 从 channel 粒度收紧成 thread 粒度，内部主键变成 `agent + channel + thread stream`，避免同一个 channel 下多个 thread 互相推进 checkpoint、误消费消息。
+- `/receive` 现在按 `thread_root_id` 分别推进 checkpoint；主频道根流和各个 thread 的未读不再串在一起。
+- system prompt 同步更新：channel 激活时优先使用 prompt 里已经附带的触发消息，不要为读取同一条消息再机械调用 `check_messages`。
+
 ## 2026-03-26 (channel root reply normalization)
 
 - 服务端现在会对“主频道 branch 会话”里的回复目标做归一化：

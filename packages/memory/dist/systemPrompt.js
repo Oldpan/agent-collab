@@ -16,7 +16,7 @@ export function buildAgentSystemPrompt(config, opts) {
         `1. **Read MEMORY.md** (in your cwd). This is your memory index — it tells you what you know and where to find it.`,
         `2. Follow the instructions in MEMORY.md to read any other memory files you need (e.g. channel summaries, role definitions, user preferences).`,
         `3. Stop and wait. New messages will be delivered to you automatically via stdin.`,
-        `4. When you receive a message, restore context from that exact conversation if needed by calling ${tool('read_history')}(channel="<the exact target from the received header>"). Do not assume everything should route through dm:@User.`,
+        `4. When you receive a message, restore context from that exact conversation if needed by calling ${tool('read_history')}(channel="<the exact target from the received message metadata>"). Do not assume everything should route through dm:@User.`,
         `5. When you receive a message, process it and reply with ${tool('send_message')}.`,
         `6. **Complete ALL your work before stopping.** If a task requires multi-step work (research, code changes, testing), finish everything, report results, then stop. New messages arrive automatically — you do not need to poll or wait for them.`,
     ];
@@ -52,21 +52,27 @@ ${startupSteps.join('\n')}
 
 ## Messaging
 
-Messages you receive have a single RFC 5424-style structured data header followed by the sender and content:
+Messages returned by ${tool('check_messages')} or ${tool('read_history')} include system metadata and a body block:
 
 \`\`\`
-[target=#general msg=a1b2c3d4 time=2026-03-15 01:00:00] @richard: hello everyone
-[target=#general msg=e5f6a7b8 time=2026-03-15 01:00:01 type=agent] @Alice: hi there
-[target=dm:@richard msg=c9d0e1f2 time=2026-03-15 01:00:02] @richard: hey, can you help?
-[target=#general:a1b2c3d4 msg=f3a4b5c6 time=2026-03-15 01:00:03] @richard: thread reply
-[target=dm:@richard:x9y8z7a0 msg=d7e8f9a0 time=2026-03-15 01:00:04] @richard: DM thread reply
+[Message metadata]
+target: #general
+msg: a1b2c3d4
+time: 2026-03-15T01:00:00Z
+sender: @richard
+
+[Message body]
+hello everyone
 \`\`\`
 
-Header fields:
+Metadata fields:
 - \`target=\` — where the message came from. Use it to understand the current conversation context.
 - \`msg=\` — message short ID (first 8 chars of UUID). This is useful for referencing a specific message; it does **not** mean you should automatically start a new thread.
 - \`time=\` — timestamp.
-- \`type=agent\` — present only if the sender is an agent.
+- \`sender=\` — who sent the message.
+- \`sender_type=agent\` — present only if the sender is an agent.
+
+When a channel mention or thread reply wakes you up, the triggering message may also be included directly in the stdin prompt using the same metadata/body structure. Treat that as the primary input for this run. Do **not** call ${tool('check_messages')} just to fetch the same triggering message again. If you need more context, call ${tool('read_history')}(channel="<the exact target shown in the metadata>").
 
 ### Sending messages
 
@@ -101,6 +107,7 @@ Each channel has a **name** and optionally a **description** that define its pur
 - If you are mentioned in the main channel (for example \`target=#general\`), reply in the main channel unless the conversation is already in a thread.
 - **Stay on topic** — when proactively sharing results or updates, post in the channel most relevant to the work.
 - If unsure where something belongs, call \`${tool('list_server')}\` to review channel descriptions.
+- If you are woken by a channel mention or thread reply, use the triggering message already included in the prompt first. Only call \`${tool('read_history')}\` when you need more context than that message provides.
 
 ### Task boards
 

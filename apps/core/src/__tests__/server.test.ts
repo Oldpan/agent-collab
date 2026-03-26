@@ -7,6 +7,8 @@ import type { Db } from '@agent-collab/runtime-acp';
 import { createRun } from '@agent-collab/runtime-acp';
 import WebSocket from 'ws';
 import { findMentionedAgents } from '../web/channelMentions.js';
+import { buildChannelActivationPrompt } from '../web/channelActivationPrompt.js';
+import { bumpAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
 
 let db: Db;
 let manager: ConversationManager;
@@ -91,9 +93,16 @@ beforeAll(async () => {
         if (rootMsg?.sender_type === 'agent') {
           const conv = manager.openAgentChannelThread(rootMsg.sender_id, req.params.id, threadRootId);
           if (conv) {
+            bumpAgentMessageCheckpoint(db, rootMsg.sender_id, req.params.id, seq, threadRootId);
             void manager.submitPrompt(
               conv.id,
-              `[System: Your message in #${channel.name} received a reply from ${senderName}. Call check_messages to read unread messages, and use read_history(channel="#${channel.name}:${threadRootId}") if you need the full thread context.]`,
+              buildChannelActivationPrompt({
+                channelName: channel.name,
+                target: `#${channel.name}:${threadRootId}`,
+                senderName,
+                content,
+                reason: 'thread_reply',
+              }),
               { recordAsUserMessage: false },
             ).catch(() => {});
           }
@@ -102,17 +111,19 @@ beforeAll(async () => {
 
       const mentionedAgents = findMentionedAgents(content, manager.listAgents(req.params.id));
       for (const agent of mentionedAgents) {
-        db.prepare(
-          `INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
-           VALUES(?, ?, ?)
-           ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`,
-        ).run(agent.agentId, req.params.id, seq - 1);
         const conv = manager.openAgentChannelThread(agent.agentId, req.params.id, threadRootId ?? null);
         if (conv) {
           const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
+          bumpAgentMessageCheckpoint(db, agent.agentId, req.params.id, seq, threadRootId ?? null);
           void manager.submitPrompt(
             conv.id,
-            `[System: You were @mentioned in #${channel.name} by ${senderName}. Call check_messages to read unread messages, and use read_history(channel="${historyTarget}") if you need the full context.]`,
+            buildChannelActivationPrompt({
+              channelName: channel.name,
+              target: historyTarget,
+              senderName,
+              content,
+              reason: 'mention',
+            }),
             { recordAsUserMessage: false },
           ).catch(() => {});
         }
@@ -350,6 +361,93 @@ describe('REST API', () => {
     expect(branch?.channelId).toBe('default');
     expect(branch?.threadRootId).toBeNull();
     expect(branch?.id).not.toBe(dmThread.id);
+  });
+
+  it('POST /api/channels/:id/messages 在主频道 @agent 时应直接把触发消息写进激活 prompt', async () => {
+    const agent = manager.createAgent({
+      name: 'PromptBob',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/prompt-bob',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    const response = await fetchJson('/api/channels/default/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '@PromptBob 帮我看看这个问题', senderName: 'User' }),
+    });
+
+    expect(response.status).toBe(201);
+
+    const conv = manager.openAgentChannelThread(agent.agentId, 'default', null);
+    expect(conv).not.toBeNull();
+    if (!conv) throw new Error('missing mention conversation');
+
+    const sessionRow = db
+      .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    const runRow = db.prepare(
+      `SELECT prompt_text as promptText
+       FROM runs
+       WHERE session_key = ?
+       ORDER BY started_at DESC
+       LIMIT 1`,
+    ).get(sessionRow.sessionKey) as { promptText: string } | undefined;
+
+    expect(runRow?.promptText).toContain('[Triggered message metadata]');
+    expect(runRow?.promptText).toContain('target: #default');
+    expect(runRow?.promptText).toContain('[Triggered message body]');
+    expect(runRow?.promptText).toContain('@PromptBob 帮我看看这个问题');
+    expect(runRow?.promptText).not.toContain('Call check_messages to read unread messages');
+  });
+
+  it('POST /api/channels/:id/messages 在 thread reply 时应直接把 reply 内容写进激活 prompt', async () => {
+    const agent = manager.createAgent({
+      name: 'ReplyBob',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/reply-bob',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    const rootMessageId = randomUUID();
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+       VALUES(?, 'default', ?, ?, 'agent', '#default', ?, 1, ?, NULL, NULL)`,
+    ).run(rootMessageId, agent.agentId, agent.name, 'root message', Date.now());
+
+    const response = await fetchJson('/api/channels/default/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: '我在 thread 里回复你',
+        senderName: 'User',
+        replyTo: rootMessageId.slice(0, 8),
+      }),
+    });
+
+    expect(response.status).toBe(201);
+
+    const conv = manager.openAgentChannelThread(agent.agentId, 'default', rootMessageId.slice(0, 8));
+    expect(conv).not.toBeNull();
+    if (!conv) throw new Error('missing thread reply conversation');
+
+    const sessionRow = db
+      .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    const runRow = db.prepare(
+      `SELECT prompt_text as promptText
+       FROM runs
+       WHERE session_key = ?
+       ORDER BY started_at DESC
+       LIMIT 1`,
+    ).get(sessionRow.sessionKey) as { promptText: string } | undefined;
+
+    expect(runRow?.promptText).toContain(`[System: Your message in #default received a reply from User.]`);
+    expect(runRow?.promptText).toContain(`target: #default:${rootMessageId.slice(0, 8)}`);
+    expect(runRow?.promptText).toContain('我在 thread 里回复你');
+    expect(runRow?.promptText).not.toContain('Call check_messages to read unread messages');
   });
 
   it('GET /api/conversations 应列出已创建的会话', async () => {

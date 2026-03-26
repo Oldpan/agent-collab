@@ -196,6 +196,37 @@ describe('internalAgentRouter', () => {
         expect(row.target).toBe('#default');
         expect(row.threadRootId).toBeNull();
     });
+    it('check_messages 应按 thread_root_id 分别推进 checkpoint，不同 thread 不应互相消费', async () => {
+        const channel = manager.createChannel({ name: 'thread-checkpoint-room' });
+        const agent = manager.createAgent({
+            name: 'ThreadCheckpointBob',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/thread-checkpoint-bob',
+        });
+        manager.leaveChannel(agent.agentId, 'default');
+        manager.joinChannel(agent.agentId, channel.channelId);
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES
+       ('msg-root-1', ?, 'user', 'User', 'user', ?, 'root-1', 1, 1000, NULL),
+       ('msg-thread-1', ?, 'user', 'User', 'user', ?, 'thread-1', 2, 2000, 'aaaa1111')`).run(channel.channelId, `#${channel.name}`, channel.channelId, `#${channel.name}:aaaa1111`);
+        let res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/receive`);
+        expect(res.status).toBe(200);
+        let body = await res.json();
+        expect(body.messages.map((m) => m.content)).toEqual(['root-1', 'thread-1']);
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES(?, ?, 'user', 'User', 'user', ?, ?, ?, ?, ?)`).run('msg-root-2', channel.channelId, `#${channel.name}`, 'root-2', 3, 3000, null);
+        res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/receive`);
+        expect(res.status).toBe(200);
+        body = await res.json();
+        expect(body.messages.map((m) => m.content)).toEqual(['root-2']);
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES(?, ?, 'user', 'User', 'user', ?, ?, ?, ?, ?)`).run('msg-thread-2', channel.channelId, `#${channel.name}:aaaa1111`, 'thread-2', 4, 4000, 'aaaa1111');
+        res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/receive`);
+        expect(res.status).toBe(200);
+        body = await res.json();
+        expect(body.messages.map((m) => m.content)).toEqual(['thread-2']);
+    });
     it('read_history 对已加入的 channel 应返回历史', async () => {
         const agent = manager.createAgent({
             name: 'Reader',

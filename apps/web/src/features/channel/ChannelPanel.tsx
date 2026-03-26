@@ -104,16 +104,32 @@ function MessageRow({
         />
       )}
 
-      {/* Content */}
-      <div className={cn("min-w-0", isUser ? "flex items-end flex-col" : "flex items-start flex-col")}>
+      {/* Content wrapper with relative positioning for reply button */}
+      <div className={cn("relative min-w-0", isUser ? "flex items-end flex-col" : "flex items-start flex-col")}>
+        {/* Reply button - positioned at the top of the bubble, away from avatar */}
+        <button
+          type="button"
+          onClick={() => onReply(message)}
+          className={cn(
+            "absolute top-0 z-10 hidden rounded border-2 border-zinc-900 bg-[#fff9d8] px-2 py-0.5 text-[11px] font-medium text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)] hover:bg-[#ffd54a] group-hover:flex items-center gap-1",
+            isUser ? "left-0 -translate-x-full mr-2" : "right-0 translate-x-full ml-2"
+          )}
+          aria-label="Reply in thread"
+        >
+          <MessageSquareIcon className="size-3" />
+          Reply
+        </button>
+
         <div className="flex items-baseline gap-1.5">
           <span className="text-[11px] font-semibold text-zinc-700">{message.senderName}</span>
           <span className="text-[10px] text-zinc-400">{formatTime(message.createdAt)}</span>
         </div>
         <div
           className={cn(
-            "mt-0.5 max-w-[90%] rounded-md border-2 border-zinc-900 px-3 py-2 text-sm shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]",
-            isUser ? "bg-[#d8efff] text-zinc-900" : "bg-[#d8f8c8] text-zinc-900",
+            "mt-0.5 rounded-md border-2 px-3 py-2 text-sm transition-shadow",
+            isUser
+              ? "bg-[#d8efff] text-zinc-900 border-zinc-900 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)] group-hover:shadow-[4px_4px_0_0_rgba(0,0,0,0.8)]"
+              : "bg-[#d8f8c8] text-zinc-900 border-zinc-900 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)] group-hover:shadow-[4px_4px_0_0_rgba(0,0,0,0.8)]",
           )}
         >
           {isUser ? (
@@ -144,17 +160,6 @@ function MessageRow({
           </button>
         )}
       </div>
-
-      {/* Hover action: Reply button */}
-      <button
-        type="button"
-        onClick={() => onReply(message)}
-        className="absolute right-4 top-2 hidden rounded border-2 border-zinc-900 bg-[#fff9d8] px-2 py-0.5 text-[11px] font-medium text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)] hover:bg-[#ffd54a] group-hover:flex items-center gap-1"
-        aria-label="Reply in thread"
-      >
-        <MessageSquareIcon className="size-3" />
-        Reply
-      </button>
     </div>
   );
 }

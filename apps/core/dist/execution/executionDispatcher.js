@@ -64,9 +64,9 @@ export class ExecutionDispatcher {
              VALUES(?, ?, 'user', 'User', 'user', ?, ?, ?, ?)`).run(randomUUID(), dmChannelId, `dm:@${agent.name}`, promptText, msgSeq, Date.now());
                     // Ensure agent checkpoint is at most msgSeq-1 so check_messages returns the new message.
                     // Use MIN to never advance the checkpoint past what the agent has already read.
-                    this.db.prepare(`INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
-             VALUES(?, ?, ?)
-             ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`).run(row.agentId, dmChannelId, msgSeq - 1);
+                    this.db.prepare(`INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq)
+             VALUES(?, ?, '', ?)
+             ON CONFLICT(agent_id, channel_id, thread_root_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`).run(row.agentId, dmChannelId, msgSeq - 1);
                 }
                 useNotificationPrompt = true;
             }
