@@ -150,6 +150,89 @@ describe('internalAgentRouter', () => {
     expect(row.target).toBe('#default:abcd1234');
   });
 
+  it('channel root branch 未提供 target 时应默认回复当前 channel，而不是 thread', async () => {
+    const agent = manager.createAgent({
+      name: 'ViberRoot',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/viber-root-router',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    const conv = manager.openAgentChannelThread(agent.agentId, 'default', null);
+    if (!conv) throw new Error('missing channel root conversation');
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-4',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'reply root branch',
+    });
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'root ack',
+        conversationId: conv.id,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { target?: string };
+    expect(body.target).toBe('#default');
+
+    const row = db.prepare(
+      'SELECT channel_id as channelId, target, thread_root_id as threadRootId FROM channel_messages WHERE sender_id = ? ORDER BY created_at DESC LIMIT 1',
+    ).get(agent.agentId) as { channelId: string; target: string; threadRootId: string | null };
+    expect(row.channelId).toBe('default');
+    expect(row.target).toBe('#default');
+    expect(row.threadRootId).toBeNull();
+  });
+
+  it('channel root branch 显式传入同频道 thread target 时应归一化回主频道', async () => {
+    const agent = manager.createAgent({
+      name: 'ViberRootNormalize',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/viber-root-normalize-router',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    const conv = manager.openAgentChannelThread(agent.agentId, 'default', null);
+    if (!conv) throw new Error('missing channel root conversation');
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-5',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'reply root branch normalize',
+    });
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'normalize ack',
+        target: '#default:2b5a7801',
+        conversationId: conv.id,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { target?: string };
+    expect(body.target).toBe('#default');
+
+    const row = db.prepare(
+      'SELECT channel_id as channelId, target, thread_root_id as threadRootId FROM channel_messages WHERE sender_id = ? ORDER BY created_at DESC LIMIT 1',
+    ).get(agent.agentId) as { channelId: string; target: string; threadRootId: string | null };
+    expect(row.channelId).toBe('default');
+    expect(row.target).toBe('#default');
+    expect(row.threadRootId).toBeNull();
+  });
+
   it('read_history 对已加入的 channel 应返回历史', async () => {
     const agent = manager.createAgent({
       name: 'Reader',

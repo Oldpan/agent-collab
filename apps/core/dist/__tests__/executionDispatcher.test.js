@@ -140,6 +140,8 @@ describe('ExecutionDispatcher', () => {
         expect(dispatch.contextText).toContain('mcp__chat__send_message');
         expect(dispatch.contextText).toContain('mcp__chat__check_messages');
         expect(dispatch.contextText).toContain('Compaction safety');
+        expect(dispatch.contextText).toContain('prefer `mcp__chat__send_message(content="...")` with no target');
+        expect(dispatch.contextText).toContain('Do **not** convert a main-channel message');
         // description appended as initial role
         expect(dispatch.contextText).toContain('Maintain memory carefully');
         // Local memory guide section still present

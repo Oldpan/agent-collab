@@ -237,6 +237,23 @@ describe('ConversationManager', () => {
             expect(first?.threadRootId).toBe('abcd1234');
             expect(third?.threadRootId).toBe('efgh5678');
         });
+        it('openAgentChannelThread 在无 threadRootId 时应复用同一个 channel root branch', () => {
+            const channel = manager.createChannel({ name: 'eng-root' });
+            const agent = manager.createAgent({
+                name: 'BobRoot',
+                agentType: 'claude_acp',
+                nodeId: 'node-1',
+                workspacePath: '/tmp/bob-eng-root',
+            });
+            manager.joinChannel(agent.agentId, channel.channelId);
+            const first = manager.openAgentChannelThread(agent.agentId, channel.channelId, null);
+            const second = manager.openAgentChannelThread(agent.agentId, channel.channelId);
+            expect(first).not.toBeNull();
+            expect(second).not.toBeNull();
+            expect(first?.id).toBe(second?.id);
+            expect(first?.threadKind).toBe('branch');
+            expect(first?.threadRootId).toBeNull();
+        });
     });
     // ─── envVars ───
     describe('envVars', () => {

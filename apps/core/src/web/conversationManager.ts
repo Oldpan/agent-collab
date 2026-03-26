@@ -367,21 +367,34 @@ export class ConversationManager {
     });
   }
 
-  openAgentChannelThread(agentId: string, channelId: string, threadRootId: string): ConversationInfo | null {
+  openAgentChannelThread(agentId: string, channelId: string, threadRootId?: string | null): ConversationInfo | null {
     const agent = this.getAgent(agentId);
     if (!agent) return null;
 
-    const existing = this.db.prepare(
-      `SELECT id, channel_id as channelId, title, agent_type as agentType,
-              thread_kind as threadKind, is_primary_thread as isPrimaryThread,
-              thread_root_id as threadRootId,
-              workspace_path as workspacePath, status, node_id as nodeId,
-              agent_id as agentId, created_at as createdAt, updated_at as updatedAt
-       FROM conversations
-       WHERE agent_id = ? AND channel_id = ? AND thread_kind = 'branch' AND thread_root_id = ?
-       ORDER BY updated_at DESC
-       LIMIT 1`,
-    ).get(agentId, channelId, threadRootId) as ConversationInfo | undefined;
+    const normalizedThreadRootId = threadRootId ?? null;
+    const existing = (normalizedThreadRootId
+      ? this.db.prepare(
+        `SELECT id, channel_id as channelId, title, agent_type as agentType,
+                thread_kind as threadKind, is_primary_thread as isPrimaryThread,
+                thread_root_id as threadRootId,
+                workspace_path as workspacePath, status, node_id as nodeId,
+                agent_id as agentId, created_at as createdAt, updated_at as updatedAt
+         FROM conversations
+         WHERE agent_id = ? AND channel_id = ? AND thread_kind = 'branch' AND thread_root_id = ?
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+      ).get(agentId, channelId, normalizedThreadRootId)
+      : this.db.prepare(
+        `SELECT id, channel_id as channelId, title, agent_type as agentType,
+                thread_kind as threadKind, is_primary_thread as isPrimaryThread,
+                thread_root_id as threadRootId,
+                workspace_path as workspacePath, status, node_id as nodeId,
+                agent_id as agentId, created_at as createdAt, updated_at as updatedAt
+         FROM conversations
+         WHERE agent_id = ? AND channel_id = ? AND thread_kind = 'branch' AND thread_root_id IS NULL
+         ORDER BY updated_at DESC
+         LIMIT 1`,
+      ).get(agentId, channelId)) as ConversationInfo | undefined;
     if (existing) {
       return { ...existing, isPrimaryThread: !!existing.isPrimaryThread, threadRootId: existing.threadRootId ?? null };
     }
@@ -394,7 +407,7 @@ export class ConversationManager {
       nodeId: agent.nodeId ?? undefined,
       threadKind: 'branch',
       isPrimaryThread: false,
-      threadRootId,
+      threadRootId: normalizedThreadRootId,
       title: '',
     });
   }

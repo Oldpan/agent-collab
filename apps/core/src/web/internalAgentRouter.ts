@@ -75,11 +75,15 @@ export function registerInternalAgentRoutes(
       }
     }
 
-    const resolvedTarget = target?.trim() || (conversationId ? resolveDefaultReplyTarget(db, conversationId) : null);
-    if (!resolvedTarget) {
+    const defaultTarget = conversationId ? resolveDefaultReplyTarget(db, conversationId) : null;
+    const initialTarget = target?.trim() || defaultTarget;
+    if (!initialTarget) {
       reply.code(400);
       return { error: 'target is required unless conversationId is provided for the current conversation reply' };
     }
+    const resolvedTarget = conversationId
+      ? normalizeTargetForConversation(db, conversationId, initialTarget)
+      : initialTarget;
 
     // For DM targets that don't resolve to a known agent (e.g. dm:@User — a human),
     // fall back to the sending agent's own DM channel so the reply is visible to frontend.
@@ -676,10 +680,36 @@ function resolveDefaultReplyTarget(db: Db, conversationId: string): string | nul
 
   const channelName = row.channelName ?? row.channelId;
   const baseTarget = `#${channelName}`;
-  if (row.threadRootId) {
-    return `${baseTarget}:${row.threadRootId}`;
+  return row.threadRootId ? `${baseTarget}:${row.threadRootId}` : baseTarget;
+}
+
+function normalizeTargetForConversation(db: Db, conversationId: string, target: string): string {
+  const row = db.prepare(
+    `SELECT c.channel_id as channelId, c.thread_kind as threadKind, c.thread_root_id as threadRootId,
+            ch.name as channelName
+     FROM conversations c
+     LEFT JOIN channels ch ON ch.channel_id = c.channel_id
+     WHERE c.id = ?`,
+  ).get(conversationId) as {
+    channelId: string;
+    threadKind: 'direct' | 'branch';
+    threadRootId: string | null;
+    channelName: string | null;
+  } | undefined;
+
+  if (!row || row.threadKind !== 'branch' || row.threadRootId) return target;
+
+  const channelName = row.channelName ?? row.channelId;
+  const canonicalBaseTarget = `#${channelName}`;
+  const sameChannelThread = target.match(/^#([^:]+):([a-zA-Z0-9]+)$/);
+  if (sameChannelThread) {
+    const [, targetChannel] = sameChannelThread;
+    if (targetChannel === channelName || targetChannel === row.channelId) {
+      return canonicalBaseTarget;
+    }
   }
-  return row.isPrimaryThread ? baseTarget : `${baseTarget}:${row.conversationId.slice(0, 8)}`;
+
+  return target;
 }
 
 /** Extracts the thread shortId from targets like "#general:a1b2c3d4". Returns null for non-thread targets. */

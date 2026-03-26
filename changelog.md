@@ -1,5 +1,25 @@
 # Changelog
 
+## 2026-03-26 (channel root reply normalization)
+
+- 服务端现在会对“主频道 branch 会话”里的回复目标做归一化：
+  - 如果 agent 试图把当前主频道会话回复到同频道的 thread（如 `#default:abcd1234`），会被自动收口回 `#default`
+- 这进一步兜住了模型把主频道 `@mention` 错误改写成 thread 回复的问题。
+
+## 2026-03-26 (channel mention prompt routing guard)
+
+- 动态 system prompt 现在明确区分了主频道消息和 thread 消息：
+  - 主频道里的 `@mention` 默认回复主频道
+  - 只有收到的 `target` 本身已经带 `:shortid` 时，才继续在 thread 中回复
+- 移除了“只要看到 `msg=` 就可以新开 thread”的错误暗示，避免 agent 把主频道问题改写成 thread 或 DM thread 回复。
+
+## 2026-03-26 (channel mention replies to channel root)
+
+- 主频道里的 `@agent` 不再默认创建 thread reply 目标。
+- 现在普通 channel mention 会创建/复用一个 `thread_root_id = NULL` 的 channel branch conversation，agent 默认回复 `#channel`。
+- 只有真正的 thread reply 才会绑定 `threadRootId`，并默认回复 `#channel:shortid`。
+- 这修复了“在 `#default` 里 `@Bob`，Bob 却通过 thread 回复”的问题。
+
 ## 2026-03-26 (channel mention routing fix)
 
 - 频道消息不再默认唤醒该频道中的所有 agent。

@@ -81,14 +81,14 @@ beforeAll(async () => {
             }
         }
         const mentionedAgents = findMentionedAgents(content, manager.listAgents(req.params.id));
-        const effectiveThreadRootId = threadRootId ?? messageId.slice(0, 8);
         for (const agent of mentionedAgents) {
             db.prepare(`INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
            VALUES(?, ?, ?)
            ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`).run(agent.agentId, req.params.id, seq - 1);
-            const conv = manager.openAgentChannelThread(agent.agentId, req.params.id, effectiveThreadRootId);
+            const conv = manager.openAgentChannelThread(agent.agentId, req.params.id, threadRootId ?? null);
             if (conv) {
-                void manager.submitPrompt(conv.id, `[System: You were @mentioned in #${channel.name} by ${senderName}. Call check_messages to read unread messages, and use read_history(channel="#${channel.name}:${effectiveThreadRootId}") if you need the full thread context.]`, { recordAsUserMessage: false }).catch(() => { });
+                const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
+                void manager.submitPrompt(conv.id, `[System: You were @mentioned in #${channel.name} by ${senderName}. Call check_messages to read unread messages, and use read_history(channel="${historyTarget}") if you need the full context.]`, { recordAsUserMessage: false }).catch(() => { });
             }
         }
         reply.code(201);
@@ -258,7 +258,7 @@ describe('REST API', () => {
         const rows = manager.listConversations({ agentId: agent.agentId });
         expect(rows).toHaveLength(1);
     });
-    it('POST /api/channels/:id/messages 在 @agent 时应创建 channel branch thread，而不是复用私聊主 thread', async () => {
+    it('POST /api/channels/:id/messages 在主频道 @agent 时应创建/复用 channel root branch，而不是 thread reply 或私聊主 thread', async () => {
         const agent = manager.createAgent({
             name: 'BobMention',
             agentType: 'claude_acp',
@@ -280,7 +280,7 @@ describe('REST API', () => {
         const branch = conversations.find((item) => item.threadKind === 'branch');
         expect(branch).toBeTruthy();
         expect(branch?.channelId).toBe('default');
-        expect(branch?.threadRootId).toBe(String(response.body.messageId).slice(0, 8));
+        expect(branch?.threadRootId).toBeNull();
         expect(branch?.id).not.toBe(dmThread.id);
     });
     it('GET /api/conversations 应列出已创建的会话', async () => {

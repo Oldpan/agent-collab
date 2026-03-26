@@ -15,8 +15,8 @@ export function buildAgentSystemPrompt(config, opts) {
     const startupSteps = [
         `1. **Read MEMORY.md** (in your cwd). This is your memory index — it tells you what you know and where to find it.`,
         `2. Follow the instructions in MEMORY.md to read any other memory files you need (e.g. channel summaries, role definitions, user preferences).`,
-        `3. **Restore conversation context** — call ${tool('read_history')}(channel="dm:@User") to retrieve recent DM history. This is critical after a restart: your in-process context may have been cleared, but the message history is always persisted in the platform. If the result is empty, you are in a fresh session with no prior messages.`,
-        `4. Stop and wait. New messages will be delivered to you automatically via stdin.`,
+        `3. Stop and wait. New messages will be delivered to you automatically via stdin.`,
+        `4. When you receive a message, restore context from that exact conversation if needed by calling ${tool('read_history')}(channel="<the exact target from the received header>"). Do not assume everything should route through dm:@User.`,
         `5. When you receive a message, process it and reply with ${tool('send_message')}.`,
         `6. **Complete ALL your work before stopping.** If a task requires multi-step work (research, code changes, testing), finish everything, report results, then stop. New messages arrive automatically — you do not need to poll or wait for them.`,
     ];
@@ -63,8 +63,8 @@ Messages you receive have a single RFC 5424-style structured data header followe
 \`\`\`
 
 Header fields:
-- \`target=\` — where the message came from. Reuse as the \`target\` parameter when replying.
-- \`msg=\` — message short ID (first 8 chars of UUID). Use as thread suffix to start/reply in a thread.
+- \`target=\` — where the message came from. Use it to understand the current conversation context.
+- \`msg=\` — message short ID (first 8 chars of UUID). This is useful for referencing a specific message; it does **not** mean you should automatically start a new thread.
 - \`time=\` — timestamp.
 - \`type=agent\` — present only if the sender is an agent.
 
@@ -75,15 +75,18 @@ Header fields:
 - **Reply in a thread**: \`${tool('send_message')}(target="#channel:shortid", content="...")\` or \`${tool('send_message')}(target="dm:@peer:shortid", content="...")\`
 - **Start a NEW DM**: \`${tool('send_message')}(target="dm:@person-name", content="...")\`
 
-**IMPORTANT**: To reply to any message, always reuse the exact \`target\` from the received message. This ensures your reply goes to the right place — whether it's a channel, DM, or thread.
+**IMPORTANT**:
+- To reply in the **current conversation**, prefer \`${tool('send_message')}(content="...")\` with no target. The platform will route it correctly.
+- Only set an explicit \`target\` when you intentionally want to send somewhere else, or when you are already inside a thread and need to keep replying in that thread.
+- Do **not** convert a main-channel message like \`[target=#general msg=abcd1234 ...]\` into a thread reply just because it has a \`msg=\` field.
 
 ### Threads
 
 Threads are sub-conversations attached to a specific message. They let you discuss a topic without cluttering the main channel.
 
 - **Thread targets** have a colon and short ID suffix: \`#general:a1b2c3d4\` (thread in #general) or \`dm:@richard:x9y8z7a0\` (thread in a DM).
-- When you receive a message from a thread (the target has a \`:shortid\` suffix), **always reply using that same target** to keep the conversation in the thread.
-- **Start a new thread**: Use the \`msg=\` field from the header as the thread suffix. For example, if you see \`[target=#general msg=a1b2c3d4 ...]\`, reply with \`${tool('send_message')}(target="#general:a1b2c3d4", content="...")\`.
+- When you receive a message from a thread (the target has a \`:shortid\` suffix), keep the conversation in that thread.
+- For a normal main-channel message (target like \`#general\` with no thread suffix), reply in the main channel by default. Do **not** start a new thread unless the user is already replying in a thread or explicitly asks for a thread.
 - Threads cannot be nested — you cannot start a thread inside a thread.
 
 ### Discovering people and channels
@@ -94,6 +97,7 @@ Call \`${tool('list_server')}\` to see all channels in this server, which ones y
 
 Each channel has a **name** and optionally a **description** that define its purpose (visible via \`${tool('list_server')}\`). Respect them:
 - **Reply in context** — always respond in the channel/thread the message came from.
+- If you are mentioned in the main channel (for example \`target=#general\`), reply in the main channel unless the conversation is already in a thread.
 - **Stay on topic** — when proactively sharing results or updates, post in the channel most relevant to the work.
 - If unsure where something belongs, call \`${tool('list_server')}\` to review channel descriptions.
 
