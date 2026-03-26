@@ -11,7 +11,14 @@ function readUserName(): string {
   }
 }
 
-export function useChannelStream(channelId: string | null): {
+/**
+ * Manages messages for a single thread (identified by channelId + threadRootId).
+ * Subscribes to the parent channel's WS stream and filters for thread messages.
+ */
+export function useThreadStream(
+  channelId: string | null,
+  threadRootId: string | null,
+): {
   messages: ChannelMessage[];
   sendMessage: (content: string) => Promise<void>;
 } {
@@ -20,17 +27,15 @@ export function useChannelStream(channelId: string | null): {
 
   useLayoutEffect(() => {
     setMessages([]);
-    if (!channelId) {
-      wsRef.current = null;
-      return;
-    }
+    if (!channelId || !threadRootId) return;
     let cancelled = false;
 
     api
-      .getChannelMessages(channelId, 100)
+      .getThreadMessages(channelId, threadRootId, 100)
       .then((d) => { if (!cancelled) setMessages(d.messages); })
       .catch(() => {});
 
+    // Reuse the channel-level WS stream; filter by threadRootId
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const ws = new WebSocket(
       `${protocol}//${window.location.host}/api/channels/${encodeURIComponent(channelId)}/stream`,
@@ -41,46 +46,29 @@ export function useChannelStream(channelId: string | null): {
       if (wsRef.current !== ws) return;
       try {
         const event = JSON.parse(evt.data as string) as { type: string; message?: ChannelMessage };
-        if (event.type === "channel.message" && event.message) {
+        if (event.type === "channel.message" && event.message?.threadRootId === threadRootId) {
           const msg = event.message;
-          if (!msg.threadRootId) {
-            // Top-level message — add to main channel list
-            setMessages((prev) =>
-              prev.some((m) => m.id === msg.id) ? prev : [...prev, msg],
-            );
-          } else {
-            // Thread reply — increment replyCount on parent message
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id.slice(0, 8) === msg.threadRootId
-                  ? { ...m, replyCount: (m.replyCount ?? 0) + 1 }
-                  : m,
-              ),
-            );
-          }
+          setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
         }
       } catch {
-        // ignore malformed messages
+        // ignore
       }
     };
     ws.onerror = () => {};
-    ws.onclose = () => {
-      if (wsRef.current === ws) wsRef.current = null;
-    };
+    ws.onclose = () => { if (wsRef.current === ws) wsRef.current = null; };
 
     return () => {
       cancelled = true;
       ws.close();
       if (wsRef.current === ws) wsRef.current = null;
     };
-  }, [channelId]);
+  }, [channelId, threadRootId]);
 
   const sendMessage = useCallback(
     async (content: string) => {
-      if (!channelId) return;
+      if (!channelId || !threadRootId) return;
       const senderName = readUserName();
-      const result = await api.sendChannelMessage(channelId, content, senderName);
-      // Add message only if WS broadcast hasn't delivered it yet (race: WS can arrive before REST response)
+      const result = await api.sendChannelMessage(channelId, content, senderName, threadRootId);
       setMessages((prev) => {
         if (prev.some((m) => m.id === result.messageId)) return prev;
         return [
@@ -91,11 +79,12 @@ export function useChannelStream(channelId: string | null): {
             senderType: "user",
             content,
             createdAt: new Date().toISOString(),
+            threadRootId,
           },
         ];
       });
     },
-    [channelId],
+    [channelId, threadRootId],
   );
 
   return { messages, sendMessage };

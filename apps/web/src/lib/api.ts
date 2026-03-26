@@ -64,6 +64,10 @@ export type ChannelMessage = {
   senderType: 'user' | 'agent';
   content: string;
   createdAt: string; // ISO string
+  /** Present only for thread replies. First 8 chars of root message ID. */
+  threadRootId?: string;
+  /** Present only on top-level messages. Number of thread replies. */
+  replyCount?: number;
 };
 
 export async function createChannel(req: { name: string; workspacePath?: string }): Promise<ChannelInfo> {
@@ -86,13 +90,26 @@ export async function sendChannelMessage(
   channelId: string,
   content: string,
   senderName?: string,
+  replyTo?: string,
 ): Promise<{ messageId: string; seq: number }> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/messages`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content, senderName }),
+    body: JSON.stringify({ content, senderName, ...(replyTo ? { replyTo } : {}) }),
   });
   if (!res.ok) throw new Error(`Failed to send channel message: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getThreadMessages(
+  channelId: string,
+  shortId: string,
+  limit = 100,
+): Promise<{ messages: ChannelMessage[] }> {
+  const res = await fetch(
+    `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/messages?limit=${limit}`,
+  );
+  if (!res.ok) throw new Error(`Failed to get thread messages: ${res.statusText}`);
   return res.json();
 }
 

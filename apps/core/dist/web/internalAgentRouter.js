@@ -47,8 +47,9 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
         const messageId = randomUUID();
         const seq = nextSeq(db, channelId);
         const runId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
-        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id)
-       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`).run(messageId, channelId, agentId, agent.name, resolvedTarget, content, seq, now, runId);
+        const threadRootId = resolveThreadRootId(resolvedTarget);
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`).run(messageId, channelId, agentId, agent.name, resolvedTarget, content, seq, now, runId, threadRootId);
         const channelMessageEvent = {
             type: 'channel.message',
             message: {
@@ -57,6 +58,7 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
                 senderType: 'agent',
                 content,
                 createdAt: new Date(now).toISOString(),
+                ...(threadRootId ? { threadRootId } : {}),
             },
         };
         broadcastToAgent(agentId, channelMessageEvent, conversationId);
@@ -169,6 +171,11 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
         const limit = Math.min(Number(limitStr ?? 50), 100);
         const before = beforeStr ? Number(beforeStr) : undefined;
         const after = afterStr ? Number(afterStr) : undefined;
+        // Thread filter: "#channel:shortId" reads thread; "#channel" reads main channel only
+        const targetThreadRootId = resolveThreadRootId(channel);
+        const threadFilter = targetThreadRootId !== null
+            ? `AND thread_root_id = '${targetThreadRootId.replace(/'/g, "''")}'`
+            : `AND thread_root_id IS NULL`;
         let rows;
         if (after !== undefined) {
             rows = db
@@ -176,7 +183,7 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
                   sender_name as senderName, sender_type as senderType,
                   target, content, seq, created_at as createdAt
            FROM channel_messages
-           WHERE channel_id = ? AND seq > ?
+           WHERE channel_id = ? AND seq > ? ${threadFilter}
            ORDER BY seq ASC LIMIT ?`)
                 .all(channelId, after, limit);
         }
@@ -186,7 +193,7 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
                   sender_name as senderName, sender_type as senderType,
                   target, content, seq, created_at as createdAt
            FROM channel_messages
-           WHERE channel_id = ? AND seq < ?
+           WHERE channel_id = ? AND seq < ? ${threadFilter}
            ORDER BY seq DESC LIMIT ?`)
                 .all(channelId, before, limit).reverse();
         }
@@ -196,7 +203,7 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
                   sender_name as senderName, sender_type as senderType,
                   target, content, seq, created_at as createdAt
            FROM channel_messages
-           WHERE channel_id = ?
+           WHERE channel_id = ? ${threadFilter}
            ORDER BY seq DESC LIMIT ?`)
                 .all(channelId, limit).reverse();
         }
@@ -472,6 +479,11 @@ function resolveDefaultReplyTarget(db, conversationId) {
     const channelName = row.channelName ?? row.channelId;
     const baseTarget = `#${channelName}`;
     return row.isPrimaryThread ? baseTarget : `${baseTarget}:${row.conversationId.slice(0, 8)}`;
+}
+/** Extracts the thread shortId from targets like "#general:a1b2c3d4". Returns null for non-thread targets. */
+function resolveThreadRootId(target) {
+    const match = target.match(/^#[^:]+:([a-zA-Z0-9]+)$/);
+    return match ? match[1] : null;
 }
 function nextSeq(db, channelId) {
     const row = db

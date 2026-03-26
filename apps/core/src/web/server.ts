@@ -359,7 +359,7 @@ export async function startServer(params: {
     return conversationManager.listConversations({ channelId: req.params.id });
   });
 
-  // Get channel message history
+  // Get channel message history (top-level only; thread replies excluded)
   app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
     '/api/channels/:id/messages',
     async (req, reply) => {
@@ -367,11 +367,17 @@ export async function startServer(params: {
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const limit = Math.min(Number(req.query.limit ?? 50), 200);
       const rows = db.prepare(
-        `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                content, created_at as createdAt
-         FROM channel_messages WHERE channel_id = ?
-         ORDER BY seq DESC LIMIT ?`,
-      ).all(req.params.id, limit) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number }>;
+        `SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
+                cm.content, cm.created_at as createdAt,
+                COUNT(replies.message_id) as replyCount
+         FROM channel_messages cm
+         LEFT JOIN channel_messages replies
+           ON replies.channel_id = cm.channel_id
+           AND replies.thread_root_id = SUBSTR(cm.message_id, 1, 8)
+         WHERE cm.channel_id = ? AND cm.thread_root_id IS NULL
+         GROUP BY cm.message_id
+         ORDER BY cm.seq DESC LIMIT ?`,
+      ).all(req.params.id, limit) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; replyCount: number }>;
       return {
         messages: rows.reverse().map((r) => ({
           id: r.id,
@@ -379,30 +385,64 @@ export async function startServer(params: {
           senderType: r.senderType as 'user' | 'agent',
           content: r.content,
           createdAt: new Date(r.createdAt).toISOString(),
+          replyCount: r.replyCount,
         })),
       };
     },
   );
 
-  // Post a user message to a channel
-  app.post<{ Params: { id: string }; Body: { content: string; senderName?: string } }>(
+  // Get thread messages for a specific root message
+  app.get<{ Params: { id: string; shortId: string }; Querystring: { limit?: string } }>(
+    '/api/channels/:id/threads/:shortId/messages',
+    async (req, reply) => {
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const limit = Math.min(Number(req.query.limit ?? 100), 200);
+      const rows = db.prepare(
+        `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
+                content, created_at as createdAt
+         FROM channel_messages
+         WHERE channel_id = ? AND thread_root_id = ?
+         ORDER BY seq ASC LIMIT ?`,
+      ).all(req.params.id, req.params.shortId, limit) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number }>;
+      return {
+        messages: rows.map((r) => ({
+          id: r.id,
+          senderName: r.senderName,
+          senderType: r.senderType as 'user' | 'agent',
+          content: r.content,
+          createdAt: new Date(r.createdAt).toISOString(),
+          threadRootId: req.params.shortId,
+        })),
+      };
+    },
+  );
+
+  // Post a user message to a channel (or thread when replyTo is set)
+  app.post<{ Params: { id: string }; Body: { content: string; senderName?: string; replyTo?: string } }>(
     '/api/channels/:id/messages',
     async (req, reply) => {
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
-      const { content, senderName = 'User' } = req.body ?? {};
+      const { content, senderName = 'User', replyTo } = req.body ?? {};
       if (!content) { reply.code(400); return { error: 'content is required' }; }
+      const threadRootId = replyTo ?? null;
       const now = Date.now();
       const messageId = randomUUID();
       const seqRow = db.prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?').get(req.params.id) as { maxSeq: number | null };
       const seq = (seqRow.maxSeq ?? 0) + 1;
+      const target = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
       db.prepare(
-        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id)
-         VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, NULL)`,
-      ).run(messageId, req.params.id, senderName, `#${channel.name}`, content, seq, now);
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+         VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, NULL, ?)`,
+      ).run(messageId, req.params.id, senderName, target, content, seq, now, threadRootId);
       const event: import('@agent-collab/protocol').ServerEvent = {
         type: 'channel.message',
-        message: { id: messageId, senderName, senderType: 'user', content, createdAt: new Date(now).toISOString() },
+        message: {
+          id: messageId, senderName, senderType: 'user', content,
+          createdAt: new Date(now).toISOString(),
+          ...(threadRootId ? { threadRootId } : {}),
+        },
       };
       broadcastToChannel(req.params.id, event);
 

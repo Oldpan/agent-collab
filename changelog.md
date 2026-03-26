@@ -1,5 +1,18 @@
 # Changelog
 
+## 2026-03-26 (channel threads)
+
+- Channel 消息支持 Thread（Slack 风格）：
+  - DB migration v22：`channel_messages` 加 `thread_root_id TEXT` 列（NULL = 主频道，有值 = thread 回复），加索引。
+  - `GET /api/channels/:id/messages` 只返回主频道消息（`thread_root_id IS NULL`），每条消息含 `replyCount`。
+  - 新增 `GET /api/channels/:id/threads/:shortId/messages` 返回某 thread 的回复列表。
+  - `POST /api/channels/:id/messages` 支持 `replyTo: shortId`，存入 thread。
+  - `internalAgentRouter` send 解析 `#channel:shortId` 目标 → 存 `thread_root_id`；WS 广播带 `threadRootId`。
+  - Agent history 查询 `#channel:shortId` 只返回该 thread 消息；`#channel` 只返回主频道消息。
+  - 前端 ChannelPanel：消息 hover 显示 Reply 按钮；有回复时显示 "N replies" badge；点击打开右侧 ThreadPanel。
+  - ThreadPanel：显示根消息 + 回复列表 + 独立 Composer（含 @mention autocomplete），右侧 slide-in 布局。
+  - `useThreadStream`：订阅 channel WS，过滤 `threadRootId` 匹配的事件。
+
 ## 2026-03-26 (@mention in channels)
 
 - Channel 消息支持 `@agentName` 唤醒 agent：

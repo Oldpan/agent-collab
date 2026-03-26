@@ -93,11 +93,12 @@ export function registerInternalAgentRoutes(
     const messageId = randomUUID();
     const seq = nextSeq(db, channelId);
     const runId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
+    const threadRootId = resolveThreadRootId(resolvedTarget);
 
     db.prepare(
-      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id)
-       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`,
-    ).run(messageId, channelId, agentId, agent.name, resolvedTarget, content, seq, now, runId);
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
+    ).run(messageId, channelId, agentId, agent.name, resolvedTarget, content, seq, now, runId, threadRootId);
 
     const channelMessageEvent: ServerEvent = {
       type: 'channel.message',
@@ -107,6 +108,7 @@ export function registerInternalAgentRoutes(
         senderType: 'agent',
         content,
         createdAt: new Date(now).toISOString(),
+        ...(threadRootId ? { threadRootId } : {}),
       },
     };
 
@@ -254,6 +256,11 @@ export function registerInternalAgentRoutes(
     const limit = Math.min(Number(limitStr ?? 50), 100);
     const before = beforeStr ? Number(beforeStr) : undefined;
     const after = afterStr ? Number(afterStr) : undefined;
+    // Thread filter: "#channel:shortId" reads thread; "#channel" reads main channel only
+    const targetThreadRootId = resolveThreadRootId(channel);
+    const threadFilter = targetThreadRootId !== null
+      ? `AND thread_root_id = '${targetThreadRootId.replace(/'/g, "''")}'`
+      : `AND thread_root_id IS NULL`;
 
     let rows: MessageRow[];
     if (after !== undefined) {
@@ -263,7 +270,7 @@ export function registerInternalAgentRoutes(
                   sender_name as senderName, sender_type as senderType,
                   target, content, seq, created_at as createdAt
            FROM channel_messages
-           WHERE channel_id = ? AND seq > ?
+           WHERE channel_id = ? AND seq > ? ${threadFilter}
            ORDER BY seq ASC LIMIT ?`,
         )
         .all(channelId, after, limit) as MessageRow[];
@@ -274,7 +281,7 @@ export function registerInternalAgentRoutes(
                   sender_name as senderName, sender_type as senderType,
                   target, content, seq, created_at as createdAt
            FROM channel_messages
-           WHERE channel_id = ? AND seq < ?
+           WHERE channel_id = ? AND seq < ? ${threadFilter}
            ORDER BY seq DESC LIMIT ?`,
         )
         .all(channelId, before, limit).reverse() as MessageRow[];
@@ -285,7 +292,7 @@ export function registerInternalAgentRoutes(
                   sender_name as senderName, sender_type as senderType,
                   target, content, seq, created_at as createdAt
            FROM channel_messages
-           WHERE channel_id = ?
+           WHERE channel_id = ? ${threadFilter}
            ORDER BY seq DESC LIMIT ?`,
         )
         .all(channelId, limit).reverse() as MessageRow[];
@@ -660,6 +667,12 @@ function resolveDefaultReplyTarget(db: Db, conversationId: string): string | nul
   const channelName = row.channelName ?? row.channelId;
   const baseTarget = `#${channelName}`;
   return row.isPrimaryThread ? baseTarget : `${baseTarget}:${row.conversationId.slice(0, 8)}`;
+}
+
+/** Extracts the thread shortId from targets like "#general:a1b2c3d4". Returns null for non-thread targets. */
+function resolveThreadRootId(target: string): string | null {
+  const match = target.match(/^#[^:]+:([a-zA-Z0-9]+)$/);
+  return match ? match[1] : null;
 }
 
 function nextSeq(db: Db, channelId: string): number {

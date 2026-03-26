@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChannelInfo, AgentInfo } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
 import { useChannelStream } from "@/hooks/useChannelStream";
+import { ThreadPanel } from "./ThreadPanel";
 import { Streamdown } from "streamdown";
 import {
   safeRehypePlugins,
@@ -35,7 +36,6 @@ function formatTime(createdAt: string): string {
   }
 }
 
-/** Render message content with @mention highlighting */
 function renderContent(content: string) {
   const parts = content.split(/(@[a-zA-Z0-9_-]+)/g);
   return parts.map((part, i) =>
@@ -49,10 +49,18 @@ function renderContent(content: string) {
   );
 }
 
-function MessageRow({ message }: { message: ChannelMessage }) {
+function MessageRow({
+  message,
+  onReply,
+}: {
+  message: ChannelMessage;
+  onReply: (message: ChannelMessage) => void;
+}) {
   const isUser = message.senderType === "user";
+  const replyCount = message.replyCount ?? 0;
+
   return (
-    <div className={cn("flex gap-2.5 px-4 py-2", isUser ? "flex-row-reverse" : "flex-row")}>
+    <div className="group relative flex gap-2.5 px-4 py-2 hover:bg-black/5">
       {/* Avatar circle */}
       <div
         className={cn(
@@ -64,15 +72,15 @@ function MessageRow({ message }: { message: ChannelMessage }) {
         {message.senderName.slice(0, 2).toUpperCase()}
       </div>
 
-      {/* Bubble */}
-      <div className={cn("flex max-w-[72%] flex-col gap-0.5", isUser ? "items-end" : "items-start")}>
+      {/* Content */}
+      <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5">
           <span className="text-[11px] font-semibold text-zinc-700">{message.senderName}</span>
           <span className="text-[10px] text-zinc-400">{formatTime(message.createdAt)}</span>
         </div>
         <div
           className={cn(
-            "rounded-md border-2 border-zinc-900 px-3 py-2 text-sm shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]",
+            "mt-0.5 max-w-[90%] rounded-md border-2 border-zinc-900 px-3 py-2 text-sm shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]",
             isUser ? "bg-[#d8efff] text-zinc-900" : "bg-[#d8f8c8] text-zinc-900",
           )}
         >
@@ -91,7 +99,30 @@ function MessageRow({ message }: { message: ChannelMessage }) {
             </Streamdown>
           )}
         </div>
+
+        {/* Thread reply count badge */}
+        {replyCount > 0 && (
+          <button
+            type="button"
+            onClick={() => onReply(message)}
+            className="mt-1 flex items-center gap-1 rounded border border-zinc-300 bg-white/60 px-2 py-0.5 text-[11px] text-blue-600 hover:bg-white hover:border-blue-300 transition-colors"
+          >
+            <MessageSquareIcon className="size-3" />
+            {replyCount} {replyCount === 1 ? "reply" : "replies"}
+          </button>
+        )}
       </div>
+
+      {/* Hover action: Reply button */}
+      <button
+        type="button"
+        onClick={() => onReply(message)}
+        className="absolute right-4 top-2 hidden rounded border-2 border-zinc-900 bg-[#fff9d8] px-2 py-0.5 text-[11px] font-medium text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)] hover:bg-[#ffd54a] group-hover:flex items-center gap-1"
+        aria-label="Reply in thread"
+      >
+        <MessageSquareIcon className="size-3" />
+        Reply
+      </button>
     </div>
   );
 }
@@ -116,7 +147,6 @@ function ChannelComposer({
       .slice(0, 5);
   }, [mentionQuery, channelMembers]);
 
-  // Reset selection index when candidates change
   useEffect(() => {
     setMentionIndex(0);
   }, [mentionCandidates.length]);
@@ -148,8 +178,7 @@ function ChannelComposer({
     const val = e.target.value;
     setText(val);
     const cursor = e.target.selectionStart ?? val.length;
-    const before = val.slice(0, cursor);
-    const atMatch = /@([a-zA-Z0-9_-]*)$/.exec(before);
+    const atMatch = /@([a-zA-Z0-9_-]*)$/.exec(val.slice(0, cursor));
     setMentionQuery(atMatch ? (atMatch[1] ?? "") : null);
     const ta = textareaRef.current;
     if (ta) {
@@ -208,7 +237,6 @@ function ChannelComposer({
 
   return (
     <div className="relative border-t-2 border-black bg-[#fff5c2] px-4 py-3 shadow-[0_-2px_0_0_rgba(0,0,0,0.08)]">
-      {/* @mention dropdown */}
       {mentionQuery !== null && mentionCandidates.length > 0 && (
         <div className="absolute bottom-full left-4 right-4 mb-1 overflow-hidden rounded-md border-2 border-zinc-900 bg-[#fffdf4] shadow-[3px_3px_0_0_rgba(0,0,0,0.2)]">
           <div className="px-2 py-1 text-[10px] uppercase tracking-widest text-zinc-400">
@@ -303,17 +331,19 @@ export function ChannelPanel({ channel, agents, onOpenSidebar }: ChannelPanelPro
     () => agents.filter((a) => a.channelId === channel.channelId),
     [agents, channel.channelId],
   );
+  const [openThread, setOpenThread] = useState<ChannelMessage | null>(null);
 
-  // Auto-scroll to bottom when new messages arrive
+  // Auto-scroll main channel to bottom
   useEffect(() => {
-    if (activeTab !== "chat") return;
+    if (activeTab !== "chat" || openThread) return;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, activeTab]);
+  }, [messages, activeTab, openThread]);
 
-  // Reset to chat tab when channel changes
+  // Reset tabs/thread on channel change
   useEffect(() => {
     setActiveTab("chat");
+    setOpenThread(null);
   }, [channel.channelId]);
 
   return (
@@ -383,24 +413,46 @@ export function ChannelPanel({ channel, agents, onOpenSidebar }: ChannelPanelPro
       {activeTab === "members" ? (
         <MembersTab members={channelMembers} />
       ) : (
-        <>
-          <div ref={scrollRef} className="flex-1 overflow-y-auto py-2">
-            {messages.length === 0 ? (
-              <div className="flex h-full items-center justify-center">
-                <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fff8d8] px-6 py-5 text-center shadow-[2px_2px_0_0_rgba(0,0,0,0.06)]">
-                  <HashIcon className="mx-auto mb-2 size-6 text-zinc-400" />
-                  <p className="text-sm font-medium text-zinc-600">No messages yet</p>
-                  <p className="mt-1 text-xs text-zinc-400">
-                    Send the first message to <span className="font-mono">#{channel.name}</span>
-                  </p>
+        <div className="flex flex-1 overflow-hidden">
+          {/* Main channel messages */}
+          <div className={cn("flex flex-col overflow-hidden", openThread ? "flex-1" : "w-full")}>
+            <div ref={scrollRef} className="flex-1 overflow-y-auto py-2">
+              {messages.length === 0 ? (
+                <div className="flex h-full items-center justify-center">
+                  <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fff8d8] px-6 py-5 text-center shadow-[2px_2px_0_0_rgba(0,0,0,0.06)]">
+                    <HashIcon className="mx-auto mb-2 size-6 text-zinc-400" />
+                    <p className="text-sm font-medium text-zinc-600">No messages yet</p>
+                    <p className="mt-1 text-xs text-zinc-400">
+                      Send the first message to <span className="font-mono">#{channel.name}</span>
+                    </p>
+                  </div>
                 </div>
-              </div>
-            ) : (
-              messages.map((message) => <MessageRow key={message.id} message={message} />)
-            )}
+              ) : (
+                messages.map((message) => (
+                  <MessageRow
+                    key={message.id}
+                    message={message}
+                    onReply={setOpenThread}
+                  />
+                ))
+              )}
+            </div>
+            <ChannelComposer onSend={sendMessage} channelMembers={channelMembers} />
           </div>
-          <ChannelComposer onSend={sendMessage} channelMembers={channelMembers} />
-        </>
+
+          {/* Thread panel (slide-in from right) */}
+          {openThread && (
+            <div className="w-80 shrink-0 overflow-hidden">
+              <ThreadPanel
+                channelId={channel.channelId}
+                channelName={channel.name}
+                rootMessage={openThread}
+                channelMembers={channelMembers}
+                onClose={() => setOpenThread(null)}
+              />
+            </div>
+          )}
+        </div>
       )}
     </div>
   );

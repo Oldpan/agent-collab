@@ -456,4 +456,13 @@ export function migrate(db: Db): void {
     db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_messages_run ON channel_messages(run_id, created_at);`);
     db.exec(`UPDATE schema_version SET version = 21;`);
   }
+
+  if (current < 22) {
+    const cols = db.prepare("PRAGMA table_info('channel_messages')").all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'thread_root_id')) {
+      db.exec(`ALTER TABLE channel_messages ADD COLUMN thread_root_id TEXT;`);
+    }
+    db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_messages_thread ON channel_messages(channel_id, thread_root_id);`);
+    db.exec(`UPDATE schema_version SET version = 22;`);
+  }
 }
