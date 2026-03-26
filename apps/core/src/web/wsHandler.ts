@@ -123,7 +123,7 @@ function replayHistory(
 
     // 发送 turn
     const turnId = `replay-${run.runId}`;
-    send({ type: 'turn.begin', turnId, startedAt: run.startedAt });
+    send({ type: 'turn.begin', turnId, startedAt: run.startedAt, promptText: run.promptText });
 
     // 读取 node/event（remote runs）— 直接回放 ServerEvent
     const nodeEvents = db

@@ -538,8 +538,9 @@ export class ConversationManager {
   async submitPrompt(
     conversationId: string,
     promptText: string,
+    options?: { recordAsUserMessage?: boolean },
   ): Promise<{ queued: boolean }> {
-    return this.executionDispatcher.submitPrompt(conversationId, promptText);
+    return this.executionDispatcher.submitPrompt(conversationId, promptText, options);
   }
 
   async onConversationSettled(conversationId: string): Promise<void> {

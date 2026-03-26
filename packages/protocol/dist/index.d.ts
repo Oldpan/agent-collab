@@ -24,6 +24,7 @@ export type TurnBeginEvent = {
     type: 'turn.begin';
     turnId: string;
     startedAt?: number;
+    promptText?: string;
 };
 export type TurnEndEvent = {
     type: 'turn.end';
@@ -88,11 +89,18 @@ export type ChannelMessageEvent = {
         threadRootId?: string;
     };
 };
+export type ChannelNoticeEvent = {
+    type: 'channel.notice';
+    notice: {
+        message: string;
+        createdAt: string;
+    };
+};
 export type SystemNoticeEvent = {
     type: 'system.notice';
     message: string;
 };
-export type ServerEvent = ConversationStatusEvent | TurnBeginEvent | TurnEndEvent | ContentDeltaEvent | ThinkingDeltaEvent | ToolCallEvent | ToolResultEvent | ApprovalRequestEvent | ErrorEvent | HistoryCompleteEvent | HistoryResetEvent | HistoryUserMessageEvent | ChannelMessageEvent | SystemNoticeEvent;
+export type ServerEvent = ConversationStatusEvent | TurnBeginEvent | TurnEndEvent | ContentDeltaEvent | ThinkingDeltaEvent | ToolCallEvent | ToolResultEvent | ApprovalRequestEvent | ErrorEvent | HistoryCompleteEvent | HistoryResetEvent | HistoryUserMessageEvent | ChannelMessageEvent | ChannelNoticeEvent | SystemNoticeEvent;
 export type FileRef = {
     uri: string;
     mimeType?: string;

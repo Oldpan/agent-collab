@@ -13,7 +13,7 @@ export class ExecutionDispatcher {
         this.nodeRegistry = params.nodeRegistry;
         this.getAgentById = params.getAgentById;
     }
-    async dispatchPrompt(conversationId, promptText) {
+    async dispatchPrompt(conversationId, promptText, options) {
         const row = this.db.prepare(`SELECT session_key as sessionKey, agent_type as agentType,
               workspace_path as workspacePath, env_vars as envVarsJson,
               node_id as nodeId, agent_id as agentId
@@ -26,6 +26,7 @@ export class ExecutionDispatcher {
         const hostKey = `conversation:${conversationId}:${row.agentType}`;
         const dispatchMode = this.getDispatchMode(row.sessionKey);
         const driver = getRuntimeDriver(row.agentType);
+        const recordAsUserMessage = options?.recordAsUserMessage ?? true;
         // Persist run and user message BEFORE node connectivity check so they survive
         // even if the node is offline — the user's message will still be visible after refresh.
         createRun(this.db, { runId, sessionKey: row.sessionKey, promptText });
@@ -50,21 +51,23 @@ export class ExecutionDispatcher {
                     if (replayText)
                         contextText += '\n\n' + replayText;
                 }
-                // Write user message to channel_messages so agent can read via check_messages
-                const dmChannelId = `dm:${row.agentId}`;
-                const msgSeq = (() => {
-                    const r = this.db
-                        .prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?')
-                        .get(dmChannelId);
-                    return (r.maxSeq ?? 0) + 1;
-                })();
-                this.db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
-           VALUES(?, ?, 'user', 'User', 'user', ?, ?, ?, ?)`).run(randomUUID(), dmChannelId, `dm:@${agent.name}`, promptText, msgSeq, Date.now());
-                // Ensure agent checkpoint is at most msgSeq-1 so check_messages returns the new message.
-                // Use MIN to never advance the checkpoint past what the agent has already read.
-                this.db.prepare(`INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
-           VALUES(?, ?, ?)
-           ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`).run(row.agentId, dmChannelId, msgSeq - 1);
+                if (recordAsUserMessage) {
+                    // Write user message to channel_messages so agent can read via check_messages
+                    const dmChannelId = `dm:${row.agentId}`;
+                    const msgSeq = (() => {
+                        const r = this.db
+                            .prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?')
+                            .get(dmChannelId);
+                        return (r.maxSeq ?? 0) + 1;
+                    })();
+                    this.db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+             VALUES(?, ?, 'user', 'User', 'user', ?, ?, ?, ?)`).run(randomUUID(), dmChannelId, `dm:@${agent.name}`, promptText, msgSeq, Date.now());
+                    // Ensure agent checkpoint is at most msgSeq-1 so check_messages returns the new message.
+                    // Use MIN to never advance the checkpoint past what the agent has already read.
+                    this.db.prepare(`INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
+             VALUES(?, ?, ?)
+             ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`).run(row.agentId, dmChannelId, msgSeq - 1);
+                }
                 useNotificationPrompt = true;
             }
         }
@@ -119,23 +122,23 @@ export class ExecutionDispatcher {
         }
         return { runId, dispatchMode, hostKey };
     }
-    async submitPrompt(conversationId, promptText) {
+    async submitPrompt(conversationId, promptText, options) {
         const row = this.db.prepare(`SELECT agent_id as agentId
        FROM conversations
        WHERE id = ?`).get(conversationId);
         if (!row)
             throw new Error(`Unknown conversation: ${conversationId}`);
         if (!row.agentId) {
-            await this.dispatchPrompt(conversationId, promptText);
+            await this.dispatchPrompt(conversationId, promptText, options);
             return { queued: false };
         }
         const blocking = this.findBlockingConversation(row.agentId, conversationId);
         if (blocking) {
-            this.enqueuePrompt(row.agentId, conversationId, promptText);
+            this.enqueuePrompt(row.agentId, conversationId, promptText, options);
             this.updateStatus(conversationId, 'queued');
             return { queued: true };
         }
-        await this.dispatchPrompt(conversationId, promptText);
+        await this.dispatchPrompt(conversationId, promptText, options);
         return { queued: false };
     }
     async handleApproval(conversationId, requestId, decision) {
@@ -186,7 +189,8 @@ export class ExecutionDispatcher {
             return;
         if (this.findBlockingConversation(row.agentId))
             return;
-        const next = this.db.prepare(`SELECT queue_id as queueId, agent_id as agentId, conversation_id as conversationId, prompt_text as promptText
+        const next = this.db.prepare(`SELECT queue_id as queueId, agent_id as agentId, conversation_id as conversationId,
+              prompt_text as promptText, record_as_user_message as recordAsUserMessage
        FROM conversation_prompt_queue
        WHERE agent_id = ?
        ORDER BY created_at ASC, queue_id ASC
@@ -195,7 +199,9 @@ export class ExecutionDispatcher {
             return;
         this.db.prepare('DELETE FROM conversation_prompt_queue WHERE queue_id = ?').run(next.queueId);
         try {
-            await this.dispatchPrompt(next.conversationId, next.promptText);
+            await this.dispatchPrompt(next.conversationId, next.promptText, {
+                recordAsUserMessage: next.recordAsUserMessage !== 0,
+            });
         }
         catch {
             this.updateStatus(next.conversationId, 'failed');
@@ -280,10 +286,10 @@ export class ExecutionDispatcher {
        LIMIT 1`).get(agentId, excludeConversationId ?? null, excludeConversationId ?? null);
         return row ?? null;
     }
-    enqueuePrompt(agentId, conversationId, promptText) {
+    enqueuePrompt(agentId, conversationId, promptText, options) {
         const now = Date.now();
-        this.db.prepare(`INSERT INTO conversation_prompt_queue(agent_id, conversation_id, prompt_text, created_at, updated_at)
-       VALUES(?, ?, ?, ?, ?)`).run(agentId, conversationId, promptText, now, now);
+        this.db.prepare(`INSERT INTO conversation_prompt_queue(agent_id, conversation_id, prompt_text, record_as_user_message, created_at, updated_at)
+       VALUES(?, ?, ?, ?, ?, ?)`).run(agentId, conversationId, promptText, (options?.recordAsUserMessage ?? true) ? 1 : 0, now, now);
     }
 }
 function parseEnvVars(raw) {

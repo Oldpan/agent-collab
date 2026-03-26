@@ -61,6 +61,27 @@ function formatRunError(error?: string): string | null {
   return error;
 }
 
+function formatRunTrigger(promptText?: string): string | null {
+  if (!promptText?.startsWith("[System:")) return null;
+
+  const mentionMatch = /^\[System: You were @mentioned in #([^ ]+) by (.+?)\./.exec(promptText);
+  if (mentionMatch) {
+    return `mentioned in #${mentionMatch[1]} by ${mentionMatch[2]}`;
+  }
+
+  const replyMatch = /^\[System: Your message in #([^ ]+) received a reply from (.+?)\./.exec(promptText);
+  if (replyMatch) {
+    return `thread reply in #${replyMatch[1]} from ${replyMatch[2]}`;
+  }
+
+  const newMessageMatch = /^\[System: New message in #([^ ]+) from (.+?)\./.exec(promptText);
+  if (newMessageMatch) {
+    return `new message in #${newMessageMatch[1]} from ${newMessageMatch[2]}`;
+  }
+
+  return "system-triggered";
+}
+
 function getToolState(tc: LiveToolCall): ToolState {
   if (tc.status === "cancelled") return "cancelled";
   if (tc.status === "failed" || tc.error) return "error";
@@ -90,6 +111,7 @@ function RunRow({ run }: { run: LiveRun }) {
   const cancelledToolCount = run.toolCalls.filter((tc) => tc.status === "cancelled").length;
   const completedToolCount = run.toolCalls.filter((tc) => tc.status === "completed" || tc.completed || tc.output !== undefined).length;
   const runError = formatRunError(run.error);
+  const runTrigger = formatRunTrigger(run.promptText);
   const duration = useMemo(() => {
     const end = run.endedAt ?? (run.isActive ? now : undefined);
     if (!end || !run.startedAt) return null;
@@ -143,6 +165,7 @@ function RunRow({ run }: { run: LiveRun }) {
             {cancelledToolCount > 0 && <span>{cancelledToolCount} cancelled</span>}
             {duration && <span>{duration}</span>}
             {run.thinking && <span>reasoning</span>}
+            {runTrigger && <span>trigger {runTrigger}</span>}
             {runError && <span className="text-rose-600">{runError}</span>}
           </div>
         </div>
@@ -162,6 +185,7 @@ function RunRow({ run }: { run: LiveRun }) {
               {run.endedAt && <span>ended {timeFormatter.format(run.endedAt)}</span>}
               {duration && <span>duration {duration}</span>}
               <span>status {statusLabel}</span>
+              {runTrigger && <span>trigger {runTrigger}</span>}
               {runError && <span className="text-rose-600">error {runError}</span>}
             </div>
           </div>

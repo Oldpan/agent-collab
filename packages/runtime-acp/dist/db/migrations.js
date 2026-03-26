@@ -1,4 +1,4 @@
-const LATEST_VERSION = 23;
+const LATEST_VERSION = 24;
 export function migrate(db) {
     db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -425,5 +425,12 @@ export function migrate(db) {
             db.exec(`ALTER TABLE channels ADD COLUMN description TEXT;`);
         }
         db.exec(`UPDATE schema_version SET version = 23;`);
+    }
+    if (current < 24) {
+        const queueCols = db.prepare("PRAGMA table_info('conversation_prompt_queue')").all();
+        if (!queueCols.some((c) => c.name === 'record_as_user_message')) {
+            db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN record_as_user_message INTEGER NOT NULL DEFAULT 1;`);
+        }
+        db.exec(`UPDATE schema_version SET version = 24;`);
     }
 }

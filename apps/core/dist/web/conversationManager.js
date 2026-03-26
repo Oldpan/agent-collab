@@ -362,8 +362,8 @@ export class ConversationManager {
     async dispatchToNode(conversationId, promptText) {
         await this.executionDispatcher.dispatchPrompt(conversationId, promptText);
     }
-    async submitPrompt(conversationId, promptText) {
-        return this.executionDispatcher.submitPrompt(conversationId, promptText);
+    async submitPrompt(conversationId, promptText, options) {
+        return this.executionDispatcher.submitPrompt(conversationId, promptText, options);
     }
     async onConversationSettled(conversationId) {
         await this.executionDispatcher.handleConversationSettled(conversationId);
@@ -377,9 +377,6 @@ export class ConversationManager {
        VALUES(?, ?, 0, ?)`).run(agentId, channelId, Date.now());
     }
     leaveChannel(agentId, channelId) {
-        const row = this.db.prepare(`SELECT is_home FROM agent_channel_memberships WHERE agent_id = ? AND channel_id = ?`).get(agentId, channelId);
-        if (!row || row.is_home)
-            return; // can't leave home channel
         this.db.prepare(`DELETE FROM agent_channel_memberships WHERE agent_id = ? AND channel_id = ?`).run(agentId, channelId);
     }
     createChannel(params) {

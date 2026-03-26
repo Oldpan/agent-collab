@@ -152,7 +152,7 @@ export class AgentHost {
             type: 'run.event',
             runId,
             conversationId,
-            event: { type: 'turn.begin', turnId: runId, startedAt: nowMs },
+            event: { type: 'turn.begin', turnId: runId, startedAt: nowMs, promptText: prompt },
         });
         this.send({
             type: 'run.event',

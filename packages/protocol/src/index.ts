@@ -67,6 +67,7 @@ export type TurnBeginEvent = {
   type: 'turn.begin';
   turnId: string;
   startedAt?: number;
+  promptText?: string;
 };
 
 export type TurnEndEvent = {
@@ -144,6 +145,14 @@ export type ChannelMessageEvent = {
   };
 };
 
+export type ChannelNoticeEvent = {
+  type: 'channel.notice';
+  notice: {
+    message: string;
+    createdAt: string;
+  };
+};
+
 export type SystemNoticeEvent = {
   type: 'system.notice';
   message: string;
@@ -163,6 +172,7 @@ export type ServerEvent =
   | HistoryResetEvent
   | HistoryUserMessageEvent
   | ChannelMessageEvent
+  | ChannelNoticeEvent
   | SystemNoticeEvent;
 
 // ─── 客户端 → 服务端 事件 ───

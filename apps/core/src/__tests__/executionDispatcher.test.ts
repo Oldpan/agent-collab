@@ -170,6 +170,28 @@ describe('ExecutionDispatcher', () => {
     });
   });
 
+  it('内部静默 prompt 不应写入私聊 channel_messages', async () => {
+    const agent = manager.createAgent({
+      name: 'Silent Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/silent-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    await manager.submitPrompt(
+      conv.id,
+      '[System: You were @mentioned in #default by User. Call check_messages to read the message.]',
+      { recordAsUserMessage: false },
+    );
+
+    const countRow = db.prepare(
+      'SELECT COUNT(*) as count FROM channel_messages WHERE channel_id = ?'
+    ).get(`dm:${agent.agentId}`) as { count: number };
+    expect(countRow.count).toBe(0);
+  });
+
   it('cancelConversationRun 应发送 run.cancel 到节点', () => {
     const conv = manager.createConversation({
       title: 'Cancel Test',

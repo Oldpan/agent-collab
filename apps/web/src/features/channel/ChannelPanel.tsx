@@ -57,8 +57,23 @@ function MessageRow({
   message: ChannelMessage;
   onReply: (message: ChannelMessage) => void;
 }) {
+  const isSystem = message.senderType === "system";
   const isUser = message.senderType === "user";
   const replyCount = message.replyCount ?? 0;
+
+  if (isSystem) {
+    return (
+      <div className="px-4 py-2">
+        <div className="rounded-md border border-zinc-300 bg-white/70 px-3 py-2 text-xs text-zinc-600 shadow-[2px_2px_0_0_rgba(0,0,0,0.06)]">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold uppercase tracking-wide text-zinc-500">System</span>
+            <span className="text-[10px] text-zinc-400">{formatTime(message.createdAt)}</span>
+          </div>
+          <div className="mt-1 whitespace-pre-wrap break-words">{message.content}</div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="group relative flex gap-2.5 px-4 py-2 hover:bg-black/5">

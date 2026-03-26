@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-26 (channel mention routing fix)
+
+- 频道消息不再默认唤醒该频道中的所有 agent。
+- 现在只有两种情况会触发 agent 执行：
+  - 用户在频道中显式 `@agent`
+  - 用户回复了某个 agent 在 thread 中的消息
+- 这修复了“只 `@Tab`，但同频道的 Bob 也被唤醒并在私聊回复”的问题。
+
 ## 2026-03-26 (P0/P1 roadmap items)
 
 - **P0: Channel 消息通知所有 channel 内 agent**
@@ -67,3 +75,10 @@
 - 前端接入公开 task API：支持按频道拉任务、新建任务、推进状态 `todo -> in_progress -> in_review -> done`。
 - `done` 分组默认折叠；assignee 暂时只读展示，不提供用户侧分配交互。
 - 原计划里的 DM Thread UI 暂缓，保持当前“私聊单主 thread、分支只在 channel 内出现”的产品语义。
+
+## 2026-03-26 (silent mention wakeups)
+
+- 频道内 `@agent` 和 thread reply 的内部唤醒 prompt 改成静默提交，不再写进 agent 私聊 DM 聊天记录。
+- 频道被 `@mention` 时，会在对应 channel 实时插入一条 `channel.notice`，提示该 agent 已被通知。
+- Agent `Activity` 现在会显示 run 的触发原因，例如 `mentioned in #default by User`、`thread reply in #default from User`。
+- 为了保留静默语义，`conversation_prompt_queue` 新增 `record_as_user_message` 标记；队列中的内部 prompt 出队后也不会污染私聊消息流。

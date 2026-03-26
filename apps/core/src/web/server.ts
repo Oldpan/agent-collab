@@ -13,6 +13,7 @@ import { registerInternalAgentRoutes } from './internalAgentRouter.js';
 import { NodeRegistry } from '../services/nodeRegistry.js';
 import { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/agentWorkspaceService.js';
+import { findMentionedAgents } from './channelMentions.js';
 
 export async function startServer(params: {
   port: number;
@@ -520,35 +521,35 @@ export async function startServer(params: {
             conversationManager.submitPrompt(
               conv.id,
               `[System: Your message in #${channel.name} received a reply from ${senderName}. Call check_messages with target "#${channel.name}:${threadRootId}" to read the thread.]`,
+              { recordAsUserMessage: false },
             ).catch(() => {});
           }
         }
       }
 
-      // Notify all agents in the channel: @mentioned agents get checkpoint reset; others just get woken up
+      // Notify only @mentioned agents in the channel.
       void (async () => {
-        const mentionRegex = /@([a-zA-Z0-9_-]+)/g;
-        const mentioned = new Set<string>();
-        let m: RegExpExecArray | null;
-        while ((m = mentionRegex.exec(content)) !== null) mentioned.add(m[1].toLowerCase());
-
         const channelAgents = conversationManager.listAgents(req.params.id);
-        for (const agent of channelAgents) {
-          const isMentioned = mentioned.has(agent.name.toLowerCase());
-          if (isMentioned) {
-            // Ensure checkpoint is behind the new message so check_messages returns it
-            db.prepare(
-              `INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
-               VALUES(?, ?, ?)
-               ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`,
-            ).run(agent.agentId, req.params.id, seq - 1);
-          }
+        const mentionedAgents = findMentionedAgents(content, channelAgents);
+        for (const agent of mentionedAgents) {
+          // Ensure checkpoint is behind the new message so check_messages returns it
+          db.prepare(
+            `INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
+             VALUES(?, ?, ?)
+             ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`,
+          ).run(agent.agentId, req.params.id, seq - 1);
+
           const conv = conversationManager.openAgentThread(agent.agentId);
           if (conv) {
-            const prompt = isMentioned
-              ? `[System: You were @mentioned in #${channel.name} by ${senderName}. Call check_messages to read the message.]`
-              : `[System: New message in #${channel.name} from ${senderName}. Call check_messages to read new messages.]`;
-            conversationManager.submitPrompt(conv.id, prompt).catch(() => {});
+            const prompt = `[System: You were @mentioned in #${channel.name} by ${senderName}. Call check_messages to read the message.]`;
+            broadcastToChannel(req.params.id, {
+              type: 'channel.notice',
+              notice: {
+                message: `@${agent.name} was mentioned and notified.`,
+                createdAt: new Date(now).toISOString(),
+              },
+            });
+            conversationManager.submitPrompt(conv.id, prompt, { recordAsUserMessage: false }).catch(() => {});
           }
         }
       })();

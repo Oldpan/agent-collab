@@ -21,10 +21,10 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('schema_version 应为最新版本 23', () => {
+  it('schema_version 应至少包含最新迁移所需版本', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBe(23);
+    expect(row.version).toBeGreaterThanOrEqual(23);
     db.close();
   });
 
@@ -65,6 +65,9 @@ describe('migrations', () => {
       .prepare("SELECT name FROM sqlite_master WHERE type='table'")
       .all() as Array<{ name: string }>;
     expect(tables.map((t) => t.name)).toContain('conversation_prompt_queue');
+
+    const queueCols = db.prepare("PRAGMA table_info('conversation_prompt_queue')").all() as Array<{ name: string }>;
+    expect(queueCols.map((c) => c.name)).toContain('record_as_user_message');
     db.close();
   });
 

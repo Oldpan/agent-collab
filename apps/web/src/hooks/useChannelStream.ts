@@ -49,7 +49,11 @@ export function useChannelStream(channelId: string | null): {
     ws.onmessage = (evt) => {
       if (wsRef.current !== ws) return;
       try {
-        const event = JSON.parse(evt.data as string) as { type: string; message?: ChannelMessage };
+        const event = JSON.parse(evt.data as string) as {
+          type: string;
+          message?: ChannelMessage;
+          notice?: { message: string; createdAt: string };
+        };
         if (event.type === "channel.message" && event.message) {
           const msg = event.message;
           if (!msg.threadRootId) {
@@ -67,6 +71,18 @@ export function useChannelStream(channelId: string | null): {
               ),
             );
           }
+        } else if (event.type === "channel.notice" && event.notice) {
+          const notice = event.notice;
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: `notice-${notice.createdAt}-${prev.length}`,
+              senderName: "System",
+              senderType: "system",
+              content: notice.message,
+              createdAt: notice.createdAt,
+            },
+          ]);
         }
       } catch {
         // ignore malformed messages

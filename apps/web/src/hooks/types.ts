@@ -19,6 +19,7 @@ export type LiveRun = {
   runId: string;
   startedAt: number;
   endedAt?: number;
+  promptText?: string;
   toolCalls: LiveToolCall[];
   thinking?: string;
   isActive: boolean;

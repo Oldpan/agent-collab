@@ -82,8 +82,7 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
         // Query all channels the agent has joined, plus the user DM channel
         const agent = conversationManager.getAgent(agentId);
         const dmChannelId = `dm:${agentId}`;
-        const joinedIds = agent.channelIds && agent.channelIds.length > 0 ? agent.channelIds : [agent.channelId];
-        const channelsToQuery = Array.from(new Set([...joinedIds, dmChannelId]));
+        const channelsToQuery = Array.from(new Set([...(agent.channelIds ?? []), dmChannelId]));
         let allRows = [];
         for (const channelId of channelsToQuery) {
             const checkpoint = db
@@ -133,7 +132,7 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
             reply.code(404);
             return { error: 'Agent not found' };
         }
-        const joinedSet = new Set(agent.channelIds && agent.channelIds.length > 0 ? agent.channelIds : [agent.channelId]);
+        const joinedSet = new Set(agent.channelIds ?? []);
         const channels = conversationManager.listChannels().map((ch) => ({
             name: ch.name,
             joined: joinedSet.has(ch.channelId),

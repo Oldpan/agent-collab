@@ -9,6 +9,7 @@ import { registerInternalAgentRoutes } from './internalAgentRouter.js';
 import { NodeRegistry } from '../services/nodeRegistry.js';
 import { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/agentWorkspaceService.js';
+import { findMentionedAgents } from './channelMentions.js';
 export async function startServer(params) {
     const { port, host, conversationManager, db } = params;
     const nodeRegistry = params.nodeRegistry ?? new NodeRegistry();
@@ -291,6 +292,7 @@ export async function startServer(params) {
             const channel = conversationManager.createChannel({
                 name: body.name,
                 workspacePath: body.workspacePath,
+                description: body.description,
             });
             reply.code(201);
             return channel;
@@ -450,32 +452,30 @@ export async function startServer(params) {
             if (rootMsg?.sender_type === 'agent') {
                 const conv = conversationManager.openAgentThread(rootMsg.sender_id);
                 if (conv) {
-                    conversationManager.submitPrompt(conv.id, `[System: Your message in #${channel.name} received a reply from ${senderName}. Call check_messages with target "#${channel.name}:${threadRootId}" to read the thread.]`).catch(() => { });
+                    conversationManager.submitPrompt(conv.id, `[System: Your message in #${channel.name} received a reply from ${senderName}. Call check_messages with target "#${channel.name}:${threadRootId}" to read the thread.]`, { recordAsUserMessage: false }).catch(() => { });
                 }
             }
         }
-        // Notify all agents in the channel: @mentioned agents get checkpoint reset; others just get woken up
+        // Notify only @mentioned agents in the channel.
         void (async () => {
-            const mentionRegex = /@([a-zA-Z0-9_-]+)/g;
-            const mentioned = new Set();
-            let m;
-            while ((m = mentionRegex.exec(content)) !== null)
-                mentioned.add(m[1].toLowerCase());
             const channelAgents = conversationManager.listAgents(req.params.id);
-            for (const agent of channelAgents) {
-                const isMentioned = mentioned.has(agent.name.toLowerCase());
-                if (isMentioned) {
-                    // Ensure checkpoint is behind the new message so check_messages returns it
-                    db.prepare(`INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
-               VALUES(?, ?, ?)
-               ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`).run(agent.agentId, req.params.id, seq - 1);
-                }
+            const mentionedAgents = findMentionedAgents(content, channelAgents);
+            for (const agent of mentionedAgents) {
+                // Ensure checkpoint is behind the new message so check_messages returns it
+                db.prepare(`INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
+             VALUES(?, ?, ?)
+             ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`).run(agent.agentId, req.params.id, seq - 1);
                 const conv = conversationManager.openAgentThread(agent.agentId);
                 if (conv) {
-                    const prompt = isMentioned
-                        ? `[System: You were @mentioned in #${channel.name} by ${senderName}. Call check_messages to read the message.]`
-                        : `[System: New message in #${channel.name} from ${senderName}. Call check_messages to read new messages.]`;
-                    conversationManager.submitPrompt(conv.id, prompt).catch(() => { });
+                    const prompt = `[System: You were @mentioned in #${channel.name} by ${senderName}. Call check_messages to read the message.]`;
+                    broadcastToChannel(req.params.id, {
+                        type: 'channel.notice',
+                        notice: {
+                            message: `@${agent.name} was mentioned and notified.`,
+                            createdAt: new Date(now).toISOString(),
+                        },
+                    });
+                    conversationManager.submitPrompt(conv.id, prompt, { recordAsUserMessage: false }).catch(() => { });
                 }
             }
         })();
@@ -541,6 +541,74 @@ export async function startServer(params) {
         }
     }
     registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel);
+    // ─── User-facing Task routes ───
+    // GET /api/channels/:id/tasks
+    app.get('/api/channels/:id/tasks', async (req, reply) => {
+        const channel = conversationManager.getChannel(req.params.id);
+        if (!channel) {
+            reply.code(404);
+            return { error: 'Channel not found' };
+        }
+        const rows = req.query.status && req.query.status !== 'all'
+            ? db.prepare(`SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
+                    title, description, status,
+                    claimed_by_agent_id as assigneeId, claimed_by_name as assigneeName,
+                    created_at as createdAt, updated_at as updatedAt
+             FROM tasks WHERE channel_id = ? AND status = ? ORDER BY task_number ASC`).all(req.params.id, req.query.status)
+            : db.prepare(`SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
+                    title, description, status,
+                    claimed_by_agent_id as assigneeId, claimed_by_name as assigneeName,
+                    created_at as createdAt, updated_at as updatedAt
+             FROM tasks WHERE channel_id = ? ORDER BY task_number ASC`).all(req.params.id);
+        return { tasks: rows };
+    });
+    // POST /api/channels/:id/tasks
+    app.post('/api/channels/:id/tasks', async (req, reply) => {
+        const channel = conversationManager.getChannel(req.params.id);
+        if (!channel) {
+            reply.code(404);
+            return { error: 'Channel not found' };
+        }
+        const { title, description } = req.body ?? {};
+        if (!title) {
+            reply.code(400);
+            return { error: 'title is required' };
+        }
+        const now = Date.now();
+        const taskId = randomUUID();
+        const seqRow = db.prepare('SELECT MAX(task_number) as maxNum FROM tasks WHERE channel_id = ?').get(req.params.id);
+        const taskNumber = (seqRow.maxNum ?? 0) + 1;
+        db.prepare(`INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, 'todo', ?, ?)`).run(taskId, req.params.id, taskNumber, title, description ?? null, now, now);
+        reply.code(201);
+        return { taskId, channelId: req.params.id, taskNumber, title, description, status: 'todo', assigneeId: null, assigneeName: null, createdAt: now, updatedAt: now };
+    });
+    // PATCH /api/channels/:id/tasks/:num/status
+    app.patch('/api/channels/:id/tasks/:num/status', async (req, reply) => {
+        const channel = conversationManager.getChannel(req.params.id);
+        if (!channel) {
+            reply.code(404);
+            return { error: 'Channel not found' };
+        }
+        const taskNumber = Number(req.params.num);
+        const { status } = req.body ?? {};
+        const validStatuses = ['todo', 'in_progress', 'in_review', 'done'];
+        if (!validStatuses.includes(status)) {
+            reply.code(400);
+            return { error: `Invalid status: ${status}` };
+        }
+        const now = Date.now();
+        const result = db.prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE channel_id = ? AND task_number = ?`).run(status, now, req.params.id, taskNumber);
+        if (result.changes === 0) {
+            reply.code(404);
+            return { error: 'Task not found' };
+        }
+        const row = db.prepare(`SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
+                title, description, status, claimed_by_agent_id as assigneeId,
+                claimed_by_name as assigneeName, created_at as createdAt, updated_at as updatedAt
+         FROM tasks WHERE channel_id = ? AND task_number = ?`).get(req.params.id, taskNumber);
+        return row;
+    });
     // ─── Node REST routes ───
     // List connected agent nodes (in-memory only, for backward compat)
     app.get('/api/nodes', async () => {
