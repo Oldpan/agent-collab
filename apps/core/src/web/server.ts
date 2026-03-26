@@ -343,6 +343,11 @@ export async function startServer(params: {
         workspacePath: body.workspacePath,
         description: body.description,
       });
+      for (const agentId of body.agentIds ?? []) {
+        if (conversationManager.getAgent(agentId)) {
+          conversationManager.joinChannel(agentId, channel.channelId);
+        }
+      }
       reply.code(201);
       return channel;
     } catch {

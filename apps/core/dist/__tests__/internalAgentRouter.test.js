@@ -127,4 +127,32 @@ describe('internalAgentRouter', () => {
         expect(row.channelId).toBe('default');
         expect(row.target).toBe(`#default:${conv.id.slice(0, 8)}`);
     });
+    it('read_history 对已加入的 channel 应返回历史', async () => {
+        const agent = manager.createAgent({
+            name: 'Reader',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/reader-router',
+        });
+        manager.joinChannel(agent.agentId, 'default');
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`).run('msg-1', 'default', 'user', 'User', 'user', '#default', 'hello channel', 1, Date.now());
+        const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent('#default')}`);
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body.messages.map((msg) => msg.content)).toContain('hello channel');
+    });
+    it('read_history 对未加入的 channel 应返回 403', async () => {
+        const agent = manager.createAgent({
+            name: 'NoMember',
+            agentType: 'codex_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/no-member-router',
+        });
+        manager.createChannel({ name: 'private-test' });
+        const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent('#private-test')}`);
+        expect(res.status).toBe(403);
+        const body = await res.json();
+        expect(body.error).toContain('not a member');
+    });
 });

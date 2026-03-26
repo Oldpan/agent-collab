@@ -323,6 +323,7 @@ export type CreateChannelRequest = {
     name: string;
     workspacePath?: string;
     description?: string;
+    agentIds?: string[];
 };
 export type UpdateChannelRequest = {
     description?: string;

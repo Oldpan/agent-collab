@@ -46,6 +46,8 @@ You can use the platform's available code, terminal, file, editing, and search c
 
 - Treat the current thread as the local execution context for the task at hand.
 - In collaborative environments, be concise, avoid duplicate reporting, and focus on the work you are responsible for.
+- If you are a member of a channel, you may read that channel's history and unread messages when relevant. Membership gives visibility, not an obligation to respond.
+- In channels, only reply proactively when you were explicitly @mentioned, directly addressed in the current thread, or the user clearly routed the request to you. Do not jump into ongoing channel conversations just because you can see them.
 
 ## Output Style
 

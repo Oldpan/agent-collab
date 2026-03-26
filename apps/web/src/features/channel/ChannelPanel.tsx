@@ -15,6 +15,7 @@ import {
   escapeHtmlOutsideCodeBlocks,
 } from "@/components/ai-elements/streamdown";
 import { TasksTab } from "./TasksTab";
+import { ChatAvatar } from "@/features/chat/ChatAvatar";
 
 type ChannelPanelProps = {
   channel: ChannelInfo;
@@ -53,9 +54,11 @@ function renderContent(content: string) {
 function MessageRow({
   message,
   onReply,
+  agents,
 }: {
   message: ChannelMessage;
   onReply: (message: ChannelMessage) => void;
+  agents: AgentInfo[];
 }) {
   const isSystem = message.senderType === "system";
   const isUser = message.senderType === "user";
@@ -75,21 +78,34 @@ function MessageRow({
     );
   }
 
+  const agent = agents.find((a) => a.name === message.senderName);
+
   return (
-    <div className="group relative flex gap-2.5 px-4 py-2 hover:bg-black/5">
-      {/* Avatar circle */}
-      <div
-        className={cn(
-          "flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-zinc-900 text-[10px] font-bold shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
-          isUser ? "bg-[#d8efff] text-blue-800" : "bg-[#d8f8c8] text-green-800",
-        )}
-        title={message.senderName}
-      >
-        {message.senderName.slice(0, 2).toUpperCase()}
-      </div>
+    <div
+      className={cn(
+        "group relative flex gap-2.5 px-4 py-2",
+        isUser ? "flex-row-reverse" : "flex-row",
+      )}
+    >
+      {/* Avatar - use ChatAvatar for agents, initials for user */}
+      {isUser ? (
+        <div
+          className="flex size-8 shrink-0 items-center justify-center rounded-sm border-2 border-zinc-900 bg-[#d8efff] text-[10px] font-bold text-blue-800 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]"
+          title={message.senderName}
+        >
+          {message.senderName.slice(0, 2).toUpperCase()}
+        </div>
+      ) : (
+        <ChatAvatar
+          role="assistant"
+          agent={agent}
+          size={32}
+          className="shrink-0"
+        />
+      )}
 
       {/* Content */}
-      <div className="min-w-0 flex-1">
+      <div className={cn("min-w-0", isUser ? "flex items-end flex-col" : "flex items-start flex-col")}>
         <div className="flex items-baseline gap-1.5">
           <span className="text-[11px] font-semibold text-zinc-700">{message.senderName}</span>
           <span className="text-[10px] text-zinc-400">{formatTime(message.createdAt)}</span>
@@ -479,6 +495,7 @@ export function ChannelPanel({ channel, agents, onOpenSidebar }: ChannelPanelPro
                       key={message.id}
                       message={message}
                       onReply={setOpenThread}
+                      agents={channelMembers}
                     />
                   ))}
                 </>

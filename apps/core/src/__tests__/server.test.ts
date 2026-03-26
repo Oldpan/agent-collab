@@ -30,6 +30,30 @@ beforeAll(async () => {
 
   // REST routes
   app.get('/api/conversations', async () => manager.listConversations());
+  app.get('/api/channels', async () => manager.listChannels());
+
+  app.post<{ Body: any }>('/api/channels', async (req, reply) => {
+    const body = (req.body ?? {}) as any;
+    if (!body.name) {
+      reply.code(400);
+      return { error: 'name is required' };
+    }
+    try {
+      const channel = manager.createChannel({
+        name: body.name,
+        workspacePath: body.workspacePath,
+        description: body.description,
+      });
+      for (const agentId of body.agentIds ?? []) {
+        if (manager.getAgent(agentId)) manager.joinChannel(agentId, channel.channelId);
+      }
+      reply.code(201);
+      return channel;
+    } catch {
+      reply.code(409);
+      return { error: 'Channel name already exists' };
+    }
+  });
 
   app.post<{ Body: any }>('/api/conversations', async (req, reply) => {
     const body = (req.body ?? {}) as any;
@@ -253,6 +277,39 @@ describe('REST API', () => {
   it('DELETE 不存在的 id 返回 404', async () => {
     const { status } = await fetchJson('/api/conversations/non-existent', { method: 'DELETE' });
     expect(status).toBe(404);
+  });
+
+  it('POST /api/channels 应支持 description 和初始 agentIds', async () => {
+    const a1 = manager.createAgent({
+      name: 'Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/bob',
+    });
+    const a2 = manager.createAgent({
+      name: 'Tab',
+      agentType: 'codex_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/tab',
+    });
+
+    const { status, body } = await fetchJson('/api/channels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'eng-room',
+        description: 'Engineering channel',
+        agentIds: [a1.agentId, a2.agentId],
+      }),
+    });
+
+    expect(status).toBe(201);
+    expect(body.description).toBe('Engineering channel');
+
+    const bob = manager.getAgent(a1.agentId);
+    const tab = manager.getAgent(a2.agentId);
+    expect(bob?.channelIds).toContain(body.channelId);
+    expect(tab?.channelIds).toContain(body.channelId);
   });
 });
 

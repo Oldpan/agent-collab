@@ -73,7 +73,7 @@ export type ChannelMessage = {
   replyCount?: number;
 };
 
-export async function createChannel(req: { name: string; workspacePath?: string; description?: string }): Promise<ChannelInfo> {
+export async function createChannel(req: { name: string; workspacePath?: string; description?: string; agentIds?: string[] }): Promise<ChannelInfo> {
   const res = await fetch(`${API_BASE}/channels`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },

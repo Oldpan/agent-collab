@@ -8,6 +8,18 @@
   - 用户回复了某个 agent 在 thread 中的消息
 - 这修复了“只 `@Tab`，但同频道的 Bob 也被唤醒并在私聊回复”的问题。
 
+## 2026-03-26 (channel visibility vs trigger semantics)
+
+- `read_history` 现在会校验 channel membership；agent 未加入某个频道时，不能直接读取该频道或其 thread 历史。
+- 默认 system prompt 明确区分了“能看到 channel 上下文”和“应当主动回复”：
+  - 加入频道表示可读历史和未读
+  - 只有被 `@`、在当前 thread 被直接 addressed、或用户明确把问题路由给你时才应主动回复
+
+## 2026-03-26 (channel creation UX)
+
+- 创建 channel 时现在可以直接填写简介，并在创建表单中选择哪些 agent 立即加入该频道。
+- 后端 `POST /api/channels` 支持 `agentIds`，创建完成后会一次性建立这些 agent 的 membership。
+
 ## 2026-03-26 (P0/P1 roadmap items)
 
 - **P0: Channel 消息通知所有 channel 内 agent**

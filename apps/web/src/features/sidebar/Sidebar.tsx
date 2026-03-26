@@ -13,6 +13,7 @@ import type {
 } from "@agent-collab/protocol";
 import { AgentDetailPanel } from "./AgentDetailPanel";
 import { MachineCreatePanel } from "./MachineCreatePanel";
+import { ChannelCreatePanel } from "./ChannelCreatePanel";
 import { AgentEnvVarsEditor } from "./AgentEnvVarsEditor";
 import { AgentPermissionSettings } from "./AgentPermissionSettings";
 import { ChatAvatar } from "../chat/ChatAvatar";
@@ -57,7 +58,7 @@ type SidebarProps = {
   onDeleteAgent: (id: string) => void;
   onOpenAgentThread: (agentId: string) => void;
   onSelectChannel: (channelId: string) => void;
-  onCreateChannel: (name: string) => Promise<ChannelInfo>;
+  onCreateChannel: (req: { name: string; description?: string; agentIds?: string[]; workspacePath?: string }) => Promise<ChannelInfo>;
 };
 
 function formatRelativeTime(ts: number): string {
@@ -108,7 +109,6 @@ export function Sidebar({
 
   // Channel creation state
   const [showCreateChannel, setShowCreateChannel] = useState(false);
-  const [newChannelName, setNewChannelName] = useState("");
 
   // Create agent form state (keyed by machineNodeId)
   const [createAgentInMachine, setCreateAgentInMachine] = useState<string | null>(null);
@@ -443,41 +443,19 @@ export function Sidebar({
                 type="button"
                 className="rounded-sm p-0.5 hover:bg-[#ffe27a] cursor-pointer"
                 title="Create channel"
-                onClick={() => { setShowCreateChannel(true); setNewChannelName(""); }}
+                onClick={() => { setShowCreateChannel(true); }}
               >
                 <PlusIcon className="size-3 text-zinc-500" />
               </button>
             </div>
 
             {showCreateChannel && (
-              <div className="mb-1 flex gap-1">
-                <input
-                  autoFocus
-                  className="min-w-0 flex-1 rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs placeholder:text-zinc-400"
-                  placeholder="Channel name"
-                  value={newChannelName}
-                  onChange={(e) => setNewChannelName(e.target.value)}
-                  onKeyDown={async (e) => {
-                    if (e.key === "Enter" && newChannelName.trim()) {
-                      const ch = await onCreateChannel(newChannelName.trim());
-                      setShowCreateChannel(false);
-                      setNewChannelName("");
-                      onSelectChannel(ch.channelId);
-                    }
-                    if (e.key === "Escape") {
-                      setShowCreateChannel(false);
-                      setNewChannelName("");
-                    }
-                  }}
-                />
-                <button
-                  type="button"
-                  className="rounded-sm border-2 border-zinc-900 bg-white p-1 text-zinc-500 hover:bg-[#fff1a9] cursor-pointer"
-                  onClick={() => { setShowCreateChannel(false); setNewChannelName(""); }}
-                >
-                  <XIcon className="size-3" />
-                </button>
-              </div>
+              <ChannelCreatePanel
+                agents={agents}
+                onClose={() => setShowCreateChannel(false)}
+                onCreate={onCreateChannel}
+                onCreated={(channel) => onSelectChannel(channel.channelId)}
+              />
             )}
 
             {channels.length === 0 && !showCreateChannel && (

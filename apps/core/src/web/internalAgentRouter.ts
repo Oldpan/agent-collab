@@ -239,7 +239,8 @@ export function registerInternalAgentRoutes(
     Querystring: { channel: string; limit?: string; before?: string; after?: string };
   }>('/api/internal/agent/:agentId/history', async (req, reply) => {
     const { agentId } = req.params;
-    if (!conversationManager.getAgent(agentId)) {
+    const agent = conversationManager.getAgent(agentId);
+    if (!agent) {
       reply.code(404);
       return { error: 'Agent not found' };
     }
@@ -254,6 +255,10 @@ export function registerInternalAgentRoutes(
     if (!channelId) {
       reply.code(400);
       return { error: `Cannot resolve channel: ${channel}` };
+    }
+    if (channel.startsWith('#') && !(agent.channelIds ?? []).includes(channelId)) {
+      reply.code(403);
+      return { error: 'Agent is not a member of this channel' };
     }
 
     const limit = Math.min(Number(limitStr ?? 50), 100);

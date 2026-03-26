@@ -31,8 +31,10 @@ export function useChannels() {
     return () => { cancelled = true; };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const createChannel = useCallback(async (name: string, workspacePath?: string) => {
-    const channel = await api.createChannel({ name, workspacePath });
+  const createChannel = useCallback(async (
+    req: { name: string; workspacePath?: string; description?: string; agentIds?: string[] },
+  ) => {
+    const channel = await api.createChannel(req);
     addChannel(channel);
     return channel;
   }, [addChannel]); // eslint-disable-line react-hooks/exhaustive-deps
