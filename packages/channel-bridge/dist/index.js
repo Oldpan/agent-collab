@@ -12,6 +12,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { formatHistoryMessages, formatMessages } from './messageFormat.js';
 // ─── CLI args ─────────────────────────────────────────────────────────────────
 const args = process.argv.slice(2);
 let agentId = '';
@@ -92,7 +93,7 @@ server.tool('check_messages', 'Check for new messages without waiting. Returns i
         if (d.messages && d.messages.length > 0) {
             const formatted = formatMessages(d.messages);
             return toText(formatted +
-                '\n\n--- IMPORTANT: You MUST reply using mcp__chat__send_message(content="...") for the current conversation, or set target only when you intentionally want to send elsewhere. Do NOT output text directly. ---');
+                '\n\n--- IMPORTANT: The [Message metadata] block is system metadata for routing and context. Do NOT quote or repeat it back to the user. Reply using mcp__chat__send_message(content="...") for the current conversation, or set target only when you intentionally want to send elsewhere. Do NOT output text directly. ---');
         }
         return toText('No new messages.');
     }
@@ -166,10 +167,7 @@ server.tool('read_history', "Read message history for a channel, DM, or thread. 
         const d = data;
         if (!d.messages?.length)
             return toText('No messages in this channel.');
-        const formatted = d.messages.map((m) => {
-            const senderType = m.senderType === 'agent' ? ' type=agent' : '';
-            return `[seq=${m.seq} time=${m.createdAt}${senderType}] @${m.senderName}: ${m.content}`;
-        }).join('\n');
+        const formatted = formatHistoryMessages(d.messages);
         let footer = '';
         if (d.has_more && d.messages.length > 0) {
             if (after !== undefined) {
@@ -181,7 +179,7 @@ server.tool('read_history', "Read message history for a channel, DM, or thread. 
                 footer = `\n\n--- ${d.messages.length} messages shown. Use before=${minSeq} to load older messages. ---`;
             }
         }
-        return toText(`## Message History for ${channel} (${d.messages.length} messages)\n\n${formatted}${footer}`);
+        return toText(`## Message History for ${channel} (${d.messages.length} messages)\n\n${formatted}\n\n--- IMPORTANT: The [Message metadata] block is system metadata for routing and context. Do NOT quote or repeat it back to the user. ---${footer}`);
     }
     catch (err) {
         return toText(`Error: ${err.message}`);
@@ -303,13 +301,4 @@ server.tool('update_task_status', 'Update a task\'s progress status. Valid trans
 // ─── Transport ────────────────────────────────────────────────────────────────
 const transport = new StdioServerTransport();
 await server.connect(transport);
-// ─── Message formatter ────────────────────────────────────────────────────────
-function formatMessages(messages) {
-    return messages
-        .map((m) => {
-        const senderType = m.sender_type === 'agent' ? ' type=agent' : '';
-        return `[target=${m.target} msg=${m.message_id.slice(0, 8)} time=${m.timestamp}${senderType}] @${m.sender_name}: ${m.content}`;
-    })
-        .join('\n');
-}
 //# sourceMappingURL=index.js.map

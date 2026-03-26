@@ -14,6 +14,7 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { formatHistoryMessages, formatMessages } from './messageFormat.js';
 
 // ─── CLI args ─────────────────────────────────────────────────────────────────
 
@@ -116,7 +117,7 @@ server.tool(
         const formatted = formatMessages(d.messages as MessageItem[]);
         return toText(
           formatted +
-          '\n\n--- IMPORTANT: You MUST reply using mcp__chat__send_message(content="...") for the current conversation, or set target only when you intentionally want to send elsewhere. Do NOT output text directly. ---',
+          '\n\n--- IMPORTANT: The [Message metadata] block is system metadata for routing and context. Do NOT quote or repeat it back to the user. Reply using mcp__chat__send_message(content="...") for the current conversation, or set target only when you intentionally want to send elsewhere. Do NOT output text directly. ---',
         );
       }
       return toText('No new messages.');
@@ -200,10 +201,7 @@ server.tool(
       const d = data as { messages?: HistoryMessage[]; has_more?: boolean };
       if (!d.messages?.length) return toText('No messages in this channel.');
 
-      const formatted = d.messages.map((m) => {
-        const senderType = m.senderType === 'agent' ? ' type=agent' : '';
-        return `[seq=${m.seq} time=${m.createdAt}${senderType}] @${m.senderName}: ${m.content}`;
-      }).join('\n');
+      const formatted = formatHistoryMessages(d.messages);
 
       let footer = '';
       if (d.has_more && d.messages.length > 0) {
@@ -216,7 +214,7 @@ server.tool(
         }
       }
 
-      return toText(`## Message History for ${channel} (${d.messages.length} messages)\n\n${formatted}${footer}`);
+      return toText(`## Message History for ${channel} (${d.messages.length} messages)\n\n${formatted}\n\n--- IMPORTANT: The [Message metadata] block is system metadata for routing and context. Do NOT quote or repeat it back to the user. ---${footer}`);
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }
@@ -403,14 +401,3 @@ type TaskItem = {
   claimedByName: string | null;
   createdByName: string | null;
 };
-
-// ─── Message formatter ────────────────────────────────────────────────────────
-
-function formatMessages(messages: MessageItem[]): string {
-  return messages
-    .map((m) => {
-      const senderType = m.sender_type === 'agent' ? ' type=agent' : '';
-      return `[target=${m.target} msg=${m.message_id.slice(0, 8)} time=${m.timestamp}${senderType}] @${m.sender_name}: ${m.content}`;
-    })
-    .join('\n');
-}

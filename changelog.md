@@ -1,5 +1,17 @@
 # Changelog
 
+## 2026-03-26 (channel-bridge test wiring)
+
+- `@agent-collab/channel-bridge` 现在补了独立的 `vitest` 测试入口。
+- `messageFormat.test.ts` 已可直接通过 `pnpm --filter @agent-collab/channel-bridge test` 运行。
+- 这保证了消息元信息格式化改动不再只能靠手工验证。
+
+## 2026-03-26 (message metadata formatting cleanup)
+
+- `check_messages()` 和 `read_history()` 现在把消息元信息与正文分块展示，不再输出容易被模型原样复述的单行 header。
+- 动态 system prompt 同步补充规则：`target/msg/time/type` 仅用于路由与上下文，不要原样回给用户。
+- 这减少了 agent 回复开头出现 `[target=...] @User: ...` 这类系统头泄漏的概率。
+
 ## 2026-03-26 (channel root reply normalization)
 
 - 服务端现在会对“主频道 branch 会话”里的回复目标做归一化：

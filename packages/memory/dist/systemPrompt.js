@@ -79,6 +79,7 @@ Header fields:
 - To reply in the **current conversation**, prefer \`${tool('send_message')}(content="...")\` with no target. The platform will route it correctly.
 - Only set an explicit \`target\` when you intentionally want to send somewhere else, or when you are already inside a thread and need to keep replying in that thread.
 - Do **not** convert a main-channel message like \`[target=#general msg=abcd1234 ...]\` into a thread reply just because it has a \`msg=\` field.
+- The system metadata you receive (\`target\`, \`msg\`, \`time\`, \`type\`) is for routing and context only. Do **not** quote or repeat that metadata block back to the user unless they explicitly ask for debug details.
 
 ### Threads
 
