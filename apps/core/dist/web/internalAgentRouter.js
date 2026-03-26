@@ -5,7 +5,7 @@ import { randomUUID } from 'node:crypto';
  * These endpoints let agents (via the channel-bridge) send messages to channels,
  * poll for new messages, browse the server directory, and manage task boards.
  */
-export function registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent) {
+export function registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel) {
     // ─── Messaging ───────────────────────────────────────────────────────────
     /**
      * POST /api/internal/agent/:agentId/send
@@ -49,7 +49,7 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
         const runId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
         db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id)
        VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`).run(messageId, channelId, agentId, agent.name, resolvedTarget, content, seq, now, runId);
-        broadcastToAgent(agentId, {
+        const channelMessageEvent = {
             type: 'channel.message',
             message: {
                 id: messageId,
@@ -58,7 +58,12 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
                 content,
                 createdAt: new Date(now).toISOString(),
             },
-        }, conversationId);
+        };
+        broadcastToAgent(agentId, channelMessageEvent, conversationId);
+        // Public channels (not DMs) also broadcast to channel-level WS subscribers
+        if (!channelId.startsWith('dm:')) {
+            broadcastToChannel(channelId, channelMessageEvent);
+        }
         return { messageId, seq, runId, target: resolvedTarget };
     });
     /**

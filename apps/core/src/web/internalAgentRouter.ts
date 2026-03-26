@@ -41,6 +41,7 @@ export function registerInternalAgentRoutes(
   db: Db,
   conversationManager: ConversationManager,
   broadcastToAgent: (agentId: string, event: ServerEvent, conversationId?: string) => void,
+  broadcastToChannel: (channelId: string, event: ServerEvent) => void,
 ): void {
   // ─── Messaging ───────────────────────────────────────────────────────────
 
@@ -98,7 +99,7 @@ export function registerInternalAgentRoutes(
        VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`,
     ).run(messageId, channelId, agentId, agent.name, resolvedTarget, content, seq, now, runId);
 
-    broadcastToAgent(agentId, {
+    const channelMessageEvent: ServerEvent = {
       type: 'channel.message',
       message: {
         id: messageId,
@@ -107,7 +108,14 @@ export function registerInternalAgentRoutes(
         content,
         createdAt: new Date(now).toISOString(),
       },
-    }, conversationId);
+    };
+
+    broadcastToAgent(agentId, channelMessageEvent, conversationId);
+
+    // Public channels (not DMs) also broadcast to channel-level WS subscribers
+    if (!channelId.startsWith('dm:')) {
+      broadcastToChannel(channelId, channelMessageEvent);
+    }
 
     return { messageId, seq, runId, target: resolvedTarget };
   });

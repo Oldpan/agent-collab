@@ -58,6 +58,44 @@ export async function listChannels(): Promise<ChannelInfo[]> {
   return res.json();
 }
 
+export type ChannelMessage = {
+  id: string;
+  senderName: string;
+  senderType: 'user' | 'agent';
+  content: string;
+  createdAt: string; // ISO string
+};
+
+export async function createChannel(req: { name: string; workspacePath?: string }): Promise<ChannelInfo> {
+  const res = await fetch(`${API_BASE}/channels`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) throw new Error(`Failed to create channel: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getChannelMessages(channelId: string, limit = 50): Promise<{ messages: ChannelMessage[] }> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/messages?limit=${limit}`);
+  if (!res.ok) throw new Error(`Failed to get channel messages: ${res.statusText}`);
+  return res.json();
+}
+
+export async function sendChannelMessage(
+  channelId: string,
+  content: string,
+  senderName?: string,
+): Promise<{ messageId: string; seq: number }> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/messages`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ content, senderName }),
+  });
+  if (!res.ok) throw new Error(`Failed to send channel message: ${res.statusText}`);
+  return res.json();
+}
+
 export async function listNodes(): Promise<NodeInfoRest[]> {
   const res = await fetch(`${API_BASE}/nodes`);
   if (!res.ok) throw new Error(`Failed to list nodes: ${res.statusText}`);

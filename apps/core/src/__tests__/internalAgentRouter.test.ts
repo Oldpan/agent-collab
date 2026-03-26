@@ -17,7 +17,7 @@ beforeAll(async () => {
   manager.start();
 
   const app = Fastify({ logger: false });
-  registerInternalAgentRoutes(app, db, manager, () => {});
+  registerInternalAgentRoutes(app, db, manager, () => {}, () => {});
 
   await app.listen({ port: 0, host: '127.0.0.1' });
   const addr = app.server.address() as { port: number };

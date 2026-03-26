@@ -3,11 +3,11 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { cn } from "@/lib/utils";
 import {
-  PlusIcon, TrashIcon, XIcon, ChevronRightIcon, ChevronDownIcon, PencilIcon, Rows3Icon,
+  PlusIcon, TrashIcon, XIcon, ChevronRightIcon, ChevronDownIcon, PencilIcon, Rows3Icon, HashIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type {
-  AgentInfo, MachineInfo,
+  AgentInfo, MachineInfo, ChannelInfo,
   AgentType, CreateAgentRequest,
   UpdateAgentRequest, CreateMachineRequest, ConversationInfo,
 } from "@agent-collab/protocol";
@@ -42,7 +42,9 @@ type SidebarProps = {
   machines: MachineInfo[];
   agents: AgentInfo[];
   conversations: ConversationInfo[];
+  channels: ChannelInfo[];
   selectedId: string | null;
+  selectedChannelId: string | null;
   selectedView: "chat" | "sessions";
   onOpenSessions: () => void;
   onCreateMachine: (req: CreateMachineRequest) => Promise<MachineInfo>;
@@ -54,6 +56,8 @@ type SidebarProps = {
   onResetAgent: (id: string) => Promise<void>;
   onDeleteAgent: (id: string) => void;
   onOpenAgentThread: (agentId: string) => void;
+  onSelectChannel: (channelId: string) => void;
+  onCreateChannel: (name: string) => Promise<ChannelInfo>;
 };
 
 function formatRelativeTime(ts: number): string {
@@ -81,13 +85,14 @@ function StatusDot({ status }: { status: MachineInfo["status"] }) {
 }
 
 export function Sidebar({
-  machines, agents, conversations, selectedId,
+  machines, agents, conversations, channels, selectedId, selectedChannelId,
   selectedView,
   onCreateMachine, onDeleteMachine,
   onOpenSessions,
   onCreateAgent, onUpdateAgent, onDeleteAgent,
   onRestartAgent, onClearAgentChat, onResetAgent,
   onOpenAgentThread,
+  onSelectChannel, onCreateChannel,
 }: SidebarProps) {
   const [expandedMachines, setExpandedMachines] = useState<Set<string>>(
     () => readStoredSet(EXPANDED_MACHINES_STORAGE_KEY),
@@ -100,6 +105,10 @@ export function Sidebar({
 
   const [deleteMachineDialogOpen, setDeleteMachineDialogOpen] = useState(false);
   const [machineToDelete, setMachineToDelete] = useState<MachineInfo | null>(null);
+
+  // Channel creation state
+  const [showCreateChannel, setShowCreateChannel] = useState(false);
+  const [newChannelName, setNewChannelName] = useState("");
 
   // Create agent form state (keyed by machineNodeId)
   const [createAgentInMachine, setCreateAgentInMachine] = useState<string | null>(null);
@@ -260,7 +269,7 @@ export function Sidebar({
 
       <ScrollArea className="flex-1 bg-[#ffe135]">
         <div className="flex flex-col items-start gap-2 p-3">
-          {machines.length === 0 && (
+          {machines.length === 0 && channels.length === 0 && (
             <p className="rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-3 py-4 text-center text-[10px] text-zinc-500 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]">
               No machines yet — click + to add one
             </p>
@@ -424,6 +433,68 @@ export function Sidebar({
               </div>
             );
           })}
+          {/* Channels section */}
+          <div className="mt-2 w-full">
+            <div className="flex items-center justify-between px-0.5 py-1">
+              <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+                Channels
+              </span>
+              <button
+                type="button"
+                className="rounded-sm p-0.5 hover:bg-[#ffe27a] cursor-pointer"
+                title="Create channel"
+                onClick={() => { setShowCreateChannel(true); setNewChannelName(""); }}
+              >
+                <PlusIcon className="size-3 text-zinc-500" />
+              </button>
+            </div>
+
+            {showCreateChannel && (
+              <div className="mb-1 flex gap-1">
+                <input
+                  autoFocus
+                  className="min-w-0 flex-1 rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs placeholder:text-zinc-400"
+                  placeholder="Channel name"
+                  value={newChannelName}
+                  onChange={(e) => setNewChannelName(e.target.value)}
+                  onKeyDown={async (e) => {
+                    if (e.key === "Enter" && newChannelName.trim()) {
+                      const ch = await onCreateChannel(newChannelName.trim());
+                      setShowCreateChannel(false);
+                      setNewChannelName("");
+                      onSelectChannel(ch.channelId);
+                    }
+                    if (e.key === "Escape") {
+                      setShowCreateChannel(false);
+                      setNewChannelName("");
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  className="rounded-sm border-2 border-zinc-900 bg-white p-1 text-zinc-500 hover:bg-[#fff1a9] cursor-pointer"
+                  onClick={() => { setShowCreateChannel(false); setNewChannelName(""); }}
+                >
+                  <XIcon className="size-3" />
+                </button>
+              </div>
+            )}
+
+            {channels.length === 0 && !showCreateChannel && (
+              <p className="rounded-md border-2 border-dashed border-zinc-900/40 bg-[#fff8d8] px-2 py-2 text-[10px] text-zinc-500">
+                No channels — click + to create one
+              </p>
+            )}
+
+            {channels.map((channel) => (
+              <ChannelRow
+                key={channel.channelId}
+                channel={channel}
+                isSelected={selectedChannelId === channel.channelId}
+                onSelect={() => onSelectChannel(channel.channelId)}
+              />
+            ))}
+          </div>
         </div>
       </ScrollArea>
 
@@ -471,6 +542,32 @@ type AgentRowProps = {
   onEdit: () => void;
   onDelete: () => void;
 };
+
+// ─── ChannelRow ───
+
+type ChannelRowProps = {
+  channel: ChannelInfo;
+  isSelected: boolean;
+  onSelect: () => void;
+};
+
+function ChannelRow({ channel, isSelected, onSelect }: ChannelRowProps) {
+  return (
+    <button
+      type="button"
+      className={cn(
+        "flex w-fit max-w-full items-center gap-1.5 rounded-md border-2 border-zinc-900 px-2.5 py-1.5 text-left shadow-[3px_3px_0_0_rgba(0,0,0,0.1)] transition-colors cursor-pointer",
+        isSelected ? "bg-[#c4b5fd] text-zinc-950" : "bg-[#fff8d8] hover:bg-[#fff1a9]",
+      )}
+      onClick={onSelect}
+    >
+      <HashIcon className="size-3 shrink-0 text-zinc-500" />
+      <span className="flex-1 truncate text-xs font-medium">{channel.name}</span>
+    </button>
+  );
+}
+
+// ─── AgentRow ───
 
 function AgentRow({ agent, isEditing, isSelected, updatedAt, onOpen, onEdit, onDelete }: AgentRowProps) {
   return (

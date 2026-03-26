@@ -2,8 +2,10 @@ import { useMemo, useCallback, useState, useEffect } from "react";
 import { useConversations } from "@/hooks/useConversations";
 import { useAgents } from "@/hooks/useAgents";
 import { useMachines } from "@/hooks/useMachines";
+import { useChannels } from "@/hooks/useChannels";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { ChatPanel } from "@/features/chat/ChatPanel";
+import { ChannelPanel } from "@/features/channel/ChannelPanel";
 import { SessionManagerPanel } from "@/features/sessions/SessionManagerPanel";
 import {
   ResizablePanelGroup,
@@ -44,6 +46,8 @@ export function App() {
 
   const { agents, createAgent, updateAgent, deleteAgent } = useAgents();
   const { machines, createMachine, deleteMachine } = useMachines();
+  const { channels, createChannel } = useChannels();
+  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
 
   const visibleConversations = useMemo(() => {
     const agentIds = new Set(agents.map((agent) => agent.agentId));
@@ -119,6 +123,7 @@ export function App() {
   const handleOpenAgentThread = useCallback(
     (agentId: string) => {
       openAgentThread(agentId);
+      setSelectedChannelId(null);
       setViewMode("chat");
     },
     [openAgentThread],
@@ -127,6 +132,16 @@ export function App() {
   const handleSelectConversation = useCallback(
     (id: string) => {
       selectConversation(id);
+      setSelectedChannelId(null);
+      setViewMode("chat");
+    },
+    [selectConversation],
+  );
+
+  const handleSelectChannel = useCallback(
+    (channelId: string) => {
+      setSelectedChannelId(channelId);
+      selectConversation(null);
       setViewMode("chat");
     },
     [selectConversation],
@@ -136,11 +151,18 @@ export function App() {
     setViewMode("sessions");
   }, []);
 
+  const selectedChannel = useMemo(
+    () => channels.find((c) => c.channelId === selectedChannelId) ?? null,
+    [channels, selectedChannelId],
+  );
+
   const sidebarProps = {
     machines,
     agents,
     conversations: visibleConversations,
+    channels,
     selectedId,
+    selectedChannelId,
     selectedView: viewMode,
     onOpenSessions: handleOpenSessions,
     onCreateMachine: createMachine,
@@ -152,6 +174,8 @@ export function App() {
     onResetAgent: handleResetAgent,
     onDeleteAgent: handleDeleteAgent,
     onOpenAgentThread: handleOpenAgentThread,
+    onSelectChannel: handleSelectChannel,
+    onCreateChannel: createChannel,
   };
 
   return (
@@ -200,6 +224,12 @@ export function App() {
               agents={agents}
               selectedId={selectedId}
               onOpenSession={handleSelectConversation}
+              onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
+            />
+          ) : selectedChannel ? (
+            <ChannelPanel
+              channel={selectedChannel}
+              agents={agents}
               onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
             />
           ) : selectedConversation ? (

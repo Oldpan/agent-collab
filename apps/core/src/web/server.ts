@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import Fastify from 'fastify';
 import fastifyCors from '@fastify/cors';
 import fastifyWebSocket from '@fastify/websocket';
@@ -358,6 +359,86 @@ export async function startServer(params: {
     return conversationManager.listConversations({ channelId: req.params.id });
   });
 
+  // Get channel message history
+  app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
+    '/api/channels/:id/messages',
+    async (req, reply) => {
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const limit = Math.min(Number(req.query.limit ?? 50), 200);
+      const rows = db.prepare(
+        `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
+                content, created_at as createdAt
+         FROM channel_messages WHERE channel_id = ?
+         ORDER BY seq DESC LIMIT ?`,
+      ).all(req.params.id, limit) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number }>;
+      return {
+        messages: rows.reverse().map((r) => ({
+          id: r.id,
+          senderName: r.senderName,
+          senderType: r.senderType as 'user' | 'agent',
+          content: r.content,
+          createdAt: new Date(r.createdAt).toISOString(),
+        })),
+      };
+    },
+  );
+
+  // Post a user message to a channel
+  app.post<{ Params: { id: string }; Body: { content: string; senderName?: string } }>(
+    '/api/channels/:id/messages',
+    async (req, reply) => {
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const { content, senderName = 'User' } = req.body ?? {};
+      if (!content) { reply.code(400); return { error: 'content is required' }; }
+      const now = Date.now();
+      const messageId = randomUUID();
+      const seqRow = db.prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?').get(req.params.id) as { maxSeq: number | null };
+      const seq = (seqRow.maxSeq ?? 0) + 1;
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id)
+         VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, NULL)`,
+      ).run(messageId, req.params.id, senderName, `#${channel.name}`, content, seq, now);
+      const event: import('@agent-collab/protocol').ServerEvent = {
+        type: 'channel.message',
+        message: { id: messageId, senderName, senderType: 'user', content, createdAt: new Date(now).toISOString() },
+      };
+      broadcastToChannel(req.params.id, event);
+
+      // @mention: parse @agentName and wake up mentioned channel members
+      void (async () => {
+        const mentionRegex = /@([a-zA-Z0-9_-]+)/g;
+        const mentioned = new Set<string>();
+        let m: RegExpExecArray | null;
+        while ((m = mentionRegex.exec(content)) !== null) mentioned.add(m[1].toLowerCase());
+        if (mentioned.size === 0) return;
+
+        const channelAgents = conversationManager.listAgents(req.params.id);
+        for (const agent of channelAgents) {
+          if (!mentioned.has(agent.name.toLowerCase())) continue;
+          // Ensure checkpoint is behind the new message so check_messages returns it
+          db.prepare(
+            `INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
+             VALUES(?, ?, ?)
+             ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`,
+          ).run(agent.agentId, req.params.id, seq - 1);
+          // Wake up the agent via its primary conversation
+          const conv = conversationManager.openAgentThread(agent.agentId);
+          if (conv) {
+            conversationManager.submitPrompt(
+              conv.id,
+              `[System: You were @mentioned in #${channel.name} by ${senderName}. Call check_messages to read the message.]`,
+            ).catch(() => {});
+          }
+        }
+      })();
+
+      reply.code(201);
+      return { messageId, seq };
+    },
+  );
+
   // ─── Machine routes ───
 
   app.get('/api/machines', async () => {
@@ -391,6 +472,22 @@ export async function startServer(params: {
 
   // ─── Internal agent routes (used by channel-bridge MCP server) ───
 
+  // Channel-level WebSocket subscriber registry
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const connectionsByChannel = new Map<string, Set<any>>();
+
+  function broadcastToChannel(
+    channelId: string,
+    event: import('@agent-collab/protocol').ServerEvent,
+  ): void {
+    const sockets = connectionsByChannel.get(channelId);
+    if (!sockets) return;
+    const data = JSON.stringify(event);
+    for (const ws of sockets) {
+      if (ws.readyState === ws.OPEN) ws.send(data);
+    }
+  }
+
   function broadcastToAgent(
     agentId: string,
     event: import('@agent-collab/protocol').ServerEvent,
@@ -408,7 +505,7 @@ export async function startServer(params: {
     }
   }
 
-  registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent);
+  registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel);
 
   // ─── Node REST routes ───
 
@@ -426,6 +523,26 @@ export async function startServer(params: {
     (socket, req) => {
       const conversationId = req.params.id;
       handleWebSocket(socket, conversationId, conversationManager);
+    },
+  );
+
+  // Channel WebSocket stream (real-time channel messages)
+  app.get<{ Params: { id: string } }>(
+    '/api/channels/:id/stream',
+    { websocket: true },
+    (socket, req) => {
+      const channelId = req.params.id;
+      if (!conversationManager.getChannel(channelId)) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Channel not found' }));
+        socket.close();
+        return;
+      }
+      if (!connectionsByChannel.has(channelId)) connectionsByChannel.set(channelId, new Set());
+      connectionsByChannel.get(channelId)!.add(socket);
+      socket.on('close', () => {
+        const s = connectionsByChannel.get(channelId);
+        if (s) { s.delete(socket); if (s.size === 0) connectionsByChannel.delete(channelId); }
+      });
     },
   );
 
