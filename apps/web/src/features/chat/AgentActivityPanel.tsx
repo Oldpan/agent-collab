@@ -44,19 +44,14 @@ function formatStopReason(reason?: string): string | null {
   return reason.replaceAll("_", " ");
 }
 
-function isDispatchFailed(run: LiveRun): boolean {
-  return Boolean(
-    run.error &&
-      (run.error === "Node not connected" ||
-        run.error === "Node disconnected during dispatch"),
-  );
-}
-
 function formatRunStatus(run: LiveRun): string {
-  if (run.isActive) return "running";
-  if (isDispatchFailed(run)) return "not dispatched";
-  if (run.error) return "failed";
-  return formatStopReason(run.stopReason) ?? "finished";
+  if (run.status === "not_dispatched") return "not dispatched";
+  if (run.status === "running") return "running";
+  if (run.status === "awaiting_approval") return "awaiting approval";
+  if (run.status === "recovering") return "recovering";
+  if (run.status === "cancelled") return "cancelled";
+  if (run.status === "failed") return "failed";
+  return formatStopReason(run.stopReason) ?? "completed";
 }
 
 function formatRunError(error?: string): string | null {
@@ -67,8 +62,9 @@ function formatRunError(error?: string): string | null {
 }
 
 function getToolState(tc: LiveToolCall): ToolState {
-  if (tc.error) return "error";
-  if (tc.completed || tc.output !== undefined) return "result";
+  if (tc.status === "cancelled") return "cancelled";
+  if (tc.status === "failed" || tc.error) return "error";
+  if (tc.status === "completed" || tc.completed || tc.output !== undefined) return "result";
   return "calling";
 }
 
@@ -90,8 +86,9 @@ function RunRow({ run }: { run: LiveRun }) {
   }, [run.isActive]);
 
   const toolCount = run.toolCalls.length;
-  const failedToolCount = run.toolCalls.filter((tc) => tc.error).length;
-  const completedToolCount = run.toolCalls.filter((tc) => tc.completed || tc.output !== undefined).length;
+  const failedToolCount = run.toolCalls.filter((tc) => tc.status === "failed" || tc.error).length;
+  const cancelledToolCount = run.toolCalls.filter((tc) => tc.status === "cancelled").length;
+  const completedToolCount = run.toolCalls.filter((tc) => tc.status === "completed" || tc.completed || tc.output !== undefined).length;
   const runError = formatRunError(run.error);
   const duration = useMemo(() => {
     const end = run.endedAt ?? (run.isActive ? now : undefined);
@@ -143,6 +140,7 @@ function RunRow({ run }: { run: LiveRun }) {
             </span>
             <span>{completedToolCount} done</span>
             {failedToolCount > 0 && <span>{failedToolCount} failed</span>}
+            {cancelledToolCount > 0 && <span>{cancelledToolCount} cancelled</span>}
             {duration && <span>{duration}</span>}
             {run.thinking && <span>reasoning</span>}
             {runError && <span className="text-rose-600">{runError}</span>}

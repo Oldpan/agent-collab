@@ -24,6 +24,8 @@ export function createTestConfig(): AgentNodeConfig {
     heartbeatIntervalMs: 1_000,
     reconnectInitialDelayMs: 10,
     reconnectMaxDelayMs: 100,
+    hostIdleTimeoutMs: 1_000,
+    hostSweepIntervalMs: 50,
     acpAgentCommand: 'npx',
     acpAgentArgs: ['-y', '@zed-industries/claude-code-acp@latest'],
     uiJsonMaxChars: 3_000,

@@ -87,6 +87,30 @@ describe('WsSink', () => {
       toolCallId: 'tc-2',
       output: 'error: resource not found',
       error: true,
+      status: 'failed',
+    });
+  });
+
+  it('sendUi cancelled tool 结果应广播 cancelled 状态的 tool.result', async () => {
+    const events: ServerEvent[] = [];
+    const sink = new WsSink((e) => events.push(e));
+
+    await sink.sendUi({
+      kind: 'tool',
+      mode: 'verbose',
+      toolCallId: 'tc-3',
+      title: 'Write MEMORY.md',
+      detail: 'cancelled',
+      stage: 'complete',
+      status: 'cancelled',
+    });
+
+    expect(events[0]).toEqual({
+      type: 'tool.result',
+      toolCallId: 'tc-3',
+      output: 'cancelled',
+      error: false,
+      status: 'cancelled',
     });
   });
 

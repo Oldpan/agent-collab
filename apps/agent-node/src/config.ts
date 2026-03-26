@@ -16,6 +16,8 @@ export type AgentNodeConfig = RuntimeConfig & {
   heartbeatIntervalMs: number;
   reconnectInitialDelayMs: number;
   reconnectMaxDelayMs: number;
+  hostIdleTimeoutMs: number;
+  hostSweepIntervalMs: number;
 };
 
 export function loadConfig(): AgentNodeConfig {
@@ -43,6 +45,8 @@ export function loadConfig(): AgentNodeConfig {
     heartbeatIntervalMs: Number(process.env.HEARTBEAT_INTERVAL_MS ?? 15_000),
     reconnectInitialDelayMs: Number(process.env.RECONNECT_INITIAL_DELAY_MS ?? 1_000),
     reconnectMaxDelayMs: Number(process.env.RECONNECT_MAX_DELAY_MS ?? 30_000),
+    hostIdleTimeoutMs: Number(process.env.HOST_IDLE_TIMEOUT_MS ?? 1_800_000),
+    hostSweepIntervalMs: Number(process.env.HOST_SWEEP_INTERVAL_MS ?? 60_000),
   };
 }
 

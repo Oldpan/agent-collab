@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { RunDispatchMsg, NodeToCore } from '@agent-collab/protocol';
 import { Executor } from '../executor.js';
@@ -52,6 +52,12 @@ describe('Executor recovery', () => {
         cancelRun: async () => false,
         handlePermissionResponse: async () => false,
         close: () => {},
+        getCurrentRunId: () => null,
+        getLastError: () => null,
+        getWorkspaceRoot: () => '/tmp',
+        getLastSleepAt: () => Date.now(),
+        hasPendingApproval: () => false,
+        isIdleExpired: () => false,
       }),
     });
 
@@ -101,6 +107,9 @@ describe('Executor recovery', () => {
           getCurrentRunId: () => null,
           getLastError: () => null,
           getWorkspaceRoot: () => hostWorkspaceRoot,
+          getLastSleepAt: () => Date.now(),
+          hasPendingApproval: () => false,
+          isIdleExpired: () => false,
         };
       },
     });
@@ -125,6 +134,115 @@ describe('Executor recovery', () => {
       ANTHROPIC_MODEL: 'GLM-4.7',
       CLAUDE_CONFIG_DIR: `${workspaceRoot}/.claude-runtime`,
     });
+
+    executor.close();
+  });
+
+  it('awaiting_approval 的 pending dispatch 在恢复时应失败收口', async () => {
+    const db = createTestDb();
+    openDbs.push(db);
+
+    const sent: NodeToCore[] = [];
+    const msg: RunDispatchMsg = {
+      type: 'run.dispatch',
+      runId: 'run-awaiting-1',
+      conversationId: 'conv-awaiting-1',
+      agentType: 'claude_acp',
+      workspacePath: '/tmp',
+      prompt: 'need approval',
+      sessionKey: 'session-awaiting-1',
+      hostKey: 'conversation:conv-awaiting-1:claude_acp',
+      dispatchMode: 'cold_start',
+    };
+
+    enqueueDispatch(db, msg, 'awaiting_approval');
+
+    const executor = new Executor({
+      db,
+      config: createTestConfig(),
+      send: (event) => {
+        sent.push(event);
+      },
+      createHost: () => ({
+        getState: () => 'idle',
+        dispatch: async () => {},
+        cancelRun: async () => false,
+        handlePermissionResponse: async () => false,
+        close: () => {},
+        getCurrentRunId: () => null,
+        getLastError: () => null,
+        getWorkspaceRoot: () => '/tmp',
+        getLastSleepAt: () => Date.now(),
+        hasPendingApproval: () => false,
+        isIdleExpired: () => false,
+      }),
+    });
+
+    executor.resumePendingDispatches();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(sent).toContainEqual({
+      type: 'run.end',
+      runId: 'run-awaiting-1',
+      conversationId: 'conv-awaiting-1',
+      error: 'Approval request lost during reconnect. Re-run required.',
+    });
+    const remaining = db
+      .prepare(`SELECT COUNT(*) as count FROM node_dispatch_queue`)
+      .get() as { count: number };
+    expect(remaining.count).toBe(0);
+
+    executor.close();
+  });
+
+  it('idle host 超过 TTL 后应自动回收', async () => {
+    vi.useFakeTimers();
+    const db = createTestDb();
+    openDbs.push(db);
+
+    const close = vi.fn();
+    const createHost = vi.fn(({ workspaceRoot: hostWorkspaceRoot }) => ({
+      getState: () => 'idle',
+      dispatch: async () => {},
+      cancelRun: async () => false,
+      handlePermissionResponse: async () => false,
+      close,
+      getCurrentRunId: () => null,
+      getLastError: () => null,
+      getWorkspaceRoot: () => hostWorkspaceRoot,
+      getLastSleepAt: () => 0,
+      hasPendingApproval: () => false,
+      isIdleExpired: (now: number, timeoutMs: number) => now >= timeoutMs,
+    }));
+
+    const executor = new Executor({
+      db,
+      config: {
+        ...createTestConfig(),
+        hostIdleTimeoutMs: 100,
+        hostSweepIntervalMs: 25,
+      },
+      send: () => {},
+      createHost,
+    });
+
+    await executor.dispatch({
+      type: 'run.dispatch',
+      runId: 'run-idle-1',
+      conversationId: 'conv-idle-1',
+      agentType: 'codex_acp',
+      workspacePath: '/tmp',
+      prompt: 'hello',
+      sessionKey: 'session-idle-1',
+      hostKey: 'conversation:conv-idle-1:codex_acp',
+      dispatchMode: 'cold_start',
+    });
+
+    expect(createHost).toHaveBeenCalledTimes(1);
+    expect(close).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(100);
+    expect(close).toHaveBeenCalledTimes(1);
 
     executor.close();
   });

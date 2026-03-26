@@ -55,9 +55,11 @@ Agent Collab 当前是一套 **remote-only** 的多 Agent 协作平台：
   - 管理 host
   - 持久化 dispatch 到 `node_dispatch_queue`
   - node 重启后恢复 pending dispatch
+  - 空闲时按 TTL 回收 host
 - `AgentHost`
   - 一个 host 对应一个 conversation/runtime key
   - 管理 runtime 生命周期、状态、inbox、cancel、permission response
+  - 暴露 idle / pending-approval 状态给 executor
 - `dispatchQueueStore`
   - `node_dispatch_queue` 读写
 - `CoreConnection`
@@ -119,6 +121,8 @@ Agent Collab 当前是一套 **remote-only** 的多 Agent 协作平台：
 - node 进程重启后可从 `node_dispatch_queue` 恢复 pending work
 - 前端会看到 `recovering` 状态
 - node 与 core 断线后会自动重连并重新注册
+- 若 run 停在 `awaiting_approval`，当前策略不会恢复旧审批请求，而是失败收口，等待用户重跑
+- 空闲 host 会按默认 `30min` TTL 自动回收
 
 ### Agent 串行
 
@@ -247,6 +251,13 @@ conversation 状态：
   - 典型错误：
     - `Node not connected`
     - `Node disconnected during dispatch`
+
+tool 当前也有显式终态：
+
+- `running`
+- `completed`
+- `failed`
+- `cancelled`
 
 前端右上角状态点是会话级状态，不是 agent 全局健康状态。
 

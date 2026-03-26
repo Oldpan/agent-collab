@@ -30,3 +30,7 @@
 | `ACP_AGENT_COMMAND` | `npx` | ACP Agent 命令 |
 | `ACP_AGENT_ARGS` | `["-y","@zed-industries/claude-code-acp@latest"]` | JSON 数组 |
 | `HEARTBEAT_INTERVAL_MS` | `15000` | 心跳间隔（毫秒） |
+| `RECONNECT_INITIAL_DELAY_MS` | `1000` | 首次重连等待时间（毫秒） |
+| `RECONNECT_MAX_DELAY_MS` | `30000` | 最大重连等待时间（毫秒） |
+| `HOST_IDLE_TIMEOUT_MS` | `1800000` | 空闲 host 自动回收 TTL（毫秒） |
+| `HOST_SWEEP_INTERVAL_MS` | `60000` | 空闲 host 扫描周期（毫秒） |

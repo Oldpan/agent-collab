@@ -1,3 +1,18 @@
+export type LiveRunStatus =
+  | "running"
+  | "awaiting_approval"
+  | "recovering"
+  | "completed"
+  | "failed"
+  | "cancelled"
+  | "not_dispatched";
+
+export type LiveToolStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
 /** A single agent run (one ACP turn), containing tool calls and optional thinking */
 export type LiveRun = {
   id: string;
@@ -6,6 +21,7 @@ export type LiveRun = {
   toolCalls: LiveToolCall[];
   thinking?: string;
   isActive: boolean;
+  status: LiveRunStatus;
   stopReason?: string;
   error?: string;
 };
@@ -28,6 +44,7 @@ export type LiveToolCall = {
   input: unknown;
   startedAt?: number;
   endedAt?: number;
+  status: LiveToolStatus;
   completed?: boolean;
   output?: string;
   error?: boolean;

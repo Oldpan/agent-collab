@@ -67,6 +67,7 @@ export declare class BindingRuntime {
     }>;
     denyPermission(sink: OutboundSink, actorUserId?: string): Promise<void>;
     respondToPermission(requestId: string, decision: 'allow' | 'deny', actorUserId?: string): Promise<boolean>;
+    hasPendingPermission(): boolean;
     cancelCurrentRun(runId?: string): Promise<boolean>;
     private resetAcpSession;
     private promptOnce;

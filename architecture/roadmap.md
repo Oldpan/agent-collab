@@ -89,34 +89,42 @@
   - `dev:restart`
 - `agent-node` 已支持与 `core` 断线后的自动重连 / backoff
 
+### 11. 恢复与状态机收口第一版
+
+- `node_dispatch_queue.state` 已支持：
+  - `queued`
+  - `running`
+  - `awaiting_approval`
+- 等待审批中的 run 在 reconnect / restart 后不再尝试恢复旧 request，而是失败收口并要求重跑
+- host 已支持默认 `30min` idle TTL 自动回收
+- tool 结果已带显式终态：
+  - `completed`
+  - `failed`
+  - `cancelled`
+- Activity 对 run / tool 的状态说明比之前更明确
+
 ## 当前缺口
 
-### 1. 恢复语义还没完全收口
-
-- recovering 下的 pending approval 恢复还不完整
-- recovering 下的 cancel 语义还没完全明确
-- host 的 idle TTL / 淘汰策略还没做
-
-### 2. 前端自动化不足
+### 1. 前端自动化不足
 
 - 后端测试已经较完整
 - 前端组件 / 交互自动化仍偏弱
 - 缺少黑盒端到端回归
 
-### 3. Activity 聚合还可以继续优化
+### 2. Activity 聚合还可以继续优化
 
 - 重复工具调用仍可聚合得更紧凑
 - run / tool 的状态说明还可以更清晰
 
+### 3. 恢复策略还可以继续深化
+
+- 当前 approval 在 reconnect / restart 后是 fail-and-rerun，不是完整 replay
+- cancel / recovering 还可以继续细化成更完整的终态模型
+- host TTL 目前是固定策略，还没有按 runtime / 负载做差异化
+
 ## 下一步建议
 
 ### P1
-
-- 完成 recovering + approval / cancel 的恢复语义
-- 给 host 增加 idle timeout / 回收
-- 继续收敛 run / tool 状态机
-
-### P2
 
 - 补前端关键回归：
   - 无 agent 空状态
@@ -124,11 +132,16 @@
   - machine 删除级联后的 UI 一致性
   - workspace / profile / activity 关键视图
 
-### P3
+### P2
 
 - 改善 Activity 聚合：
   - 重复 `send_message/check_messages` 归并
-  - dispatch failed / runtime failed / completed 的说明更清楚
+  - `not dispatched / cancelled / failed / completed` 的说明更紧凑
+
+### P3
+
+- 评估是否要持久化 approval request 本体，以支持真正的 approval replay
+- 评估 host TTL 是否需要按 agentType / workspace 活跃度做差异化策略
 
 ### P4
 

@@ -150,7 +150,7 @@ node 本地恢复队列。
 - `conversation_id`
 - `payload_json`
 - `state`
-  - `queued | running`
+  - `queued | running | awaiting_approval`
 - `created_at`
 - `updated_at`
 
@@ -158,6 +158,7 @@ node 本地恢复队列。
 
 - node 收到 dispatch 时落盘
 - node 重启后恢复 pending work
+- 若 pending work 停在 `awaiting_approval`，当前策略是失败收口并要求重新执行
 
 ### conversation_prompt_queue
 

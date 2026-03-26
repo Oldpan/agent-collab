@@ -161,7 +161,17 @@ function replayHistory(
 
       let agentText = '';
       let thinkingText = '';
-      const toolCalls = new Map<string, { name: string; startedAt?: number; output?: string; error?: boolean; endedAt?: number }>();
+      const toolCalls = new Map<
+        string,
+        {
+          name: string;
+          startedAt?: number;
+          output?: string;
+          error?: boolean;
+          status?: 'completed' | 'failed' | 'cancelled';
+          endedAt?: number;
+        }
+      >();
 
       for (const evt of events) {
         try {
@@ -187,10 +197,22 @@ function replayHistory(
             const toolCallId = extractToolCallIdFromUpdate(update) ?? '';
             const existing = toolCalls.get(toolCallId);
             const status = `${update.status ?? update.state ?? update.outcome ?? ''}`.toLowerCase();
-            if (status.includes('done') || status.includes('complete') || status.includes('success') || status.includes('error') || status.includes('fail')) {
+            if (
+              status.includes('done') ||
+              status.includes('complete') ||
+              status.includes('success') ||
+              status.includes('error') ||
+              status.includes('fail') ||
+              status.includes('cancel')
+            ) {
               if (existing) {
                 existing.output = update.output ?? status;
                 existing.error = status.includes('error') || status.includes('fail');
+                existing.status = status.includes('cancel')
+                  ? 'cancelled'
+                  : existing.error
+                    ? 'failed'
+                    : 'completed';
                 existing.endedAt = evt.createdAt;
               }
             }
@@ -209,7 +231,14 @@ function replayHistory(
       for (const [toolCallId, tc] of toolCalls) {
         send({ type: 'tool.call', toolCallId, name: tc.name, input: null, startedAt: tc.startedAt });
         if (tc.output !== undefined) {
-          send({ type: 'tool.result', toolCallId, output: tc.output, error: tc.error, endedAt: tc.endedAt });
+          send({
+            type: 'tool.result',
+            toolCallId,
+            output: tc.output,
+            error: tc.error,
+            status: tc.status,
+            endedAt: tc.endedAt,
+          });
         }
       }
     }

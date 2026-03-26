@@ -13,12 +13,17 @@ export class Executor {
     runToHost = new Map();
     send;
     createHost;
+    hostSweepTimer;
     constructor(params) {
         this.db = params.db;
         this.config = params.config;
         this.toolAuth = new ToolAuth(params.db);
         this.send = params.send;
         this.createHost = params.createHost ?? ((hostParams) => new AgentHost(hostParams));
+        this.hostSweepTimer = setInterval(() => {
+            this.reapIdleHosts();
+        }, this.config.hostSweepIntervalMs);
+        this.hostSweepTimer.unref?.();
     }
     async dispatch(msg, options) {
         const shouldPersist = options?.persist !== false;
@@ -104,6 +109,9 @@ export class Executor {
                     onRunStart: (dispatchMsg) => {
                         updateDispatchState(this.db, dispatchMsg.runId, 'running');
                     },
+                    onAwaitingApproval: (dispatchMsg) => {
+                        updateDispatchState(this.db, dispatchMsg.runId, 'awaiting_approval');
+                    },
                     onRunFinish: (dispatchMsg) => {
                         removeDispatch(this.db, dispatchMsg.runId);
                     },
@@ -130,6 +138,29 @@ export class Executor {
             count: pending.length,
         });
         for (const entry of pending) {
+            if (entry.state === 'awaiting_approval') {
+                this.failApprovalRecovery(entry);
+                continue;
+            }
+            const existingHost = this.hosts.get(entry.hostKey);
+            if (existingHost?.getCurrentRunId() === entry.runId && existingHost.getState() !== 'failed') {
+                log.info('[executor] pending dispatch already attached to live host, skipping redispatch', {
+                    runId: entry.runId,
+                    hostKey: entry.hostKey,
+                    state: entry.state,
+                });
+                this.send({
+                    type: 'run.event',
+                    runId: entry.runId,
+                    conversationId: entry.payload.conversationId,
+                    event: {
+                        type: 'conversation.status',
+                        conversationId: entry.payload.conversationId,
+                        status: 'recovering',
+                    },
+                });
+                continue;
+            }
             const restoredMsg = entry.state === 'running'
                 ? { ...entry.payload, dispatchMode: 'resume' }
                 : entry.payload;
@@ -151,6 +182,42 @@ export class Executor {
                 });
                 removeDispatch(this.db, restoredMsg.runId);
             });
+        }
+    }
+    failApprovalRecovery(entry) {
+        log.warn('[executor] approval request cannot be restored after reconnect/restart', {
+            runId: entry.runId,
+            hostKey: entry.hostKey,
+        });
+        const host = this.hosts.get(entry.hostKey);
+        if (host) {
+            const currentRunId = host.getCurrentRunId();
+            if (currentRunId) {
+                this.runToHost.delete(currentRunId);
+            }
+            host.close();
+            this.hosts.delete(entry.hostKey);
+        }
+        this.runToHost.delete(entry.runId);
+        removeDispatch(this.db, entry.runId);
+        this.send({
+            type: 'run.end',
+            runId: entry.runId,
+            conversationId: entry.payload.conversationId,
+            error: 'Approval request lost during reconnect. Re-run required.',
+        });
+    }
+    reapIdleHosts() {
+        const now = Date.now();
+        for (const [hostKey, host] of this.hosts.entries()) {
+            if (!host.isIdleExpired(now, this.config.hostIdleTimeoutMs))
+                continue;
+            log.info('[executor] reaping idle host', {
+                hostKey,
+                lastSleepAt: host.getLastSleepAt(),
+            });
+            host.close();
+            this.hosts.delete(hostKey);
         }
     }
     async cancelRun(runId) {
@@ -204,6 +271,7 @@ export class Executor {
         }
     }
     close() {
+        clearInterval(this.hostSweepTimer);
         for (const host of this.hosts.values()) {
             host.close();
         }

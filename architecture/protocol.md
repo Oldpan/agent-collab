@@ -28,7 +28,7 @@
 - `tool.call`
   - 含 `toolCallId`、`name`、`input`、`startedAt?`
 - `tool.result`
-  - 含 `toolCallId`、`output`、`error?`、`endedAt?`
+  - 含 `toolCallId`、`output`、`error?`、`status?`、`endedAt?`
 - `approval.request`
 - `error`
 - `history.user_message`
@@ -61,6 +61,7 @@
 
 - 前端会先收到 `conversation.status = recovering`
 - 之后历史事件和 live 事件会继续接到同一 turn 上
+- 但若 node 本地该 run 实际停在 `awaiting_approval`，当前策略不会恢复旧审批 request，而是直接失败收口
 
 ## core ↔ agent-node
 
@@ -159,6 +160,7 @@
 - `agent-node` 与 `core` 断线后不会直接退出
 - 会按指数退避自动重连
 - 重连成功后重新 `node.register`
+- 若 node 本地 pending dispatch 处于 `awaiting_approval`，重连/重启后会以 approval-lost 失败收口，而不是恢复旧审批
 
 ## prompt 调度流程
 
@@ -185,6 +187,7 @@
 - tool：
   - `tool.call.startedAt`
   - `tool.result.endedAt`
+  - `tool.result.status`
 
 历史回放也会补齐这些时间，避免刷新后 duration 漂移。
 
@@ -198,3 +201,9 @@
     - `Node not connected`
     - `Node disconnected during dispatch`
   - 语义是：run 在真正开始执行前就失败，不应显示为 `completed`
+
+前端对 tool 也使用明确终态：
+
+- `completed`
+- `failed`
+- `cancelled`

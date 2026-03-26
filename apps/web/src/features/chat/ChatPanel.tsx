@@ -48,8 +48,9 @@ type ChatPanelProps = {
 
 /** Determine tool display state from LiveToolCall */
 function getToolState(tc: LiveToolCall): ToolState {
-  if (tc.error) return "error";
-  if (tc.completed || tc.output !== undefined) return "result";
+  if (tc.status === "cancelled") return "cancelled";
+  if (tc.status === "failed" || tc.error) return "error";
+  if (tc.status === "completed" || tc.completed || tc.output !== undefined) return "result";
   return "calling";
 }
 

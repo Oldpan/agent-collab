@@ -1,7 +1,6 @@
 import type {
   ConversationInfo,
   CreateConversationRequest,
-  ServerEvent,
   NodeInfoRest,
   AgentInfo,
   CreateAgentRequest,
@@ -38,7 +37,16 @@ export async function deleteConversation(id: string): Promise<void> {
   if (!res.ok) throw new Error(`Failed to delete conversation: ${res.statusText}`);
 }
 
-export async function getHistory(id: string): Promise<ServerEvent[]> {
+export type ConversationRunSummary = {
+  runId: string;
+  promptText: string;
+  startedAt: number;
+  endedAt: number | null;
+  stopReason: string | null;
+  error: string | null;
+};
+
+export async function getHistory(id: string): Promise<ConversationRunSummary[]> {
   const res = await fetch(`${API_BASE}/conversations/${id}/history`);
   if (!res.ok) throw new Error(`Failed to get history: ${res.statusText}`);
   return res.json();

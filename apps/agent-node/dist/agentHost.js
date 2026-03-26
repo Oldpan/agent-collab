@@ -57,6 +57,22 @@ export class AgentHost {
     getWorkspaceRoot() {
         return this.workspaceRoot;
     }
+    hasPendingApproval() {
+        return this.runtime.hasPendingPermission();
+    }
+    isIdleExpired(now, idleTimeoutMs) {
+        if (this.state !== 'idle')
+            return false;
+        if (this.currentRunId)
+            return false;
+        if (this.inbox.length > 0)
+            return false;
+        if (this.hasPendingApproval())
+            return false;
+        if (!this.lastSleepAt)
+            return false;
+        return now - this.lastSleepAt >= idleTimeoutMs;
+    }
     async dispatch(msg) {
         return new Promise((resolve, reject) => {
             if (this.state === 'failed') {
@@ -106,7 +122,11 @@ export class AgentHost {
     }
     async runDispatch(msg) {
         const { runId, conversationId, prompt } = msg;
-        const sink = new NodeSink(runId, conversationId, this.send);
+        const sink = new NodeSink(runId, conversationId, this.send, {
+            onPermissionRequest: () => {
+                this.hooks.onAwaitingApproval?.(msg);
+            },
+        });
         if (msg.dispatchMode === 'resume') {
             log.info('[agent-host] waking existing host', {
                 hostKey: this.hostKey,

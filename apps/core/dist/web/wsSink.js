@@ -29,13 +29,19 @@ export class WsSink {
     async sendUi(event) {
         if (event.kind === 'tool') {
             if (event.stage === 'complete') {
-                const isError = event.status === 'error' || event.status === 'failed';
+                const normalizedStatus = event.status === 'cancelled'
+                    ? 'cancelled'
+                    : event.status === 'error' || event.status === 'failed'
+                        ? 'failed'
+                        : 'completed';
+                const isError = normalizedStatus === 'failed';
                 // 工具执行完成 → 发送 tool.result
                 this.broadcast({
                     type: 'tool.result',
                     toolCallId: event.toolCallId ?? '',
                     output: event.detail ?? event.status ?? 'done',
                     error: isError,
+                    status: normalizedStatus,
                 });
             }
             else {

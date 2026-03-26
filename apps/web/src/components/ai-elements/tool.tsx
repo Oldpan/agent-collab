@@ -23,6 +23,7 @@ import { CodeBlock } from "./code-block";
 export type ToolState =
   | "calling"
   | "result"
+  | "cancelled"
   | "error";
 
 export type ToolProps = ComponentProps<typeof Collapsible>;
@@ -54,6 +55,8 @@ const getStatusIcon = (state: ToolState): ReactNode => {
       return <CheckIcon className="size-3 text-success" />;
     case "error":
       return <XIcon className="size-3 text-destructive" />;
+    case "cancelled":
+      return <XIcon className="size-3 text-zinc-400" />;
   }
 };
 

@@ -401,6 +401,9 @@ export class BindingRuntime {
         });
         return result.ok;
     }
+    hasPendingPermission() {
+        return Boolean(this.pendingPermission);
+    }
     async cancelCurrentRun(runId) {
         if (runId && this.currentRunId !== runId)
             return false;

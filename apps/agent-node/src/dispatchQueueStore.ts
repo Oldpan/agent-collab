@@ -1,7 +1,7 @@
 import type { Db } from '@agent-collab/runtime-acp';
 import type { RunDispatchMsg } from '@agent-collab/protocol';
 
-export type PersistedDispatchState = 'queued' | 'running';
+export type PersistedDispatchState = 'queued' | 'running' | 'awaiting_approval';
 
 export type PersistedDispatch = {
   runId: string;

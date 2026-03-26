@@ -1,9 +1,46 @@
 import { useState, useCallback, useRef, useLayoutEffect } from "react";
 import type { ServerEvent, ClientEvent } from "@agent-collab/protocol";
 import type { LiveMessage, LiveRun, LiveToolCall, PendingApproval, ChatStatus } from "./types";
+import * as api from "@/lib/api";
 
 let nextId = 1;
 const createId = () => `msg-${nextId++}`;
+
+function isDispatchFailureError(error?: string): boolean {
+  return error === "Node not connected" || error === "Node disconnected during dispatch";
+}
+
+function getRunTerminalStatus(params: {
+  stopReason?: string;
+  error?: string;
+}): LiveRun["status"] {
+  if (params.error && isDispatchFailureError(params.error)) return "not_dispatched";
+  if (params.stopReason?.includes("cancel")) return "cancelled";
+  if (params.error) return "failed";
+  return "completed";
+}
+
+function getToolTerminalStatus(params: {
+  turnStatus: LiveRun["status"];
+  toolError?: boolean;
+}): LiveToolCall["status"] {
+  if (params.toolError) return "failed";
+  if (params.turnStatus === "cancelled") return "cancelled";
+  if (params.turnStatus === "failed" || params.turnStatus === "not_dispatched") return "failed";
+  return "completed";
+}
+
+function upsertRun(
+  runs: LiveRun[],
+  runId: string,
+  recipe: (current: LiveRun | undefined) => LiveRun,
+): LiveRun[] {
+  const existingIndex = runs.findIndex((run) => run.id === runId);
+  if (existingIndex < 0) {
+    return [...runs, recipe(undefined)].sort((a, b) => a.startedAt - b.startedAt);
+  }
+  return runs.map((run, index) => (index === existingIndex ? recipe(run) : run));
+}
 
 type UseConversationStreamOptions = {
   conversationId: string | null;
@@ -66,7 +103,14 @@ export function useConversationStream(
   const finalizeCurrentToolCalls = useCallback(() => {
     if (currentToolCallsRef.current.length === 0) return;
     currentToolCallsRef.current = currentToolCallsRef.current.map((tc) =>
-      tc.completed ? tc : { ...tc, completed: true, endedAt: tc.endedAt ?? Date.now() },
+      tc.completed
+        ? tc
+        : {
+            ...tc,
+            completed: true,
+            endedAt: tc.endedAt ?? Date.now(),
+            status: tc.status === "running" ? "completed" : tc.status,
+          },
     );
     // Only update message if there's an active message being built (non-channel mode)
     if (currentMsgIdRef.current) {
@@ -126,10 +170,24 @@ export function useConversationStream(
             currentToolCallsRef.current = [];
             currentMsgIdRef.current = null;
             if (!isReplay) setStatus("streaming");
-            setRuns((prev) => [
-              ...prev,
-              { id: runId, startedAt, toolCalls: [], isActive: !isReplay },
-            ]);
+            setRuns((prev) =>
+              upsertRun(prev, runId, (current) => ({
+                id: runId,
+                startedAt: current?.startedAt ?? startedAt,
+                endedAt: current?.endedAt,
+                toolCalls: current?.toolCalls ?? [],
+                thinking: current?.thinking,
+                isActive: !isReplay,
+                status:
+                  current?.endedAt != null
+                    ? current.status
+                    : current?.status === "recovering"
+                      ? "recovering"
+                      : "running",
+                stopReason: current?.stopReason,
+                error: current?.error,
+              })),
+            );
             break;
           }
           // Start a new assistant message
@@ -188,6 +246,7 @@ export function useConversationStream(
                     input: event.input,
                     completed: false,
                     startedAt: tc.startedAt ?? startedAt,
+                    status: "running",
                   }
                 : tc,
             );
@@ -200,6 +259,7 @@ export function useConversationStream(
                 input: event.input,
                 completed: false,
                 startedAt,
+                status: "running",
               },
             ];
           }
@@ -221,6 +281,7 @@ export function useConversationStream(
         case "tool.result": {
           const endedAt =
             typeof event.endedAt === "number" ? event.endedAt : Date.now();
+          const toolStatus = "status" in event ? event.status : undefined;
           currentToolCallsRef.current = currentToolCallsRef.current.map((tc) =>
             tc.id === event.toolCallId
               ? {
@@ -228,6 +289,12 @@ export function useConversationStream(
                   completed: true,
                   output: event.output,
                   error: event.error,
+                  status:
+                    toolStatus === "cancelled"
+                      ? "cancelled"
+                      : event.error || toolStatus === "failed"
+                        ? "failed"
+                        : "completed",
                   endedAt,
                   startedAt: tc.startedAt ?? endedAt,
                 }
@@ -254,6 +321,12 @@ export function useConversationStream(
             toolName: event.toolName,
             toolArgs: event.toolArgs,
           });
+          if (currentRunIdRef.current) {
+            const runId = currentRunIdRef.current;
+            setRuns((prev) =>
+              prev.map((r) => (r.id === runId ? { ...r, status: "awaiting_approval" } : r)),
+            );
+          }
           break;
         }
 
@@ -263,8 +336,22 @@ export function useConversationStream(
             typeof (event as { endedAt?: unknown }).endedAt === "number"
               ? ((event as { endedAt?: number }).endedAt ?? Date.now())
               : Date.now();
+          const runStatus = getRunTerminalStatus({
+            stopReason: event.stopReason,
+            error: turnError,
+          });
           currentToolCallsRef.current = currentToolCallsRef.current.map((tc) =>
-            tc.completed ? tc : { ...tc, completed: true, endedAt: tc.endedAt ?? endedAt },
+            tc.completed
+              ? tc
+              : {
+                  ...tc,
+                  completed: true,
+                  endedAt: tc.endedAt ?? endedAt,
+                  status: getToolTerminalStatus({
+                    turnStatus: runStatus,
+                    toolError: tc.error,
+                  }),
+                },
           );
           finalizeCurrentToolCalls();
           const msgId = currentMsgIdRef.current;
@@ -286,6 +373,7 @@ export function useConversationStream(
                   ? {
                       ...r,
                       isActive: false,
+                      status: runStatus,
                       endedAt,
                       stopReason: event.stopReason,
                       error: turnError,
@@ -308,10 +396,28 @@ export function useConversationStream(
             setStatus("queued");
           } else if (event.status === "active") {
             setStatus((prev) => (prev === "streaming" ? prev : "submitted"));
+            if (currentRunIdRef.current) {
+              const runId = currentRunIdRef.current;
+              setRuns((prev) =>
+                prev.map((r) => (r.id === runId ? { ...r, status: "running" } : r)),
+              );
+            }
           } else if (event.status === "recovering") {
             setStatus("recovering");
+            if (currentRunIdRef.current) {
+              const runId = currentRunIdRef.current;
+              setRuns((prev) =>
+                prev.map((r) => (r.id === runId ? { ...r, status: "recovering" } : r)),
+              );
+            }
           } else if (event.status === "awaiting_approval") {
             setStatus("awaiting_approval");
+            if (currentRunIdRef.current) {
+              const runId = currentRunIdRef.current;
+              setRuns((prev) =>
+                prev.map((r) => (r.id === runId ? { ...r, status: "awaiting_approval" } : r)),
+              );
+            }
           } else if (event.status === "failed") {
             setStatus("error");
           }
@@ -378,6 +484,8 @@ export function useConversationStream(
 
   // Connect / disconnect WebSocket on conversationId change
   useLayoutEffect(() => {
+    let cancelled = false;
+
     // Reset state
     setMessages([]);
     setRuns([]);
@@ -394,11 +502,40 @@ export function useConversationStream(
       return;
     }
 
+    api
+      .getHistory(conversationId)
+      .then((historyRuns) => {
+        if (cancelled) return;
+        setRuns(
+          historyRuns.map((run) => ({
+            id: `replay-${run.runId}`,
+            startedAt: run.startedAt,
+            endedAt: run.endedAt ?? undefined,
+            toolCalls: [],
+            thinking: undefined,
+            isActive: run.endedAt == null,
+            status:
+              run.endedAt == null
+                ? "running"
+                : getRunTerminalStatus({
+                    stopReason: run.error ? "error" : (run.stopReason ?? "end_turn"),
+                    error: run.error ?? undefined,
+                  }),
+            stopReason: run.error ? "error" : (run.stopReason ?? undefined),
+            error: run.error ?? undefined,
+          })),
+        );
+      })
+      .catch(() => {
+        // Fall back to websocket replay only.
+      });
+
     // Channel mode: load history from REST endpoint before opening WS
     if (isChannelMode) {
       fetch(`/api/conversations/${conversationId}/channel-messages?limit=100`)
         .then((r) => r.json())
         .then((data: { messages?: Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: string }> }) => {
+          if (cancelled) return;
           if (!data.messages) return;
           setMessages(
             data.messages.map((m) => ({
@@ -447,6 +584,7 @@ export function useConversationStream(
     };
 
     return () => {
+      cancelled = true;
       ws.close();
       if (wsRef.current === ws) {
         wsRef.current = null;

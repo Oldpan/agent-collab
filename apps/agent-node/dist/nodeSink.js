@@ -5,10 +5,12 @@ export class NodeSink {
     runId;
     conversationId;
     send;
-    constructor(runId, conversationId, send) {
+    hooks;
+    constructor(runId, conversationId, send, hooks) {
         this.runId = runId;
         this.conversationId = conversationId;
         this.send = send;
+        this.hooks = hooks;
     }
     async sendAgentText(text) {
         this.emitEvent({ type: 'content.delta', text });
@@ -20,6 +22,7 @@ export class NodeSink {
         this.emitEvent({ type: 'thinking.delta', text });
     }
     async requestPermission(req) {
+        this.hooks?.onPermissionRequest?.();
         this.send({
             type: 'permission.request',
             runId: this.runId,
@@ -33,12 +36,18 @@ export class NodeSink {
     async sendUi(event) {
         if (event.kind === 'tool') {
             if (event.stage === 'complete') {
-                const isError = event.status === 'error' || event.status === 'failed';
+                const normalizedStatus = event.status === 'cancelled'
+                    ? 'cancelled'
+                    : event.status === 'error' || event.status === 'failed'
+                        ? 'failed'
+                        : 'completed';
+                const isError = normalizedStatus === 'failed';
                 this.emitEvent({
                     type: 'tool.result',
                     toolCallId: event.toolCallId ?? '',
                     output: event.detail ?? event.status ?? 'done',
                     error: isError,
+                    status: normalizedStatus,
                 });
             }
             else {

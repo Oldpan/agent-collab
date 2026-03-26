@@ -20,6 +20,7 @@ Current private-chat UX:
 - `Profile` shows agent metadata, runtime type, node id, workspace path, memory path, env-var keys, and Claude config dir when applicable.
 - `Activity` shows run history, tool calls, run durations, and tool durations.
 - Dispatch failures such as `Node not connected` are shown as `not dispatched`, not `completed`.
+- Tool calls now carry explicit terminal status: `completed | failed | cancelled`.
 
 Current memory model:
 
@@ -33,6 +34,8 @@ Current runtime state model:
 - Conversation status: `idle | queued | active | recovering | awaiting_approval | failed`
 - Same agent's multiple threads are serialized at the dispatcher level.
 - Node side uses `AgentHost` + inbox + resumable dispatch queue.
+- Idle hosts are reaped automatically after `30min` by default.
+- Approval-pending runs are not restored across reconnect/restart; they fail and must be re-run.
 
 ## Commands
 
@@ -152,6 +155,7 @@ Key pieces:
   - manages hosts
   - persists dispatches into `node_dispatch_queue`
   - restores pending work on restart
+  - reaps idle hosts by TTL
 - `CoreConnection`
   - maintains a long-lived websocket to `core`
   - auto-reconnects with backoff + jitter
@@ -160,6 +164,7 @@ Key pieces:
   - one host per conversation/runtime key
   - keeps runtime, inbox, host state
   - supports `cold_start` and `resume`
+  - exposes idle/pending-approval state for executor-level recovery and reaping
 - `workspaceFs`
   - remote directory listing / file read / reset for agent workspaces
 - `claudeConfig`
@@ -263,6 +268,13 @@ Current behavior:
   - conversation env vars
   - driver defaults
 
+## Current Recovery Semantics
+
+- `recovering` means the system is trying to continue an existing run, not starting a fresh one.
+- `awaiting_approval` is treated as a live runtime condition. If reconnect/restart breaks that continuity, the run is ended with an approval-lost error instead of replaying the old request.
+- `cancel` only targets the current run. It does not clear later queued prompts for the same conversation.
+- Idle hosts are closed by TTL, but conversations, runs, and history stay intact.
+
 ## Database / Migrations
 
 Important schema concepts already in use:
@@ -305,6 +317,7 @@ These have recently existed and are worth remembering:
 
 - Activity duration bugs on replay were caused by missing real timestamps during history replay.
 - `Node not connected` / `Node disconnected during dispatch` runs are now treated as dispatch failures in Activity instead of `completed`.
+- Approval-pending runs cannot currently be replayed after reconnect/restart; they intentionally fail closed and require re-run.
 - Codex may return partial tool activity and then fail with transport errors; UI status should not blindly treat all failed runs as "chat has no useful history".
 - Workspace / memory operations must be treated as regular workspace file operations, not MCP resource reads.
 
@@ -312,6 +325,6 @@ These have recently existed and are worth remembering:
 
 Highest-value remaining items:
 
-- tighten recovering / pending-approval recovery semantics
 - expand frontend automated tests
 - improve Activity aggregation for repetitive tool calls
+- evaluate whether approval requests should ever be fully persisted and replayed instead of fail-and-rerun

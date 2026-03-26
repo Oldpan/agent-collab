@@ -38,13 +38,20 @@ export class WsSink implements OutboundSink {
   async sendUi(event: UiEvent): Promise<void> {
     if (event.kind === 'tool') {
       if (event.stage === 'complete') {
-        const isError = event.status === 'error' || event.status === 'failed';
+        const normalizedStatus =
+          event.status === 'cancelled'
+            ? 'cancelled'
+            : event.status === 'error' || event.status === 'failed'
+              ? 'failed'
+              : 'completed';
+        const isError = normalizedStatus === 'failed';
         // 工具执行完成 → 发送 tool.result
         this.broadcast({
           type: 'tool.result',
           toolCallId: event.toolCallId ?? '',
           output: event.detail ?? event.status ?? 'done',
           error: isError,
+          status: normalizedStatus,
         });
       } else {
         // 工具开始或更新 → 发送 tool.call

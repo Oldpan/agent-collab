@@ -100,6 +100,7 @@ export type ToolResultEvent = {
   toolCallId: string;
   output: string;
   error?: boolean;
+  status?: 'completed' | 'failed' | 'cancelled';
   endedAt?: number;
 };
 

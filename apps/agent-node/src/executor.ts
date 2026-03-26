@@ -18,12 +18,13 @@ import {
   listPendingDispatches,
   removeDispatch,
   updateDispatchState,
+  type PersistedDispatch,
 } from './dispatchQueueStore.js';
 
 type SendFn = (msg: NodeToCore) => void;
 type HostInstance = Pick<
   AgentHost,
-  'dispatch' | 'cancelRun' | 'handlePermissionResponse' | 'close' | 'getState' | 'getCurrentRunId' | 'getLastError' | 'getWorkspaceRoot'
+  'dispatch' | 'cancelRun' | 'handlePermissionResponse' | 'close' | 'getState' | 'getCurrentRunId' | 'getLastError' | 'getWorkspaceRoot' | 'getLastSleepAt' | 'hasPendingApproval' | 'isIdleExpired'
 >;
 type CreateHostFn = (params: ConstructorParameters<typeof AgentHost>[0]) => HostInstance;
 
@@ -35,6 +36,7 @@ export class Executor {
   private readonly runToHost = new Map<string, string>();
   private readonly send: SendFn;
   private readonly createHost: CreateHostFn;
+  private readonly hostSweepTimer: NodeJS.Timeout;
 
   constructor(params: { db: Db; config: AgentNodeConfig; send: SendFn; createHost?: CreateHostFn }) {
     this.db = params.db;
@@ -42,6 +44,10 @@ export class Executor {
     this.toolAuth = new ToolAuth(params.db);
     this.send = params.send;
     this.createHost = params.createHost ?? ((hostParams) => new AgentHost(hostParams));
+    this.hostSweepTimer = setInterval(() => {
+      this.reapIdleHosts();
+    }, this.config.hostSweepIntervalMs);
+    this.hostSweepTimer.unref?.();
   }
 
   async dispatch(msg: RunDispatchMsg, options?: { persist?: boolean }): Promise<void> {
@@ -138,6 +144,9 @@ export class Executor {
           onRunStart: (dispatchMsg) => {
             updateDispatchState(this.db, dispatchMsg.runId, 'running');
           },
+          onAwaitingApproval: (dispatchMsg) => {
+            updateDispatchState(this.db, dispatchMsg.runId, 'awaiting_approval');
+          },
           onRunFinish: (dispatchMsg) => {
             removeDispatch(this.db, dispatchMsg.runId);
           },
@@ -167,6 +176,31 @@ export class Executor {
     });
 
     for (const entry of pending) {
+      if (entry.state === 'awaiting_approval') {
+        this.failApprovalRecovery(entry);
+        continue;
+      }
+
+      const existingHost = this.hosts.get(entry.hostKey);
+      if (existingHost?.getCurrentRunId() === entry.runId && existingHost.getState() !== 'failed') {
+        log.info('[executor] pending dispatch already attached to live host, skipping redispatch', {
+          runId: entry.runId,
+          hostKey: entry.hostKey,
+          state: entry.state,
+        });
+        this.send({
+          type: 'run.event',
+          runId: entry.runId,
+          conversationId: entry.payload.conversationId,
+          event: {
+            type: 'conversation.status',
+            conversationId: entry.payload.conversationId,
+            status: 'recovering',
+          },
+        });
+        continue;
+      }
+
       const restoredMsg: RunDispatchMsg =
         entry.state === 'running'
           ? { ...entry.payload, dispatchMode: 'resume' }
@@ -191,6 +225,45 @@ export class Executor {
         });
         removeDispatch(this.db, restoredMsg.runId);
       });
+    }
+  }
+
+  private failApprovalRecovery(entry: PersistedDispatch): void {
+    log.warn('[executor] approval request cannot be restored after reconnect/restart', {
+      runId: entry.runId,
+      hostKey: entry.hostKey,
+    });
+
+    const host = this.hosts.get(entry.hostKey);
+    if (host) {
+      const currentRunId = host.getCurrentRunId();
+      if (currentRunId) {
+        this.runToHost.delete(currentRunId);
+      }
+      host.close();
+      this.hosts.delete(entry.hostKey);
+    }
+
+    this.runToHost.delete(entry.runId);
+    removeDispatch(this.db, entry.runId);
+    this.send({
+      type: 'run.end',
+      runId: entry.runId,
+      conversationId: entry.payload.conversationId,
+      error: 'Approval request lost during reconnect. Re-run required.',
+    });
+  }
+
+  private reapIdleHosts(): void {
+    const now = Date.now();
+    for (const [hostKey, host] of this.hosts.entries()) {
+      if (!host.isIdleExpired(now, this.config.hostIdleTimeoutMs)) continue;
+      log.info('[executor] reaping idle host', {
+        hostKey,
+        lastSleepAt: host.getLastSleepAt(),
+      });
+      host.close();
+      this.hosts.delete(hostKey);
     }
   }
 
@@ -248,6 +321,7 @@ export class Executor {
   }
 
   close(): void {
+    clearInterval(this.hostSweepTimer);
     for (const host of this.hosts.values()) {
       host.close();
     }

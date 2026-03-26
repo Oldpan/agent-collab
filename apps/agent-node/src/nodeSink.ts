@@ -11,6 +11,9 @@ export class NodeSink implements OutboundSink {
     private readonly runId: string,
     private readonly conversationId: string,
     private readonly send: SendFn,
+    private readonly hooks?: {
+      onPermissionRequest?: () => void;
+    },
   ) {}
 
   async sendAgentText(text: string): Promise<void> {
@@ -26,6 +29,7 @@ export class NodeSink implements OutboundSink {
   }
 
   async requestPermission(req: PermissionUiRequest): Promise<void> {
+    this.hooks?.onPermissionRequest?.();
     this.send({
       type: 'permission.request',
       runId: this.runId,
@@ -40,12 +44,19 @@ export class NodeSink implements OutboundSink {
   async sendUi(event: UiEvent): Promise<void> {
     if (event.kind === 'tool') {
       if (event.stage === 'complete') {
-        const isError = event.status === 'error' || event.status === 'failed';
+        const normalizedStatus =
+          event.status === 'cancelled'
+            ? 'cancelled'
+            : event.status === 'error' || event.status === 'failed'
+              ? 'failed'
+              : 'completed';
+        const isError = normalizedStatus === 'failed';
         this.emitEvent({
           type: 'tool.result',
           toolCallId: event.toolCallId ?? '',
           output: event.detail ?? event.status ?? 'done',
           error: isError,
+          status: normalizedStatus,
         });
       } else {
         this.emitEvent({

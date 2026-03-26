@@ -525,6 +525,10 @@ export class BindingRuntime {
     return result.ok;
   }
 
+  hasPendingPermission(): boolean {
+    return Boolean(this.pendingPermission);
+  }
+
   async cancelCurrentRun(runId?: string): Promise<boolean> {
     if (runId && this.currentRunId !== runId) return false;
     if (!this.currentRunId || !this.acpSessionId) return false;
