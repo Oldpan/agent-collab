@@ -5,7 +5,7 @@ import fastifyWebSocket from '@fastify/websocket';
 
 import type { Db } from '@agent-collab/runtime-acp';
 import { log, finishRun } from '@agent-collab/runtime-acp';
-import type { CreateConversationRequest, CreateChannelRequest, CreateAgentRequest, UpdateAgentRequest, CreateMachineRequest } from '@agent-collab/protocol';
+import type { CreateConversationRequest, CreateChannelRequest, UpdateChannelRequest, CreateAgentRequest, UpdateAgentRequest, CreateMachineRequest } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
 import { handleWebSocket, broadcast } from './wsHandler.js';
 import { handleNodeWebSocket } from './nodeWsHandler.js';
@@ -340,6 +340,7 @@ export async function startServer(params: {
       const channel = conversationManager.createChannel({
         name: body.name,
         workspacePath: body.workspacePath,
+        description: body.description,
       });
       reply.code(201);
       return channel;
@@ -348,6 +349,38 @@ export async function startServer(params: {
       return { error: 'Channel name already exists' };
     }
   });
+
+  // Update channel (e.g. description)
+  app.patch<{ Params: { id: string }; Body: UpdateChannelRequest }>(
+    '/api/channels/:id',
+    async (req, reply) => {
+      const updated = conversationManager.updateChannel(req.params.id, req.body ?? {});
+      if (!updated) { reply.code(404); return { error: 'Not found' }; }
+      return updated;
+    },
+  );
+
+  // Join agent to a channel
+  app.post<{ Params: { id: string; channelId: string } }>(
+    '/api/agents/:id/channels/:channelId',
+    async (req, reply) => {
+      const agent = conversationManager.getAgent(req.params.id);
+      if (!agent) { reply.code(404); return { error: 'Agent not found' }; }
+      const channel = conversationManager.getChannel(req.params.channelId);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      conversationManager.joinChannel(req.params.id, req.params.channelId);
+      reply.code(204);
+    },
+  );
+
+  // Leave agent from a channel
+  app.delete<{ Params: { id: string; channelId: string } }>(
+    '/api/agents/:id/channels/:channelId',
+    async (req, reply) => {
+      conversationManager.leaveChannel(req.params.id, req.params.channelId);
+      reply.code(204);
+    },
+  );
 
   // List conversations in a channel
   app.get<{ Params: { id: string } }>('/api/channels/:id/conversations', async (req, reply) => {
@@ -592,6 +625,79 @@ export async function startServer(params: {
   }
 
   registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel);
+
+  // ─── User-facing Task routes ───
+
+  // GET /api/channels/:id/tasks
+  app.get<{ Params: { id: string }; Querystring: { status?: string } }>(
+    '/api/channels/:id/tasks',
+    async (req, reply) => {
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const rows = req.query.status && req.query.status !== 'all'
+        ? db.prepare(
+            `SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
+                    title, description, status,
+                    claimed_by_agent_id as assigneeId, claimed_by_name as assigneeName,
+                    created_at as createdAt, updated_at as updatedAt
+             FROM tasks WHERE channel_id = ? AND status = ? ORDER BY task_number ASC`,
+          ).all(req.params.id, req.query.status)
+        : db.prepare(
+            `SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
+                    title, description, status,
+                    claimed_by_agent_id as assigneeId, claimed_by_name as assigneeName,
+                    created_at as createdAt, updated_at as updatedAt
+             FROM tasks WHERE channel_id = ? ORDER BY task_number ASC`,
+          ).all(req.params.id);
+      return { tasks: rows };
+    },
+  );
+
+  // POST /api/channels/:id/tasks
+  app.post<{ Params: { id: string }; Body: { title: string; description?: string } }>(
+    '/api/channels/:id/tasks',
+    async (req, reply) => {
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const { title, description } = req.body ?? {};
+      if (!title) { reply.code(400); return { error: 'title is required' }; }
+      const now = Date.now();
+      const taskId = randomUUID();
+      const seqRow = db.prepare('SELECT MAX(task_number) as maxNum FROM tasks WHERE channel_id = ?').get(req.params.id) as { maxNum: number | null };
+      const taskNumber = (seqRow.maxNum ?? 0) + 1;
+      db.prepare(
+        `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, 'todo', ?, ?)`,
+      ).run(taskId, req.params.id, taskNumber, title, description ?? null, now, now);
+      reply.code(201);
+      return { taskId, channelId: req.params.id, taskNumber, title, description, status: 'todo', assigneeId: null, assigneeName: null, createdAt: now, updatedAt: now };
+    },
+  );
+
+  // PATCH /api/channels/:id/tasks/:num/status
+  app.patch<{ Params: { id: string; num: string }; Body: { status: string } }>(
+    '/api/channels/:id/tasks/:num/status',
+    async (req, reply) => {
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const taskNumber = Number(req.params.num);
+      const { status } = req.body ?? {};
+      const validStatuses = ['todo', 'in_progress', 'in_review', 'done'];
+      if (!validStatuses.includes(status)) { reply.code(400); return { error: `Invalid status: ${status}` }; }
+      const now = Date.now();
+      const result = db.prepare(
+        `UPDATE tasks SET status = ?, updated_at = ? WHERE channel_id = ? AND task_number = ?`,
+      ).run(status, now, req.params.id, taskNumber);
+      if (result.changes === 0) { reply.code(404); return { error: 'Task not found' }; }
+      const row = db.prepare(
+        `SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
+                title, description, status, claimed_by_agent_id as assigneeId,
+                claimed_by_name as assigneeName, created_at as createdAt, updated_at as updatedAt
+         FROM tasks WHERE channel_id = ? AND task_number = ?`,
+      ).get(req.params.id, taskNumber);
+      return row;
+    },
+  );
 
   // ─── Node REST routes ───
 

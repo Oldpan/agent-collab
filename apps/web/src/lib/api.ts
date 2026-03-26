@@ -6,6 +6,7 @@ import type {
   CreateAgentRequest,
   UpdateAgentRequest,
   ChannelInfo,
+  TaskInfo,
   MachineInfo,
   CreateMachineRequest,
   AgentWorkspaceListResult,
@@ -72,7 +73,7 @@ export type ChannelMessage = {
   replyCount?: number;
 };
 
-export async function createChannel(req: { name: string; workspacePath?: string }): Promise<ChannelInfo> {
+export async function createChannel(req: { name: string; workspacePath?: string; description?: string }): Promise<ChannelInfo> {
   const res = await fetch(`${API_BASE}/channels`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -80,6 +81,70 @@ export async function createChannel(req: { name: string; workspacePath?: string 
   });
   if (!res.ok) throw new Error(`Failed to create channel: ${res.statusText}`);
   return res.json();
+}
+
+export async function updateChannel(channelId: string, req: { description?: string }): Promise<ChannelInfo> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) throw new Error(`Failed to update channel: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getChannelTasks(
+  channelId: string,
+  status?: TaskInfo["status"] | "all",
+): Promise<{ tasks: TaskInfo[] }> {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks${suffix}`);
+  if (!res.ok) throw new Error(`Failed to get channel tasks: ${res.statusText}`);
+  return res.json();
+}
+
+export async function createChannelTask(
+  channelId: string,
+  title: string,
+  description?: string,
+): Promise<TaskInfo> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title, ...(description ? { description } : {}) }),
+  });
+  if (!res.ok) throw new Error(`Failed to create channel task: ${res.statusText}`);
+  return res.json();
+}
+
+export async function updateTaskStatus(
+  channelId: string,
+  taskNumber: number,
+  status: TaskInfo["status"],
+): Promise<TaskInfo> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks/${taskNumber}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) throw new Error(`Failed to update task status: ${res.statusText}`);
+  return res.json();
+}
+
+export async function joinAgentChannel(agentId: string, channelId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/agents/${agentId}/channels/${encodeURIComponent(channelId)}`, {
+    method: 'POST',
+  });
+  if (!res.ok) throw new Error(`Failed to join channel: ${res.statusText}`);
+}
+
+export async function leaveAgentChannel(agentId: string, channelId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/agents/${agentId}/channels/${encodeURIComponent(channelId)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) throw new Error(`Failed to leave channel: ${res.statusText}`);
 }
 
 export async function getChannelMessages(

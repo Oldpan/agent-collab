@@ -277,6 +277,7 @@ export type AgentInfo = {
     name: string;
     agentType: AgentType;
     channelId: string;
+    channelIds: string[];
     systemPrompt: string;
     envVars?: Record<string, string>;
     disabledToolKinds?: AgentPermissionKind[];
@@ -306,12 +307,29 @@ export type ChannelInfo = {
     channelId: string;
     name: string;
     workspacePath: string | null;
+    description?: string;
     createdAt: number;
     updatedAt: number;
 };
 export type CreateChannelRequest = {
     name: string;
     workspacePath?: string;
+    description?: string;
+};
+export type UpdateChannelRequest = {
+    description?: string;
+};
+export type TaskInfo = {
+    taskId: string;
+    channelId: string;
+    taskNumber: number;
+    title: string;
+    description?: string;
+    status: 'todo' | 'in_progress' | 'in_review' | 'done';
+    assigneeId?: string | null;
+    assigneeName?: string | null;
+    createdAt: number;
+    updatedAt: number;
 };
 export type NodeInfoRest = {
     nodeId: string;

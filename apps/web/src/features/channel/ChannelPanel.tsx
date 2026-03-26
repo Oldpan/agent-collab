@@ -14,6 +14,7 @@ import {
   streamdownRootClass,
   escapeHtmlOutsideCodeBlocks,
 } from "@/components/ai-elements/streamdown";
+import { TasksTab } from "./TasksTab";
 
 type ChannelPanelProps = {
   channel: ChannelInfo;
@@ -324,11 +325,11 @@ function MembersTab({ members }: { members: AgentInfo[] }) {
 }
 
 export function ChannelPanel({ channel, agents, onOpenSidebar }: ChannelPanelProps) {
-  const [activeTab, setActiveTab] = useState<"chat" | "members">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "members">("chat");
   const { messages, sendMessage, loadMore, hasMore } = useChannelStream(channel.channelId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const channelMembers = useMemo(
-    () => agents.filter((a) => a.channelId === channel.channelId),
+    () => agents.filter((a) => a.channelIds?.includes(channel.channelId) ?? false),
     [agents, channel.channelId],
   );
   const [openThread, setOpenThread] = useState<ChannelMessage | null>(null);
@@ -368,13 +369,17 @@ export function ChannelPanel({ channel, agents, onOpenSidebar }: ChannelPanelPro
                 {channel.name}
               </h2>
             </div>
-            <div className="mt-0.5 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
-              {channelMembers.length === 0
-                ? "No agents"
-                : channelMembers.length === 1
-                ? "1 agent"
-                : `${channelMembers.length} agents`}
-            </div>
+            {channel.description ? (
+              <div className="mt-0.5 text-[11px] text-zinc-500 truncate">{channel.description}</div>
+            ) : (
+              <div className="mt-0.5 text-[11px] uppercase tracking-[0.18em] text-zinc-500">
+                {channelMembers.length === 0
+                  ? "No agents"
+                  : channelMembers.length === 1
+                  ? "1 agent"
+                  : `${channelMembers.length} agents`}
+              </div>
+            )}
           </div>
         </div>
 
@@ -397,6 +402,18 @@ export function ChannelPanel({ channel, agents, onOpenSidebar }: ChannelPanelPro
             size="sm"
             className={cn(
               "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+              activeTab === "tasks"
+                ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]"
+                : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+            )}
+            onClick={() => setActiveTab("tasks")}
+          >
+            Tasks
+          </Button>
+          <Button
+            size="sm"
+            className={cn(
+              "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
               activeTab === "members"
                 ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]"
                 : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
@@ -410,7 +427,9 @@ export function ChannelPanel({ channel, agents, onOpenSidebar }: ChannelPanelPro
       </div>
 
       {/* Content */}
-      {activeTab === "members" ? (
+      {activeTab === "tasks" ? (
+        <TasksTab channelId={channel.channelId} />
+      ) : activeTab === "members" ? (
         <MembersTab members={channelMembers} />
       ) : (
         <div className="flex flex-1 overflow-hidden">

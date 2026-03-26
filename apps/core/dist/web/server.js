@@ -300,6 +300,35 @@ export async function startServer(params) {
             return { error: 'Channel name already exists' };
         }
     });
+    // Update channel (e.g. description)
+    app.patch('/api/channels/:id', async (req, reply) => {
+        const updated = conversationManager.updateChannel(req.params.id, req.body ?? {});
+        if (!updated) {
+            reply.code(404);
+            return { error: 'Not found' };
+        }
+        return updated;
+    });
+    // Join agent to a channel
+    app.post('/api/agents/:id/channels/:channelId', async (req, reply) => {
+        const agent = conversationManager.getAgent(req.params.id);
+        if (!agent) {
+            reply.code(404);
+            return { error: 'Agent not found' };
+        }
+        const channel = conversationManager.getChannel(req.params.channelId);
+        if (!channel) {
+            reply.code(404);
+            return { error: 'Channel not found' };
+        }
+        conversationManager.joinChannel(req.params.id, req.params.channelId);
+        reply.code(204);
+    });
+    // Leave agent from a channel
+    app.delete('/api/agents/:id/channels/:channelId', async (req, reply) => {
+        conversationManager.leaveChannel(req.params.id, req.params.channelId);
+        reply.code(204);
+    });
     // List conversations in a channel
     app.get('/api/channels/:id/conversations', async (req, reply) => {
         const channel = conversationManager.getChannel(req.params.id);
@@ -317,16 +346,28 @@ export async function startServer(params) {
             return { error: 'Channel not found' };
         }
         const limit = Math.min(Number(req.query.limit ?? 50), 200);
-        const rows = db.prepare(`SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
-                cm.content, cm.created_at as createdAt,
-                COUNT(replies.message_id) as replyCount
-         FROM channel_messages cm
-         LEFT JOIN channel_messages replies
-           ON replies.channel_id = cm.channel_id
-           AND replies.thread_root_id = SUBSTR(cm.message_id, 1, 8)
-         WHERE cm.channel_id = ? AND cm.thread_root_id IS NULL
-         GROUP BY cm.message_id
-         ORDER BY cm.seq DESC LIMIT ?`).all(req.params.id, limit);
+        const before = req.query.before != null ? Number(req.query.before) : null;
+        const rows = (before != null
+            ? db.prepare(`SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
+                    cm.content, cm.created_at as createdAt, cm.seq,
+                    COUNT(replies.message_id) as replyCount
+             FROM channel_messages cm
+             LEFT JOIN channel_messages replies
+               ON replies.channel_id = cm.channel_id
+               AND replies.thread_root_id = SUBSTR(cm.message_id, 1, 8)
+             WHERE cm.channel_id = ? AND cm.thread_root_id IS NULL AND cm.seq < ?
+             GROUP BY cm.message_id
+             ORDER BY cm.seq DESC LIMIT ?`).all(req.params.id, before, limit)
+            : db.prepare(`SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
+                    cm.content, cm.created_at as createdAt, cm.seq,
+                    COUNT(replies.message_id) as replyCount
+             FROM channel_messages cm
+             LEFT JOIN channel_messages replies
+               ON replies.channel_id = cm.channel_id
+               AND replies.thread_root_id = SUBSTR(cm.message_id, 1, 8)
+             WHERE cm.channel_id = ? AND cm.thread_root_id IS NULL
+             GROUP BY cm.message_id
+             ORDER BY cm.seq DESC LIMIT ?`).all(req.params.id, limit));
         return {
             messages: rows.reverse().map((r) => ({
                 id: r.id,
@@ -334,6 +375,7 @@ export async function startServer(params) {
                 senderType: r.senderType,
                 content: r.content,
                 createdAt: new Date(r.createdAt).toISOString(),
+                seq: r.seq,
                 replyCount: r.replyCount,
             })),
         };
@@ -346,18 +388,27 @@ export async function startServer(params) {
             return { error: 'Channel not found' };
         }
         const limit = Math.min(Number(req.query.limit ?? 100), 200);
-        const rows = db.prepare(`SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                content, created_at as createdAt
-         FROM channel_messages
-         WHERE channel_id = ? AND thread_root_id = ?
-         ORDER BY seq ASC LIMIT ?`).all(req.params.id, req.params.shortId, limit);
+        const before = req.query.before != null ? Number(req.query.before) : null;
+        const rows = (before != null
+            ? db.prepare(`SELECT message_id as id, sender_name as senderName, sender_type as senderType,
+                    content, created_at as createdAt, seq
+             FROM channel_messages
+             WHERE channel_id = ? AND thread_root_id = ? AND seq < ?
+             ORDER BY seq DESC LIMIT ?`).all(req.params.id, req.params.shortId, before, limit)
+            : db.prepare(`SELECT message_id as id, sender_name as senderName, sender_type as senderType,
+                    content, created_at as createdAt, seq
+             FROM channel_messages
+             WHERE channel_id = ? AND thread_root_id = ?
+             ORDER BY seq ASC LIMIT ?`).all(req.params.id, req.params.shortId, limit));
+        const ordered = before != null ? rows.reverse() : rows;
         return {
-            messages: rows.map((r) => ({
+            messages: ordered.map((r) => ({
                 id: r.id,
                 senderName: r.senderName,
                 senderType: r.senderType,
                 content: r.content,
                 createdAt: new Date(r.createdAt).toISOString(),
+                seq: r.seq,
                 threadRootId: req.params.shortId,
             })),
         };
@@ -391,27 +442,40 @@ export async function startServer(params) {
             },
         };
         broadcastToChannel(req.params.id, event);
-        // @mention: parse @agentName and wake up mentioned channel members
+        // Thread reply: notify the agent whose message was replied to
+        if (threadRootId) {
+            const rootMsg = db.prepare(`SELECT sender_id, sender_type FROM channel_messages
+           WHERE channel_id = ? AND substr(message_id, 1, 8) = ?
+           LIMIT 1`).get(req.params.id, threadRootId);
+            if (rootMsg?.sender_type === 'agent') {
+                const conv = conversationManager.openAgentThread(rootMsg.sender_id);
+                if (conv) {
+                    conversationManager.submitPrompt(conv.id, `[System: Your message in #${channel.name} received a reply from ${senderName}. Call check_messages with target "#${channel.name}:${threadRootId}" to read the thread.]`).catch(() => { });
+                }
+            }
+        }
+        // Notify all agents in the channel: @mentioned agents get checkpoint reset; others just get woken up
         void (async () => {
             const mentionRegex = /@([a-zA-Z0-9_-]+)/g;
             const mentioned = new Set();
             let m;
             while ((m = mentionRegex.exec(content)) !== null)
                 mentioned.add(m[1].toLowerCase());
-            if (mentioned.size === 0)
-                return;
             const channelAgents = conversationManager.listAgents(req.params.id);
             for (const agent of channelAgents) {
-                if (!mentioned.has(agent.name.toLowerCase()))
-                    continue;
-                // Ensure checkpoint is behind the new message so check_messages returns it
-                db.prepare(`INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
-             VALUES(?, ?, ?)
-             ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`).run(agent.agentId, req.params.id, seq - 1);
-                // Wake up the agent via its primary conversation
+                const isMentioned = mentioned.has(agent.name.toLowerCase());
+                if (isMentioned) {
+                    // Ensure checkpoint is behind the new message so check_messages returns it
+                    db.prepare(`INSERT INTO agent_message_checkpoints(agent_id, channel_id, last_seq)
+               VALUES(?, ?, ?)
+               ON CONFLICT(agent_id, channel_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`).run(agent.agentId, req.params.id, seq - 1);
+                }
                 const conv = conversationManager.openAgentThread(agent.agentId);
                 if (conv) {
-                    conversationManager.submitPrompt(conv.id, `[System: You were @mentioned in #${channel.name} by ${senderName}. Call check_messages to read the message.]`).catch(() => { });
+                    const prompt = isMentioned
+                        ? `[System: You were @mentioned in #${channel.name} by ${senderName}. Call check_messages to read the message.]`
+                        : `[System: New message in #${channel.name} from ${senderName}. Call check_messages to read new messages.]`;
+                    conversationManager.submitPrompt(conv.id, prompt).catch(() => { });
                 }
             }
         })();

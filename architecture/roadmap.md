@@ -103,6 +103,24 @@
   - `cancelled`
 - Activity 对 run / tool 的状态说明比之前更明确
 
+### 12. Channel 与任务看板第一版
+
+- agent 的公共频道关系已收口为：
+  - 固定私聊入口
+  - `0..N` 个 channel 订阅
+- `channel.description` 已落库并打通到前后端
+- `list_server` 中的：
+  - `joined`
+  - `humans`
+  已有基础实现
+- ChannelPanel 已新增 `Tasks` tab
+- task board 前端基础版已落地：
+  - 按状态分组
+  - 新建任务
+  - 推进状态
+  - `done` 默认折叠
+- assignee 当前只读展示，用户侧分配尚未开放
+
 ## 当前缺口
 
 ### 1. 前端自动化不足
@@ -121,6 +139,13 @@
 - 当前 approval 在 reconnect / restart 后是 fail-and-rerun，不是完整 replay
 - cancel / recovering 还可以继续细化成更完整的终态模型
 - host TTL 目前是固定策略，还没有按 runtime / 负载做差异化
+
+### 4. Channel 协作仍是基础版
+
+- task board 还没有用户侧 assign / unassign
+- 频道描述当前只有数据链路，编辑入口还不完整
+- `list_server` / 多频道订阅虽然可用，但还没做完整的产品打磨
+- DM Thread UI 已按当前产品模型 defer
 
 ## 下一步建议
 
@@ -145,5 +170,7 @@
 
 ### P4
 
-- 重新推进 channel 中 `@agent` 的 branch thread 产品路径
-- 在 direct chat 与 channel branch 之间形成清晰分层
+- 给 task board 补用户侧任务分配能力
+- 补 channel description 的前端编辑入口
+- 继续推进 channel 中 `@agent` 的 branch thread 产品路径
+- 维持 direct chat 单主 thread，不恢复 DM thread UI

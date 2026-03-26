@@ -14,6 +14,7 @@ Agent Collab 当前是一套 **remote-only** 的多 Agent 协作平台：
 - 私聊默认只有一个主 thread
 - `Thread` 是该 agent 下的会话/任务分支
 - `Channel` 仍保留在模型里，但 direct chat 不再依赖 channel
+- 公共频道关系按“固定私聊入口 + 多频道订阅”建模，不再要求 home channel 作为产品语义
 
 ## 当前架构
 
@@ -91,6 +92,9 @@ Agent Collab 当前是一套 **remote-only** 的多 Agent 协作平台：
   - 左树右预览，读取远端 node 上的 workspace
 - `AgentProfilePanel`
   - 显示 runtime 类型、node、workspace、memory 路径、env vars keys、Claude config dir
+- `ChannelPanel`
+  - 当前包含 `Chat / Tasks / Members`
+  - `Tasks` 已支持基础版任务看板
 
 ## 执行模型
 
@@ -179,6 +183,21 @@ agent 详情中的基础信息集中在 `Profile`：
 - local memory path
 - env vars key 列表
 - Claude config dir（仅 Claude）
+
+### Channel / Tasks
+
+当前 channel 产品能力是基础版：
+
+- agent 可加入多个 channel
+- `channel.description` 已存在并可被前端展示
+- channel chat 支持消息、thread reply、`@mention`
+- `Tasks` tab 已支持：
+  - 任务列表
+  - 按状态分组
+  - 新建任务
+  - 推进状态
+- assignee 当前只读展示，不支持用户侧分配
+- DM Thread UI 已按当前产品模型暂缓，不在 direct chat 中继续扩展 thread
 
 ### Reset
 

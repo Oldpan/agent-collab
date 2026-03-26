@@ -21,10 +21,10 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('schema_version 应为最新版本 22', () => {
+  it('schema_version 应为最新版本 23', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBe(22);
+    expect(row.version).toBe(23);
     db.close();
   });
 
@@ -72,6 +72,18 @@ describe('migrations', () => {
     const db = createTestDb();
     const agentCols = db.prepare("PRAGMA table_info('agents')").all() as Array<{ name: string }>;
     expect(agentCols.map((c) => c.name)).toContain('disabled_tool_kinds');
+    db.close();
+  });
+
+  it('agent_channel_memberships 表应存在且 channels 含 description 列', () => {
+    const db = createTestDb();
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all() as Array<{ name: string }>;
+    expect(tables.map((t) => t.name)).toContain('agent_channel_memberships');
+
+    const channelCols = db.prepare("PRAGMA table_info('channels')").all() as Array<{ name: string }>;
+    expect(channelCols.map((c) => c.name)).toContain('description');
     db.close();
   });
 

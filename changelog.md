@@ -53,3 +53,17 @@
 - 当前私聊主线程默认目标为 `dm:@User`；branch thread 默认目标为当前 `#channel:shortid`。
 - 仍然保留显式 `target` 覆盖，只有 agent 想跨会话或跨 channel 发送时才需要手动指定。
 - 这次改动的目的，是减少 agent 因误判 DM 目标而重复补发消息的情况。
+
+## 2026-03-26 (agent channel memberships)
+
+- Agent 的 channel 关系开始按“DM 永远存在 + 0 到 N 个 channel 订阅”收口，前端不再把 `home channel` 当成必需概念。
+- `AgentDetailPanel` 的频道编辑改成纯 checkbox 订阅列表，不再有 `home / set home` 交互，也允许 agent 离开全部公共频道。
+- `ConversationManager.leaveChannel` 现在允许离开任意 membership；频道成员展示和 agent 内部收件箱也只基于真实 `channelIds`，不再偷偷 fallback 到旧 `channelId`。
+- `createChannel` 这条链同时补齐了 `description` 透传，避免协议层已有字段但创建时被静默丢弃。
+
+## 2026-03-26 (channel tasks tab)
+
+- ChannelPanel 新增 `Tasks` tab，先落地基础版 task board。
+- 前端接入公开 task API：支持按频道拉任务、新建任务、推进状态 `todo -> in_progress -> in_review -> done`。
+- `done` 分组默认折叠；assignee 暂时只读展示，不提供用户侧分配交互。
+- 原计划里的 DM Thread UI 暂缓，保持当前“私聊单主 thread、分支只在 channel 内出现”的产品语义。

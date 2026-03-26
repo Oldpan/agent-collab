@@ -7,6 +7,7 @@ import { AgentEnvVarsEditor } from "./AgentEnvVarsEditor";
 import { AgentPermissionSettings } from "./AgentPermissionSettings";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useChannels } from "@/hooks/useChannels";
+import { joinAgentChannel, leaveAgentChannel } from "@/lib/api";
 
 type Props = {
   agent: AgentInfo;
@@ -19,7 +20,9 @@ type Props = {
 
 export function AgentDetailPanel({ agent, onUpdate, onRestart, onClearChat, onReset, onClose }: Props) {
   const [name, setName] = useState(agent.name);
-  const [channelId, setChannelId] = useState(agent.channelId);
+  const [joinedChannelIds, setJoinedChannelIds] = useState<Set<string>>(
+    new Set(agent.channelIds && agent.channelIds.length > 0 ? agent.channelIds : [agent.channelId]),
+  );
   const [envVars, setEnvVars] = useState<Record<string, string> | undefined>(agent.envVars);
   const [disabledToolKinds, setDisabledToolKinds] = useState(agent.disabledToolKinds);
   const [saving, setSaving] = useState(false);
@@ -49,12 +52,27 @@ export function AgentDetailPanel({ agent, onUpdate, onRestart, onClearChat, onRe
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
-      await onUpdate({ name, envVars, disabledToolKinds, channelId });
+      const prevIds = new Set(agent.channelIds && agent.channelIds.length > 0 ? agent.channelIds : [agent.channelId]);
+      const toJoin = [...joinedChannelIds].filter((id) => !prevIds.has(id));
+      const toLeave = [...prevIds].filter((id) => !joinedChannelIds.has(id));
+      await Promise.all([
+        onUpdate({ name, envVars, disabledToolKinds }),
+        ...toJoin.map((id) => joinAgentChannel(agent.agentId, id)),
+        ...toLeave.map((id) => leaveAgentChannel(agent.agentId, id)),
+      ]);
       onClose();
     } finally {
       setSaving(false);
     }
-  }, [disabledToolKinds, envVars, name, onUpdate, onClose]);
+  }, [agent.agentId, agent.channelId, agent.channelIds, disabledToolKinds, envVars, joinedChannelIds, name, onUpdate, onClose]);
+
+  const toggleChannel = useCallback((id: string) => {
+    setJoinedChannelIds((prev) => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  }, []);
 
   const handleRestart = useCallback(async () => {
     openDialog({
@@ -173,19 +191,29 @@ export function AgentDetailPanel({ agent, onUpdate, onRestart, onClearChat, onRe
           />
         </div>
 
-        {/* Channel assignment */}
+        {/* Channel membership */}
         {channels.length > 0 && (
           <div className="space-y-0.5">
-            <label className="text-[10px] text-zinc-500">Channel</label>
-            <select
-              value={channelId}
-              onChange={(e) => setChannelId(e.target.value)}
-              className="w-full rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs"
-            >
-              {channels.map((c) => (
-                <option key={c.channelId} value={c.channelId}>#{c.name}</option>
-              ))}
-            </select>
+            <label className="text-[10px] text-zinc-500">Channels</label>
+            <div className="max-h-28 overflow-y-auto rounded-sm border-2 border-zinc-900 bg-white p-1">
+              {channels.map((c) => {
+                const isJoined = joinedChannelIds.has(c.channelId);
+                return (
+                  <label
+                    key={c.channelId}
+                    className="flex items-center gap-1.5 px-1 py-0.5 text-xs cursor-pointer rounded hover:bg-zinc-50"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={isJoined}
+                      onChange={() => toggleChannel(c.channelId)}
+                      className="size-3 shrink-0"
+                    />
+                    <span className="truncate">#{c.name}</span>
+                  </label>
+                );
+              })}
+            </div>
           </div>
         )}
 

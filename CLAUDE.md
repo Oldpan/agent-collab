@@ -22,6 +22,19 @@ Current private-chat UX:
 - Dispatch failures such as `Node not connected` are shown as `not dispatched`, not `completed`.
 - Tool calls now carry explicit terminal status: `completed | failed | cancelled`.
 
+Current channel UX:
+
+- Agents keep one private chat entry plus `0..N` public channel subscriptions.
+- `home channel` is no longer treated as a product concept, even though compatibility fields still exist in data.
+- `ChannelPanel` now has `Chat / Tasks / Members`.
+- The `Tasks` tab is implemented as a basic task board:
+  - grouped by status
+  - create task
+  - advance task status
+  - collapse done by default
+- Task assignee is currently read-only in the UI.
+- DM thread UI is intentionally deferred; private chat remains single-threaded.
+
 Current memory model:
 
 - `Platform Memory` has been removed.
@@ -204,6 +217,7 @@ Key UI pieces:
 - Private chat uses one primary direct thread.
 - Additional branch threads are reserved for channel-style workflows.
 - Direct chat does not expose manual multi-thread branching anymore.
+- Public channel presence is modeled as subscriptions, not a required home channel.
 
 ### Reset semantics
 

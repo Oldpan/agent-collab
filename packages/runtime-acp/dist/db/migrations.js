@@ -1,4 +1,4 @@
-const LATEST_VERSION = 22;
+const LATEST_VERSION = 23;
 export function migrate(db) {
     db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -401,5 +401,29 @@ export function migrate(db) {
         }
         db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_messages_thread ON channel_messages(channel_id, thread_root_id);`);
         db.exec(`UPDATE schema_version SET version = 22;`);
+    }
+    if (current < 23) {
+        db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_channel_memberships (
+        agent_id   TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        is_home    INTEGER NOT NULL DEFAULT 0,
+        joined_at  INTEGER NOT NULL,
+        PRIMARY KEY (agent_id, channel_id)
+      );
+      CREATE INDEX IF NOT EXISTS idx_memberships_channel
+        ON agent_channel_memberships(channel_id, joined_at);
+    `);
+        // Backfill from existing agents.channel_id
+        db.exec(`
+      INSERT OR IGNORE INTO agent_channel_memberships(agent_id, channel_id, is_home, joined_at)
+      SELECT agent_id, channel_id, 1, created_at FROM agents;
+    `);
+        // Add description to channels
+        const channelCols = db.prepare("PRAGMA table_info('channels')").all();
+        if (!channelCols.some((c) => c.name === 'description')) {
+            db.exec(`ALTER TABLE channels ADD COLUMN description TEXT;`);
+        }
+        db.exec(`UPDATE schema_version SET version = 23;`);
     }
 }

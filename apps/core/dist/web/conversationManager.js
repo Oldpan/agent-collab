@@ -56,8 +56,10 @@ export class ConversationManager {
         fs.mkdirSync(workspacePath, { recursive: true });
         this.db.prepare(`INSERT INTO agents(agent_id, name, agent_type, channel_id, system_prompt, memory, env_vars, disabled_tool_kinds, node_id, workspace_path, created_at, updated_at)
        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(agentId, params.name, agentType, channelId, params.systemPrompt ?? '', '', envVarsJson, disabledToolKindsJson, params.nodeId ?? null, workspacePath, now, now);
+        this.db.prepare(`INSERT OR IGNORE INTO agent_channel_memberships(agent_id, channel_id, is_home, joined_at)
+       VALUES(?, ?, 1, ?)`).run(agentId, channelId, now);
         return {
-            agentId, name: params.name, agentType, channelId,
+            agentId, name: params.name, agentType, channelId, channelIds: [channelId],
             systemPrompt: params.systemPrompt ?? '',
             envVars: params.envVars, disabledToolKinds: params.disabledToolKinds, nodeId: params.nodeId ?? null,
             workspacePath, createdAt: now, updatedAt: now,
@@ -65,11 +67,13 @@ export class ConversationManager {
     }
     listAgents(channelId) {
         const sql = channelId
-            ? `SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
-                system_prompt as systemPrompt, env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
-                node_id as nodeId, workspace_path as workspacePath,
-                created_at as createdAt, updated_at as updatedAt
-         FROM agents WHERE channel_id = ? ORDER BY updated_at DESC`
+            ? `SELECT a.agent_id as agentId, a.name, a.agent_type as agentType, a.channel_id as channelId,
+                a.system_prompt as systemPrompt, a.env_vars as envVarsJson, a.disabled_tool_kinds as disabledToolKindsJson,
+                a.node_id as nodeId, a.workspace_path as workspacePath,
+                a.created_at as createdAt, a.updated_at as updatedAt
+         FROM agents a
+         JOIN agent_channel_memberships m ON m.agent_id = a.agent_id
+         WHERE m.channel_id = ? ORDER BY a.updated_at DESC`
             : `SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
                 system_prompt as systemPrompt, env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
                 node_id as nodeId, workspace_path as workspacePath,
@@ -78,7 +82,7 @@ export class ConversationManager {
         const rows = channelId
             ? this.db.prepare(sql).all(channelId)
             : this.db.prepare(sql).all();
-        return rows.map(rowToAgentInfo);
+        return rows.map((row) => this.rowToAgentInfo(row));
     }
     getAgent(agentId) {
         const row = this.db.prepare(`SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
@@ -86,7 +90,7 @@ export class ConversationManager {
               node_id as nodeId, workspace_path as workspacePath,
               created_at as createdAt, updated_at as updatedAt
        FROM agents WHERE agent_id = ?`).get(agentId);
-        return row ? rowToAgentInfo(row) : null;
+        return row ? this.rowToAgentInfo(row) : null;
     }
     updateAgent(agentId, req) {
         const existing = this.getAgent(agentId);
@@ -97,6 +101,7 @@ export class ConversationManager {
         const systemPrompt = req.systemPrompt ?? existing.systemPrompt;
         const envVars = req.envVars ?? existing.envVars;
         const disabledToolKinds = req.disabledToolKinds ?? existing.disabledToolKinds;
+        const channelId = req.channelId ?? existing.channelId;
         const envVarsJson = envVars && Object.keys(envVars).length > 0
             ? JSON.stringify(envVars)
             : null;
@@ -104,9 +109,16 @@ export class ConversationManager {
             ? JSON.stringify(disabledToolKinds)
             : null;
         this.db.prepare(`UPDATE agents
-       SET name = ?, system_prompt = ?, env_vars = ?, disabled_tool_kinds = ?, updated_at = ?
-       WHERE agent_id = ?`).run(name, systemPrompt, envVarsJson, disabledToolKindsJson, now, agentId);
-        return { ...existing, name, systemPrompt, envVars, disabledToolKinds, updatedAt: now };
+       SET name = ?, system_prompt = ?, env_vars = ?, disabled_tool_kinds = ?, channel_id = ?, updated_at = ?
+       WHERE agent_id = ?`).run(name, systemPrompt, envVarsJson, disabledToolKindsJson, channelId, now, agentId);
+        // Migrate home channel membership if channelId changed
+        if (req.channelId && req.channelId !== existing.channelId) {
+            this.db.prepare(`UPDATE agent_channel_memberships SET is_home = 0 WHERE agent_id = ? AND channel_id = ?`).run(agentId, existing.channelId);
+            this.db.prepare(`INSERT INTO agent_channel_memberships(agent_id, channel_id, is_home, joined_at)
+         VALUES(?, ?, 1, ?)
+         ON CONFLICT(agent_id, channel_id) DO UPDATE SET is_home = 1`).run(agentId, channelId, now);
+        }
+        return this.getAgent(agentId) ?? { ...existing, name, systemPrompt, envVars, disabledToolKinds, channelId, updatedAt: now };
     }
     deleteAgent(agentId) {
         // Get all conversations for this agent to cascade delete their data
@@ -138,6 +150,7 @@ export class ConversationManager {
         this.db.prepare(`DELETE FROM conversation_prompt_queue WHERE agent_id = ?`).run(agentId);
         this.db.prepare(`DELETE FROM channel_messages WHERE channel_id = ?`).run(`dm:${agentId}`);
         this.db.prepare(`DELETE FROM agent_message_checkpoints WHERE agent_id = ?`).run(agentId);
+        this.db.prepare(`DELETE FROM agent_channel_memberships WHERE agent_id = ?`).run(agentId);
         // Finally delete the agent
         this.db.prepare(`DELETE FROM agents WHERE agent_id = ?`).run(agentId);
         return { deletedConversations: rows.length };
@@ -359,32 +372,51 @@ export class ConversationManager {
         this.executionDispatcher.clearQueuedPromptsForNode(nodeId);
     }
     // ─── Channel CRUD ───
+    joinChannel(agentId, channelId) {
+        this.db.prepare(`INSERT OR IGNORE INTO agent_channel_memberships(agent_id, channel_id, is_home, joined_at)
+       VALUES(?, ?, 0, ?)`).run(agentId, channelId, Date.now());
+    }
+    leaveChannel(agentId, channelId) {
+        const row = this.db.prepare(`SELECT is_home FROM agent_channel_memberships WHERE agent_id = ? AND channel_id = ?`).get(agentId, channelId);
+        if (!row || row.is_home)
+            return; // can't leave home channel
+        this.db.prepare(`DELETE FROM agent_channel_memberships WHERE agent_id = ? AND channel_id = ?`).run(agentId, channelId);
+    }
     createChannel(params) {
         const channelId = params.name === 'default' ? 'default' : randomUUID();
         const now = Date.now();
         this.db
-            .prepare(`INSERT INTO channels(channel_id, name, workspace_path, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?)`)
-            .run(channelId, params.name, params.workspacePath ?? null, now, now);
+            .prepare(`INSERT INTO channels(channel_id, name, workspace_path, description, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?)`)
+            .run(channelId, params.name, params.workspacePath ?? null, params.description ?? null, now, now);
         return {
             channelId,
             name: params.name,
             workspacePath: params.workspacePath ?? null,
+            description: params.description,
             createdAt: now,
             updatedAt: now,
         };
     }
+    updateChannel(channelId, req) {
+        const existing = this.getChannel(channelId);
+        if (!existing)
+            return null;
+        const now = Date.now();
+        this.db.prepare(`UPDATE channels SET description = ?, updated_at = ? WHERE channel_id = ?`).run(req.description ?? existing.description ?? null, now, channelId);
+        return { ...existing, description: req.description ?? existing.description, updatedAt: now };
+    }
     listChannels() {
         return this.db
             .prepare(`SELECT channel_id as channelId, name, workspace_path as workspacePath,
-                created_at as createdAt, updated_at as updatedAt
+                description, created_at as createdAt, updated_at as updatedAt
          FROM channels ORDER BY created_at ASC`)
             .all();
     }
     getChannel(channelId) {
         const row = this.db
             .prepare(`SELECT channel_id as channelId, name, workspace_path as workspacePath,
-                created_at as createdAt, updated_at as updatedAt
+                description, created_at as createdAt, updated_at as updatedAt
          FROM channels WHERE channel_id = ?`)
             .get(channelId);
         return row ?? null;
@@ -454,21 +486,23 @@ export class ConversationManager {
             }
         }
     }
-}
-function rowToAgentInfo(row) {
-    return {
-        agentId: row.agentId,
-        name: row.name,
-        agentType: row.agentType,
-        channelId: row.channelId,
-        systemPrompt: row.systemPrompt,
-        envVars: parseEnvVars(row.envVarsJson),
-        disabledToolKinds: parseDisabledToolKinds(row.disabledToolKindsJson),
-        nodeId: row.nodeId,
-        workspacePath: row.workspacePath,
-        createdAt: row.createdAt,
-        updatedAt: row.updatedAt,
-    };
+    rowToAgentInfo(row) {
+        const memberships = this.db.prepare(`SELECT channel_id as channelId FROM agent_channel_memberships WHERE agent_id = ?`).all(row.agentId);
+        return {
+            agentId: row.agentId,
+            name: row.name,
+            agentType: row.agentType,
+            channelId: row.channelId,
+            channelIds: memberships.map((m) => m.channelId),
+            systemPrompt: row.systemPrompt,
+            envVars: parseEnvVars(row.envVarsJson),
+            disabledToolKinds: parseDisabledToolKinds(row.disabledToolKindsJson),
+            nodeId: row.nodeId,
+            workspacePath: row.workspacePath,
+            createdAt: row.createdAt,
+            updatedAt: row.updatedAt,
+        };
+    }
 }
 function rowToMachineInfo(row, isOnline) {
     let agentTypes = [];

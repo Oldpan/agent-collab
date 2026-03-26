@@ -276,6 +276,36 @@ describe('ConversationManager', () => {
       expect(inChanA.some((c) => c.id === c2.id)).toBe(true);
       expect(inChanA.some((c) => c.id === c1.id)).toBe(false);
     });
+
+    it('agent 可加入并离开任意 channel，listAgents 仅按 memberships 过滤', () => {
+      const chanA = manager.createChannel({ name: 'chan-members-a' });
+      const chanB = manager.createChannel({ name: 'chan-members-b' });
+      const agent = manager.createAgent({
+        name: 'MultiChannel',
+        channelId: chanA.channelId,
+      });
+
+      expect(manager.getAgent(agent.agentId)?.channelIds).toEqual([chanA.channelId]);
+      expect(manager.listAgents(chanA.channelId).map((item) => item.agentId)).toContain(agent.agentId);
+
+      manager.joinChannel(agent.agentId, chanB.channelId);
+      expect(manager.getAgent(agent.agentId)?.channelIds.sort()).toEqual([chanA.channelId, chanB.channelId].sort());
+      expect(manager.listAgents(chanB.channelId).map((item) => item.agentId)).toContain(agent.agentId);
+
+      manager.leaveChannel(agent.agentId, chanA.channelId);
+      expect(manager.getAgent(agent.agentId)?.channelIds).toEqual([chanB.channelId]);
+      expect(manager.listAgents(chanA.channelId).map((item) => item.agentId)).not.toContain(agent.agentId);
+
+      manager.leaveChannel(agent.agentId, chanB.channelId);
+      expect(manager.getAgent(agent.agentId)?.channelIds).toEqual([]);
+      expect(manager.listAgents(chanB.channelId).map((item) => item.agentId)).not.toContain(agent.agentId);
+    });
+
+    it('createChannel 应保留 description', () => {
+      const ch = manager.createChannel({ name: 'with-desc', description: 'channel description' });
+      expect(ch.description).toBe('channel description');
+      expect(manager.getChannel(ch.channelId)?.description).toBe('channel description');
+    });
   });
 
   // ─── envVars ───

@@ -136,11 +136,10 @@ export function registerInternalAgentRoutes(
         return { error: 'Agent not found' };
       }
 
-      // Query both the agent's public channel and the user DM channel
+      // Query all channels the agent has joined, plus the user DM channel
       const agent = conversationManager.getAgent(agentId)!;
-      const publicChannelId = agent.channelId;
       const dmChannelId = `dm:${agentId}`;
-      const channelsToQuery = [publicChannelId, dmChannelId];
+      const channelsToQuery = Array.from(new Set([...(agent.channelIds ?? []), dmChannelId]));
 
       let allRows: MessageRow[] = [];
       for (const channelId of channelsToQuery) {
@@ -207,10 +206,11 @@ export function registerInternalAgentRoutes(
         return { error: 'Agent not found' };
       }
 
+      const joinedSet = new Set(agent.channelIds ?? []);
       const channels = conversationManager.listChannels().map((ch) => ({
         name: ch.name,
-        joined: ch.channelId === agent.channelId,
-        description: undefined as string | undefined,
+        joined: joinedSet.has(ch.channelId),
+        description: ch.description,
       }));
 
       const allAgents = conversationManager.listAgents().filter((a) => a.agentId !== agentId);
@@ -219,8 +219,11 @@ export function registerInternalAgentRoutes(
         status: 'online',
       }));
 
-      // No human user model in agent-collab yet; return empty for now
-      const humans: Array<{ name: string }> = [];
+      const humanRows = db.prepare(
+        `SELECT DISTINCT sender_name as name FROM channel_messages
+         WHERE sender_type = 'user' ORDER BY created_at DESC LIMIT 20`,
+      ).all() as Array<{ name: string }>;
+      const humans = humanRows;
 
       return { channels, agents, humans };
     },
