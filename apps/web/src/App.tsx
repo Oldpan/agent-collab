@@ -182,8 +182,8 @@ export function App() {
           <>
             <ResizablePanel
               defaultSize={25}
-              minSize={12}
-              maxSize={40}
+              minSize={14}
+              maxSize={20}
               className="bg-[#ffe135] text-zinc-950 shadow-[4px_0_0_0_rgba(0,0,0,0.3)]"
             >
               <Sidebar {...sidebarProps} />
