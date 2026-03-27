@@ -6,6 +6,7 @@ export function buildChannelActivationPrompt(params) {
         `[System: ${reasonText}]`,
         'The triggering message is included below. Do not call check_messages just to retrieve this same message again.',
         `If you need more context, call read_history(channel="${params.target}") for this exact conversation target.`,
+        'If you are doing channel work, ordinary progress updates can be plain channel replies. Only @mention the user when you are done, hit a major blocker, or need a decision.',
         '',
         '[Triggered message metadata]',
         `target: ${params.target}`,

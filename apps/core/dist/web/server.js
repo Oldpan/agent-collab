@@ -294,7 +294,7 @@ export async function startServer(params) {
         const dmChannelId = `dm:${conv.agentId}`;
         const rows = db
             .prepare(`SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                  content, created_at as createdAt
+                  content, created_at as createdAt, seq
            FROM channel_messages
            WHERE channel_id = ?
            ORDER BY seq DESC LIMIT ?`)
@@ -305,8 +305,47 @@ export async function startServer(params) {
             senderType: r.senderType,
             content: r.content,
             createdAt: new Date(r.createdAt).toISOString(),
+            seq: r.seq,
         }));
         return { messages };
+    });
+    app.post('/api/unread-summary', async (req) => {
+        const body = req.body ?? {};
+        const agentIds = Array.isArray(body.agentIds)
+            ? body.agentIds.filter((value) => typeof value === 'string')
+            : [];
+        const channelIds = Array.isArray(body.channelIds)
+            ? body.channelIds.filter((value) => typeof value === 'string')
+            : [];
+        const agentDmReadSeqs = body.agentDmReadSeqs && typeof body.agentDmReadSeqs === 'object'
+            ? body.agentDmReadSeqs
+            : {};
+        const channelReadSeqs = body.channelReadSeqs && typeof body.channelReadSeqs === 'object'
+            ? body.channelReadSeqs
+            : {};
+        const summarizeChannel = (channelId, lastReadSeq) => {
+            const row = db
+                .prepare(`SELECT
+             COALESCE(MAX(seq), 0) as latestSeq,
+             COALESCE(SUM(CASE WHEN seq > ? AND sender_type != 'user' THEN 1 ELSE 0 END), 0) as unreadCount
+           FROM channel_messages
+           WHERE channel_id = ?`)
+                .get(lastReadSeq, channelId);
+            return {
+                unreadCount: Number(row?.unreadCount ?? 0),
+                latestSeq: Number(row?.latestSeq ?? 0),
+            };
+        };
+        return {
+            agentDms: Object.fromEntries(agentIds.map((agentId) => [
+                agentId,
+                summarizeChannel(`dm:${agentId}`, Math.max(0, Number(agentDmReadSeqs[agentId] ?? 0))),
+            ])),
+            channels: Object.fromEntries(channelIds.map((channelId) => [
+                channelId,
+                summarizeChannel(channelId, Math.max(0, Number(channelReadSeqs[channelId] ?? 0))),
+            ])),
+        };
     });
     // ─── Channel routes ───
     // List all channels
@@ -530,6 +569,7 @@ export async function startServer(params) {
             message: {
                 id: messageId, senderName, senderType: 'user', content,
                 createdAt: new Date(now).toISOString(),
+                seq,
                 ...(threadRootId ? { threadRootId } : {}),
             },
         };

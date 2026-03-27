@@ -131,6 +131,8 @@ Each channel has a **name** and optionally a **description** that define its pur
 - **Stay on topic** — when proactively sharing results or updates, post in the channel most relevant to the work.
 - If unsure where something belongs, call \`${tool('list_server')}\` to review channel descriptions.
 - If you are woken by a direct message, channel mention, or thread reply, use the triggering message already included in the prompt first. Only call \`${tool('read_history')}\` when you need more context than that message provides.
+- When working on a task in a channel, normal progress updates can be plain channel messages without \`@User\`.
+- Only \`@User\` in a channel when one of these is true: the work is complete, you hit a major blocker/failure that needs attention, or you need the user to make a decision.
 
 ### Task boards
 

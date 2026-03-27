@@ -23,6 +23,7 @@ type ChannelPanelProps = {
   channel: ChannelInfo;
   agents: AgentInfo[];
   onOpenSidebar?: () => void;
+  onSeenSeq?: (seq: number) => void;
 };
 
 const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -439,9 +440,12 @@ function SettingsTab({
   );
 }
 
-export function ChannelPanel({ channel, agents, onOpenSidebar }: ChannelPanelProps) {
+export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq }: ChannelPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "members" | "settings">("chat");
-  const { messages, sendMessage, loadMore, hasMore, resetVersion } = useChannelStream(channel.channelId);
+  const { messages, sendMessage, loadMore, hasMore, resetVersion } = useChannelStream({
+    channelId: channel.channelId,
+    onSeenSeq,
+  });
   const scrollRef = useRef<HTMLDivElement>(null);
   const channelMembers = useMemo(
     () => agents.filter((a) => a.channelIds?.includes(channel.channelId) ?? false),

@@ -42,6 +42,8 @@ type SidebarProps = {
   agents: AgentInfo[];
   conversations: ConversationInfo[];
   channels: ChannelInfo[];
+  agentUnreadCounts: Record<string, number>;
+  channelUnreadCounts: Record<string, number>;
   selectedId: string | null;
   selectedChannelId: string | null;
   selectedView: "chat" | "sessions";
@@ -80,7 +82,7 @@ function StatusDot({ status }: { status: MachineInfo["status"] }) {
 }
 
 export function Sidebar({
-  machines, agents, conversations, channels, selectedId, selectedChannelId,
+  machines, agents, conversations, channels, agentUnreadCounts, channelUnreadCounts, selectedId, selectedChannelId,
   selectedView,
   onCreateMachine, onDeleteMachine,
   onOpenSessions,
@@ -346,6 +348,7 @@ export function Sidebar({
                           agent={agent}
                           isSelected={selectedAgentId === agent.agentId}
                           updatedAt={primaryConversation?.updatedAt ?? agent.updatedAt}
+                          unreadCount={agentUnreadCounts[agent.agentId] ?? 0}
                           onOpen={() => onOpenAgentThread(agent.agentId)}
                           onDelete={() => handleOpenDeleteDialog(agent)}
                         />
@@ -383,6 +386,7 @@ export function Sidebar({
                 key={channel.channelId}
                 channel={channel}
                 isSelected={selectedChannelId === channel.channelId}
+                unreadCount={channelUnreadCounts[channel.channelId] ?? 0}
                 onSelect={() => onSelectChannel(channel.channelId)}
               />
             ))}
@@ -429,6 +433,7 @@ type AgentRowProps = {
   agent: AgentInfo;
   isSelected: boolean;
   updatedAt: number;
+  unreadCount: number;
   onOpen: () => void;
   onDelete: () => void;
 };
@@ -438,10 +443,20 @@ type AgentRowProps = {
 type ChannelRowProps = {
   channel: ChannelInfo;
   isSelected: boolean;
+  unreadCount: number;
   onSelect: () => void;
 };
 
-function ChannelRow({ channel, isSelected, onSelect }: ChannelRowProps) {
+function UnreadBadge({ count }: { count: number }) {
+  if (count <= 0) return null;
+  return (
+    <span className="inline-flex min-w-5 items-center justify-center rounded-full border-2 border-zinc-900 bg-[#ff6b6b] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]">
+      {count > 99 ? "99+" : count}
+    </span>
+  );
+}
+
+function ChannelRow({ channel, isSelected, unreadCount, onSelect }: ChannelRowProps) {
   return (
     <button
       type="button"
@@ -453,13 +468,14 @@ function ChannelRow({ channel, isSelected, onSelect }: ChannelRowProps) {
     >
       <HashIcon className="size-3 shrink-0 text-zinc-500" />
       <span className="flex-1 truncate text-xs font-medium">{channel.name}</span>
+      <UnreadBadge count={unreadCount} />
     </button>
   );
 }
 
 // ─── AgentRow ───
 
-function AgentRow({ agent, isSelected, updatedAt, onOpen, onDelete }: AgentRowProps) {
+function AgentRow({ agent, isSelected, updatedAt, unreadCount, onOpen, onDelete }: AgentRowProps) {
   return (
     <div className={cn(
       "group flex items-center gap-1.5 rounded-md border-2 border-zinc-900 px-2 py-1.5 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)] w-fit max-w-full",
@@ -480,6 +496,7 @@ function AgentRow({ agent, isSelected, updatedAt, onOpen, onDelete }: AgentRowPr
         </div>
       </button>
       <div className="flex items-center gap-1 shrink-0">
+        <UnreadBadge count={unreadCount} />
         <button
           type="button"
           className={cn(

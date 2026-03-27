@@ -119,6 +119,7 @@ export function registerInternalAgentRoutes(
         senderType: 'agent',
         content,
         createdAt: new Date(now).toISOString(),
+        seq,
         ...(threadRootId ? { threadRootId } : {}),
       },
     };

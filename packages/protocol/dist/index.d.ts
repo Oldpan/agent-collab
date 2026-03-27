@@ -85,6 +85,7 @@ export type ChannelMessageEvent = {
         senderType: 'user' | 'agent';
         content: string;
         createdAt: string;
+        seq?: number;
         /** First 8 chars of the root message ID. Present only for thread replies. */
         threadRootId?: string;
     };

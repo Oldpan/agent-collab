@@ -3,6 +3,7 @@ import { useConversations } from "@/hooks/useConversations";
 import { useAgents } from "@/hooks/useAgents";
 import { useMachines } from "@/hooks/useMachines";
 import { useChannels } from "@/hooks/useChannels";
+import { useUnreadBadges } from "@/hooks/useUnreadBadges";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { ChatPanel } from "@/features/chat/ChatPanel";
 import { ChannelPanel } from "@/features/channel/ChannelPanel";
@@ -156,11 +157,43 @@ export function App() {
     [channels, selectedChannelId],
   );
 
+  const activeAgentId = viewMode === "chat" ? (selectedAgent?.agentId ?? null) : null;
+  const activeChannelId = viewMode === "chat" ? selectedChannelId : null;
+  const {
+    agentUnreadCounts,
+    channelUnreadCounts,
+    markAgentReadUpTo,
+    markChannelReadUpTo,
+  } = useUnreadBadges({
+    agents,
+    channels,
+    activeAgentId,
+    activeChannelId,
+  });
+
+  const handleChannelSeenSeq = useCallback(
+    (seq: number) => {
+      if (!selectedChannel) return;
+      markChannelReadUpTo(selectedChannel.channelId, seq);
+    },
+    [markChannelReadUpTo, selectedChannel],
+  );
+
+  const handleConversationSeenSeq = useCallback(
+    (seq: number) => {
+      if (!selectedAgent?.agentId) return;
+      markAgentReadUpTo(selectedAgent.agentId, seq);
+    },
+    [markAgentReadUpTo, selectedAgent],
+  );
+
   const sidebarProps = {
     machines,
     agents,
     conversations: visibleConversations,
     channels,
+    agentUnreadCounts,
+    channelUnreadCounts,
     selectedId,
     selectedChannelId,
     selectedView: viewMode,
@@ -226,12 +259,14 @@ export function App() {
             <ChannelPanel
               channel={selectedChannel}
               agents={agents}
+              onSeenSeq={handleChannelSeenSeq}
               onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
             />
           ) : selectedConversation ? (
             <ChatPanel
               conversation={selectedConversation}
               agent={selectedAgent}
+              onSeenSeq={handleConversationSeenSeq}
               onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
               onUpdateAgent={handleUpdateAgent}
               onRestartAgent={handleRestartAgent}

@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useLayoutEffect } from "react";
+import { useState, useCallback, useRef, useLayoutEffect, useEffect } from "react";
 import type { ChannelMessage } from "@/lib/api";
 import * as api from "@/lib/api";
 
@@ -11,17 +11,28 @@ function readUserName(): string {
   }
 }
 
-export function useChannelStream(channelId: string | null): {
+type UseChannelStreamOptions = {
+  channelId: string | null;
+  onSeenSeq?: (seq: number) => void;
+};
+
+export function useChannelStream(options: UseChannelStreamOptions): {
   messages: ChannelMessage[];
   sendMessage: (content: string) => Promise<void>;
   loadMore: () => Promise<void>;
   hasMore: boolean;
   resetVersion: number;
 } {
+  const { channelId, onSeenSeq } = options;
   const [messages, setMessages] = useState<ChannelMessage[]>([]);
   const [hasMore, setHasMore] = useState(true);
   const [resetVersion, setResetVersion] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
+  const onSeenSeqRef = useRef<typeof onSeenSeq>(onSeenSeq);
+
+  useEffect(() => {
+    onSeenSeqRef.current = onSeenSeq;
+  }, [onSeenSeq]);
 
   useLayoutEffect(() => {
     setMessages([]);
@@ -39,6 +50,10 @@ export function useChannelStream(channelId: string | null): {
         if (!cancelled) {
           setMessages(d.messages);
           if (d.messages.length < 100) setHasMore(false);
+          const latestSeq = d.messages.reduce((max, message) => Math.max(max, Number(message.seq ?? 0)), 0);
+          if (latestSeq > 0) {
+            onSeenSeqRef.current?.(latestSeq);
+          }
         }
       })
       .catch(() => {});
@@ -59,6 +74,9 @@ export function useChannelStream(channelId: string | null): {
         };
         if (event.type === "channel.message" && event.message) {
           const msg = event.message;
+          if (typeof msg.seq === "number") {
+            onSeenSeqRef.current?.(msg.seq);
+          }
           if (!msg.threadRootId) {
             // Top-level message — add to main channel list
             setMessages((prev) =>

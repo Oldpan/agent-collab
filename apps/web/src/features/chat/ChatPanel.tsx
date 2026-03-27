@@ -45,6 +45,7 @@ type ChatPanelProps = {
   conversation: ConversationInfo;
   agent: AgentInfo | null;
   onOpenSidebar?: () => void;
+  onSeenSeq?: (seq: number) => void;
   onUpdateAgent?: (id: string, req: UpdateAgentRequest) => Promise<void>;
   onRestartAgent?: (id: string) => Promise<void>;
   onClearAgentChat?: (id: string) => Promise<void>;
@@ -75,6 +76,7 @@ export function ChatPanel({
   conversation,
   agent,
   onOpenSidebar,
+  onSeenSeq,
   onUpdateAgent,
   onRestartAgent,
   onClearAgentChat,
@@ -93,6 +95,7 @@ export function ChatPanel({
   } = useConversationStream({
     conversationId: conversation.id,
     conversationAgentId: conversation.agentId,
+    onSeenSeq,
   });
 
   const hasAssistantReply = messages.some(

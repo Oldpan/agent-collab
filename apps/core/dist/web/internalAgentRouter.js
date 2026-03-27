@@ -63,6 +63,7 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
                 senderType: 'agent',
                 content,
                 createdAt: new Date(now).toISOString(),
+                seq,
                 ...(threadRootId ? { threadRootId } : {}),
             },
         };

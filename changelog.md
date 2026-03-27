@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-27 (sidebar unread badges)
+
+- Sidebar 现在会在 agent 私聊入口和 channel 入口显示未读数字，并把已读锚点持久化到本地浏览器。
+- unread 统计只计算不是用户自己发出的新消息；打开对应私聊或 channel 后，数字会立即清零。
+- 为了支撑这层状态，新增了 `POST /api/unread-summary` 汇总接口；私聊历史和 `channel.message` 事件也补出了稳定的 `seq` 字段。
+- channel thread replies 会计入所属 channel 的 unread，而不会在 sidebar 单独拆出 thread badge。
+- channel 场景的 prompt 规则也同步收紧：普通进度更新不需要反复 `@User`，只有完成、重大阻塞或需要决策时才主动 `@User`。
+
 ## 2026-03-27 (channel memory reset markers)
 
 - Channel memory 开始按频道独立组织到 `notes/channels/<channel>.md`，同时保留对旧 `notes/channels.md` 的兼容追加。

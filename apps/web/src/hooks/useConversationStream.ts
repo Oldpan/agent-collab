@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useLayoutEffect } from "react";
+import { useState, useCallback, useRef, useLayoutEffect, useEffect } from "react";
 import type { ServerEvent, ClientEvent } from "@agent-collab/protocol";
 import type { LiveMessage, LiveRun, LiveToolCall, PendingApproval, ChatStatus } from "./types";
 import * as api from "@/lib/api";
@@ -50,6 +50,7 @@ type UseConversationStreamOptions = {
   conversationId: string | null;
   /** When set (agent conversation), use channel-based message model instead of ACP streaming */
   conversationAgentId?: string | null;
+  onSeenSeq?: (seq: number) => void;
 };
 
 type UseConversationStreamReturn = {
@@ -71,6 +72,7 @@ export function useConversationStream(
   options: UseConversationStreamOptions,
 ): UseConversationStreamReturn {
   const { conversationId, conversationAgentId } = options;
+  const { onSeenSeq } = options;
   const isChannelMode = Boolean(conversationAgentId);
 
   const [messages, setMessages] = useState<LiveMessage[]>([]);
@@ -80,11 +82,16 @@ export function useConversationStream(
 
   // Refs for streaming accumulators
   const wsRef = useRef<WebSocket | null>(null);
+  const onSeenSeqRef = useRef<typeof onSeenSeq>(onSeenSeq);
   const textRef = useRef("");
   const thinkingRef = useRef("");
   const currentToolCallsRef = useRef<LiveToolCall[]>([]);
   const currentMsgIdRef = useRef<string | null>(null);
   const currentRunIdRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    onSeenSeqRef.current = onSeenSeq;
+  }, [onSeenSeq]);
 
   // Helper: update the latest assistant message in-place
   const updateCurrentMessage = useCallback(() => {
@@ -158,6 +165,9 @@ export function useConversationStream(
               isStreaming: false,
             },
           ]);
+          if (typeof event.message.seq === "number") {
+            onSeenSeqRef.current?.(event.message.seq);
+          }
           break;
         }
 
@@ -551,11 +561,18 @@ export function useConversationStream(
 
     // Channel mode: load history from REST endpoint before opening WS
     if (isChannelMode) {
-      fetch(`/api/conversations/${conversationId}/channel-messages?limit=100`)
-        .then((r) => r.json())
-        .then((data: { messages?: Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: string }> }) => {
+      api
+        .getConversationChannelMessages(conversationId, 100)
+        .then((data) => {
           if (cancelled) return;
           if (!data.messages) return;
+          const latestSeq = data.messages.reduce(
+            (max, message) => Math.max(max, Number(message.seq ?? 0)),
+            0,
+          );
+          if (latestSeq > 0) {
+            onSeenSeqRef.current?.(latestSeq);
+          }
           setMessages(
             data.messages.map((m) => ({
               id: m.id,

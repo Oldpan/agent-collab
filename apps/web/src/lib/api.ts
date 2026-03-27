@@ -55,6 +55,15 @@ export async function getHistory(id: string): Promise<ConversationRunSummary[]> 
   return res.json();
 }
 
+export async function getConversationChannelMessages(
+  id: string,
+  limit = 100,
+): Promise<{ messages: ChannelMessage[] }> {
+  const res = await fetch(`${API_BASE}/conversations/${id}/channel-messages?limit=${limit}`);
+  if (!res.ok) throw new Error(`Failed to get conversation channel messages: ${res.statusText}`);
+  return res.json();
+}
+
 export async function listChannels(): Promise<ChannelInfo[]> {
   const res = await fetch(`${API_BASE}/channels`);
   if (!res.ok) throw new Error(`Failed to list channels: ${res.statusText}`);
@@ -82,6 +91,28 @@ export async function createChannel(req: { name: string; workspacePath?: string;
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error(`Failed to create channel: ${res.statusText}`);
+  return res.json();
+}
+
+export type UnreadSummaryRequest = {
+  agentIds: string[];
+  channelIds: string[];
+  agentDmReadSeqs: Record<string, number>;
+  channelReadSeqs: Record<string, number>;
+};
+
+export type UnreadSummaryResponse = {
+  agentDms: Record<string, { unreadCount: number; latestSeq: number }>;
+  channels: Record<string, { unreadCount: number; latestSeq: number }>;
+};
+
+export async function getUnreadSummary(req: UnreadSummaryRequest): Promise<UnreadSummaryResponse> {
+  const res = await fetch(`${API_BASE}/unread-summary`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) throw new Error(`Failed to get unread summary: ${res.statusText}`);
   return res.json();
 }
 

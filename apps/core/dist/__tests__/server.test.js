@@ -72,6 +72,63 @@ beforeAll(async () => {
             };
         });
     });
+    app.get('/api/conversations/:id/channel-messages', async (req, reply) => {
+        const conv = manager.getConversation(req.params.id);
+        if (!conv) {
+            reply.code(404);
+            return { error: 'Not found' };
+        }
+        if (!conv.agentId)
+            return { messages: [] };
+        const limit = Math.min(Number(req.query.limit ?? 50), 200);
+        const rows = db.prepare(`SELECT message_id as id, sender_name as senderName, sender_type as senderType,
+                content, created_at as createdAt, seq
+         FROM channel_messages
+         WHERE channel_id = ?
+         ORDER BY seq DESC LIMIT ?`).all(`dm:${conv.agentId}`, limit);
+        return {
+            messages: rows.reverse().map((row) => ({
+                id: row.id,
+                senderName: row.senderName,
+                senderType: row.senderType,
+                content: row.content,
+                createdAt: new Date(row.createdAt).toISOString(),
+                seq: row.seq,
+            })),
+        };
+    });
+    app.post('/api/unread-summary', async (req) => {
+        const body = (req.body ?? {});
+        const agentIds = Array.isArray(body.agentIds) ? body.agentIds.filter((value) => typeof value === 'string') : [];
+        const channelIds = Array.isArray(body.channelIds) ? body.channelIds.filter((value) => typeof value === 'string') : [];
+        const agentDmReadSeqs = body.agentDmReadSeqs && typeof body.agentDmReadSeqs === 'object'
+            ? body.agentDmReadSeqs
+            : {};
+        const channelReadSeqs = body.channelReadSeqs && typeof body.channelReadSeqs === 'object'
+            ? body.channelReadSeqs
+            : {};
+        const summarizeChannel = (channelId, lastReadSeq) => {
+            const row = db.prepare(`SELECT
+           COALESCE(MAX(seq), 0) as latestSeq,
+           COALESCE(SUM(CASE WHEN seq > ? AND sender_type != 'user' THEN 1 ELSE 0 END), 0) as unreadCount
+         FROM channel_messages
+         WHERE channel_id = ?`).get(lastReadSeq, channelId);
+            return {
+                unreadCount: Number(row?.unreadCount ?? 0),
+                latestSeq: Number(row?.latestSeq ?? 0),
+            };
+        };
+        return {
+            agentDms: Object.fromEntries(agentIds.map((agentId) => [
+                agentId,
+                summarizeChannel(`dm:${agentId}`, Math.max(0, Number(agentDmReadSeqs[agentId] ?? 0))),
+            ])),
+            channels: Object.fromEntries(channelIds.map((channelId) => [
+                channelId,
+                summarizeChannel(channelId, Math.max(0, Number(channelReadSeqs[channelId] ?? 0))),
+            ])),
+        };
+    });
     app.post('/api/channels', async (req, reply) => {
         const body = (req.body ?? {});
         if (!body.name) {
@@ -283,6 +340,57 @@ describe('REST API', () => {
             .prepare('SELECT env_vars FROM conversations WHERE id = ?')
             .get(body.id);
         expect(JSON.parse(row.env_vars)).toEqual(envVars);
+    });
+    it('GET /api/conversations/:id/channel-messages 应返回稳定 seq，用于私聊 unread 锚点', async () => {
+        const agent = manager.createAgent({
+            name: 'SeqBob',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/seq-bob',
+        });
+        const conversation = manager.openAgentThread(agent.agentId);
+        expect(conversation).not.toBeNull();
+        if (!conversation)
+            throw new Error('missing conversation');
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+       VALUES(?, ?, 'user', 'User', 'user', 'dm:@SeqBob', 'hello', 1, ?, NULL, NULL)`).run(randomUUID(), `dm:${agent.agentId}`, Date.now());
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+       VALUES(?, ?, ?, ?, 'agent', 'dm:@User', 'hi', 2, ?, NULL, NULL)`).run(randomUUID(), `dm:${agent.agentId}`, agent.agentId, agent.name, Date.now());
+        const { status, body } = await fetchJson(`/api/conversations/${conversation.id}/channel-messages?limit=10`);
+        expect(status).toBe(200);
+        expect(body.messages.map((message) => message.seq)).toEqual([1, 2]);
+    });
+    it('POST /api/unread-summary 应分别统计 agent DM 和 channel 的未读数字', async () => {
+        const agent = manager.createAgent({
+            name: 'UnreadBob',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/unread-bob',
+        });
+        manager.joinChannel(agent.agentId, 'default');
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+       VALUES(?, ?, 'user', 'User', 'user', 'dm:@UnreadBob', 'hello', 1, ?, NULL, NULL)`).run(randomUUID(), `dm:${agent.agentId}`, Date.now());
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+       VALUES(?, ?, ?, ?, 'agent', 'dm:@User', 'reply', 2, ?, NULL, NULL)`).run(randomUUID(), `dm:${agent.agentId}`, agent.agentId, agent.name, Date.now());
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+       VALUES(?, 'default', 'user', 'User', 'user', '#default', 'channel hello', 1, ?, NULL, NULL)`).run(randomUUID(), Date.now());
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+       VALUES(?, 'default', ?, ?, 'agent', '#default', 'channel reply', 2, ?, NULL, NULL)`).run(randomUUID(), agent.agentId, agent.name, Date.now());
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+       VALUES(?, 'default', ?, ?, 'agent', '#default:abcd1234', 'thread reply', 3, ?, NULL, 'abcd1234')`).run(randomUUID(), agent.agentId, agent.name, Date.now());
+        const { status, body } = await fetchJson('/api/unread-summary', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                agentIds: [agent.agentId],
+                channelIds: ['default'],
+                agentDmReadSeqs: { [agent.agentId]: 0 },
+                channelReadSeqs: { default: 1 },
+            }),
+        });
+        expect(status).toBe(200);
+        expect(body.agentDms[agent.agentId]).toEqual({ unreadCount: 1, latestSeq: 2 });
+        expect(body.channels.default).toEqual({ unreadCount: 2, latestSeq: 3 });
     });
     it('POST /api/conversations 应保留 agentId 并出现在 agent 会话列表里', async () => {
         const agent = manager.createAgent({
