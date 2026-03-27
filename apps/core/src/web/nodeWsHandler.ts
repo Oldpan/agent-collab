@@ -32,13 +32,9 @@ function hasRunReplyMessage(db: Db, conversationId: string, runId: string): bool
       `SELECT COUNT(1) as count
        FROM channel_messages
        WHERE run_id = ?
-         AND channel_id = (
-           SELECT 'dm:' || agent_id
-           FROM conversations
-           WHERE id = ?
-         )`,
+         AND sender_type = 'agent'`,
     )
-    .get(runId, conversationId) as { count: number } | undefined;
+    .get(runId) as { count: number } | undefined;
   return (row?.count ?? 0) > 0;
 }
 
@@ -363,6 +359,11 @@ export function handleNodeWebSocket(
         if (!msg.error && replyContractError && !isRepairRun) {
           const repairPrompt = buildReplyRepairPrompt(db, msg.runId, replyContractError);
           if (repairPrompt) {
+            log.info('[node-ws] scheduling reply-contract repair run', {
+              conversationId: msg.conversationId,
+              sourceRunId: msg.runId,
+              replyContractError,
+            });
             const endedAt = Date.now();
             finishRun(db, { runId: msg.runId, stopReason: msg.stopReason ?? 'end_turn' });
             broadcast(msg.conversationId, {
@@ -378,6 +379,12 @@ export function handleNodeWebSocket(
                 const state = pendingRepairs.get(msg.conversationId);
                 if (!state || state.sourceRunId !== msg.runId) return;
                 if (result.runId) {
+                  log.info('[node-ws] reply-contract repair dispatched', {
+                    conversationId: msg.conversationId,
+                    sourceRunId: msg.runId,
+                    repairRunId: result.runId,
+                    queued: result.queued,
+                  });
                   pendingRepairs.set(msg.conversationId, { ...state, repairRunId: result.runId });
                 }
                 if (result.queued) {
@@ -387,6 +394,11 @@ export function handleNodeWebSocket(
               .catch((error: any) => {
                 const state = pendingRepairs.get(msg.conversationId);
                 if (!state || state.sourceRunId !== msg.runId) return;
+                log.warn('[node-ws] reply-contract repair failed to dispatch', {
+                  conversationId: msg.conversationId,
+                  sourceRunId: msg.runId,
+                  error: String(error?.message ?? error),
+                });
                 pendingRepairs.delete(msg.conversationId);
                 updateConversationStatus(db, broadcast, msg.conversationId, 'failed');
                 broadcast(msg.conversationId, {

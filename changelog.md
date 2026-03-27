@@ -197,3 +197,9 @@
 - core 内部 `/api/internal/agent/:id/send` 也同步做了 `trim()` 后的硬校验，并统一返回 `content must not be empty`。
 - `channel-bridge` 对 `/send` 的失败不再包成普通文本结果，而是直接抛出工具错误；这样前端 Activity 里会把这类发送失败显示成真正的 `failed`，而不是看起来像 `completed`。
 - runtime 在 summary 模式下也会把工具失败/结果的简短 detail 继续透传到前端，便于定位 `send_message` 为什么失败。
+
+## 2026-03-27 (reply contract repair hardening)
+
+- reply contract 的“是否已经正式回复”现在按 `run_id + sender_type='agent'` 统计，不再错误地只看私聊 DM，因此 channel branch runs 也会进入同一套补救逻辑。
+- 新增了 channel branch 场景的回归测试：如果 agent 在频道里只产出内部正文却没调用 `send_message`，core 会先静默派发一次 repair run，要求它补发最终可见回复。
+- `node-ws` 现在会记录 reply-contract repair 的调度、派发和派发失败日志，便于排查“明明该补救却没有补出去”的问题。

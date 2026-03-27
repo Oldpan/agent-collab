@@ -153,7 +153,7 @@ describe('nodeWsHandler', () => {
             conversationId: conv.id,
             stopReason: 'end_turn',
         }));
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await expect.poll(() => dispatches.length, { timeout: 5000 }).toBeGreaterThan(0);
         const originalRun = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
             .get('run-1');
         expect(originalRun.error).toBeNull();
@@ -266,7 +266,7 @@ describe('nodeWsHandler', () => {
             conversationId: conv.id,
             stopReason: 'end_turn',
         }));
-        await new Promise((resolve) => setTimeout(resolve, 0));
+        await expect.poll(() => dispatches.length, { timeout: 5000 }).toBeGreaterThan(0);
         const originalRun = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
             .get('run-3');
         expect(originalRun.error).toBeNull();
@@ -335,6 +335,65 @@ describe('nodeWsHandler', () => {
         expect(runRow.error).toBeNull();
         expect(runRow.stopReason).toBe('end_turn');
         expect(events.some((event) => event.type === 'error')).toBe(false);
+    });
+    it('channel branch run 未通过 send_message 回复时应触发静默 repair', async () => {
+        const agent = manager.createAgent({
+            name: 'ChannelBob',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/channel-bob-contract',
+        });
+        const conv = manager.openAgentChannelThread(agent.agentId, 'default', null);
+        if (!conv)
+            throw new Error('missing conversation');
+        const socket = new FakeSocket();
+        const events = [];
+        const registry = {
+            register() { },
+            unregister() { },
+            heartbeat() { },
+        };
+        handleNodeWebSocket(socket, registry, (_conversationId, event) => {
+            events.push(event);
+        }, db, manager);
+        const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+            .get(conv.id);
+        createRun(db, {
+            runId: 'run-channel-repair-1',
+            sessionKey: sessionRow.sessionKey,
+            promptText: '@Bob 我们刚才聊了什么',
+        });
+        db.prepare(`INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, ?, 'node/event', ?, ?)`).run('run-channel-repair-1', 1, JSON.stringify({
+            type: 'content.delta',
+            text: '这是频道中的最终回答，请把它发回 #default。',
+        }), 1000);
+        socket.emit('message', JSON.stringify({
+            type: 'run.end',
+            runId: 'run-channel-repair-1',
+            conversationId: conv.id,
+            stopReason: 'end_turn',
+        }));
+        await expect.poll(() => dispatches.length, { timeout: 5000 }).toBeGreaterThan(0);
+        const repairDispatch = dispatches[0];
+        if (!repairDispatch || repairDispatch.type !== 'run.dispatch')
+            throw new Error('missing repair dispatch');
+        expect(repairDispatch.prompt).toContain('[System: Repair the previous run\'s reply contract violation.]');
+        expect(repairDispatch.prompt).toContain('mcp__chat__send_message(content="...", kind="final")');
+        expect(repairDispatch.prompt).toContain('这是频道中的最终回答');
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)`).run('msg-channel-repair-1', 'default', agent.agentId, agent.name, '#default', '这是频道中的最终回答，请把它发回 #default。', 1, Date.now(), repairDispatch.runId, null, 'final');
+        socket.emit('message', JSON.stringify({
+            type: 'run.end',
+            runId: repairDispatch.runId,
+            conversationId: conv.id,
+            stopReason: 'end_turn',
+        }));
+        const repairRun = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
+            .get(repairDispatch.runId);
+        expect(repairRun.error).toBeNull();
+        expect(repairRun.stopReason).toBe('end_turn');
+        expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
     });
     it('run.event 中的 recovering 状态应更新会话状态', () => {
         const conv = manager.createConversation({ title: 'Recovering Test', nodeId: 'node-1' });
