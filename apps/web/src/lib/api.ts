@@ -45,6 +45,8 @@ export type ConversationRunSummary = {
   endedAt: number | null;
   stopReason: string | null;
   error: string | null;
+  assistantText?: string;
+  thinkingText?: string;
 };
 
 export async function getHistory(id: string): Promise<ConversationRunSummary[]> {

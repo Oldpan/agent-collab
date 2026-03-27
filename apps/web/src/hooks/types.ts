@@ -22,6 +22,7 @@ export type LiveRun = {
   promptText?: string;
   toolCalls: LiveToolCall[];
   thinking?: string;
+  outputText?: string;
   isActive: boolean;
   status: LiveRunStatus;
   stopReason?: string;

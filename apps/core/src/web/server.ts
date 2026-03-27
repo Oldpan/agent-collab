@@ -278,7 +278,38 @@ export async function startServer(params: {
       error: string | null;
     }>;
 
-    return runs;
+    return runs.map((run) => {
+      const nodeEvents = db
+        .prepare(
+          `SELECT payload_json as payloadJson
+           FROM events
+           WHERE run_id = ? AND method = 'node/event'
+           ORDER BY seq ASC`,
+        )
+        .all(run.runId) as Array<{ payloadJson: string }>;
+
+      let assistantText = '';
+      let thinkingText = '';
+      for (const evt of nodeEvents) {
+        try {
+          const parsed = JSON.parse(evt.payloadJson) as { type?: string; text?: string };
+          if (parsed?.type === 'content.delta' && typeof parsed.text === 'string') {
+            assistantText += parsed.text;
+          }
+          if (parsed?.type === 'thinking.delta' && typeof parsed.text === 'string') {
+            thinkingText += parsed.text;
+          }
+        } catch {
+          // ignore malformed rows
+        }
+      }
+
+      return {
+        ...run,
+        assistantText: assistantText || undefined,
+        thinkingText: thinkingText || undefined,
+      };
+    });
   });
 
   // Channel message history for a conversation (used by frontend to load DM history)

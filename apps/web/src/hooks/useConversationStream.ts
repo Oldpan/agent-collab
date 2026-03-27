@@ -183,6 +183,7 @@ export function useConversationStream(
                 promptText: event.promptText ?? current?.promptText,
                 toolCalls: current?.toolCalls ?? [],
                 thinking: current?.thinking,
+                outputText: current?.outputText,
                 isActive: !isReplay,
                 status:
                   current?.endedAt != null
@@ -216,6 +217,13 @@ export function useConversationStream(
           // In channel mode, content comes via channel.message event
           if (!isChannelMode && currentMsgIdRef.current) {
             updateCurrentMessage();
+          }
+          if (isChannelMode && currentRunIdRef.current) {
+            const runId = currentRunIdRef.current;
+            const outputText = textRef.current;
+            setRuns((prev) =>
+              prev.map((r) => (r.id === runId ? { ...r, outputText } : r)),
+            );
           }
           break;
         }
@@ -384,6 +392,8 @@ export function useConversationStream(
                       stopReason: event.stopReason,
                       error: turnError,
                       toolCalls,
+                      outputText: textRef.current || r.outputText,
+                      thinking: thinkingRef.current || r.thinking,
                     }
                   : r,
               ),
@@ -520,7 +530,8 @@ export function useConversationStream(
             endedAt: run.endedAt ?? undefined,
             promptText: run.promptText,
             toolCalls: [],
-            thinking: undefined,
+            thinking: run.thinkingText,
+            outputText: run.assistantText,
             isActive: run.endedAt == null,
             status:
               run.endedAt == null

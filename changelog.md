@@ -146,3 +146,16 @@
 - 频道被 `@mention` 时，会在对应 channel 实时插入一条 `channel.notice`，提示该 agent 已被通知。
 - Agent `Activity` 现在会显示 run 的触发原因，例如 `mentioned in #default by User`、`thread reply in #default from User`。
 - 为了保留静默语义，`conversation_prompt_queue` 新增 `record_as_user_message` 标记；队列中的内部 prompt 出队后也不会污染私聊消息流。
+
+## 2026-03-27 (direct DM activation parity)
+
+- 私聊用户消息的激活方式现在与 channel mention 对齐：触发消息直接注入 run prompt，不再先发一条“调用 `check_messages`”的通知 prompt。
+- 私聊用户消息仍然继续写入 `dm:{agentId}` 的 `channel_messages`，用于历史、刷新和 `read_history(channel="dm:@User")`。
+- 对于已直接注入 prompt 的这条私聊触发消息，DM root checkpoint 会立即推进，避免 agent 紧接着再从 `check_messages` 重复读回同一条消息。
+- 动态 system prompt 现在明确把这条规则扩展到 direct message / channel mention / thread reply 三种唤醒场景。
+
+## 2026-03-27 (activity output visibility)
+
+- Activity 里运行中但没有活跃工具调用时，提示文案改成了更准确的 `Waiting for run to finish...`。
+- Activity 现在会显示每轮 run 的 `content.delta` 聚合结果，放在 `Output stream` 折叠区里，便于排查“消息已发出但 run 还在继续输出”的问题。
+- `/api/conversations/:id/history` 会聚合返回 `assistantText` 和 `thinkingText`，所以刷新后 Activity 也能继续看到这些调试输出。

@@ -61,6 +61,16 @@ function formatRunError(error?: string): string | null {
   return error;
 }
 
+function formatRunningHint(run: LiveRun): string {
+  const runningTools = run.toolCalls.filter((tc) => tc.status === "running");
+  if (runningTools.length > 0) {
+    return runningTools.length === 1
+      ? `Waiting for ${runningTools[0]!.name} to finish...`
+      : `Waiting for ${runningTools.length} tool calls to finish...`;
+  }
+  return "Waiting for run to finish...";
+}
+
 function formatRunTrigger(promptText?: string): string | null {
   if (!promptText?.startsWith("[System:")) return null;
 
@@ -204,11 +214,25 @@ function RunRow({ run }: { run: LiveRun }) {
             </Collapsible>
           )}
 
-          {run.toolCalls.length === 0 && run.isActive && (
+          {run.isActive && (
             <div className="flex items-center gap-1.5 py-1 text-xs text-zinc-400">
               <Loader size={10} />
-              Waiting for tool calls...
+              {formatRunningHint(run)}
             </div>
+          )}
+
+          {run.outputText && (
+            <Collapsible className="mb-1">
+              <CollapsibleTrigger className="flex items-center gap-1.5 text-[11px] font-medium text-zinc-500 hover:text-zinc-700">
+                <ChevronRightIcon className="size-3 shrink-0 transition-transform data-[state=open]:rotate-90" />
+                Output stream
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <div className="mt-1 rounded border border-zinc-200 bg-[#fffdf0] px-2.5 py-2 text-xs text-zinc-600 whitespace-pre-wrap break-words">
+                  {run.outputText}
+                </div>
+              </CollapsibleContent>
+            </Collapsible>
           )}
 
           {run.toolCalls.map((tc) => (

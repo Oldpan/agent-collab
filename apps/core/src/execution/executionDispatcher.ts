@@ -7,6 +7,8 @@ import { createRun, finishRun, log } from '@agent-collab/runtime-acp';
 import type { Db } from '@agent-collab/runtime-acp';
 import type { AppConfig } from '../config.js';
 import type { NodeRegistry } from '../services/nodeRegistry.js';
+import { bumpAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
+import { buildDirectActivationPrompt } from '../web/directActivationPrompt.js';
 
 export class ExecutionDispatcher {
   private readonly db: Db;
@@ -62,7 +64,6 @@ export class ExecutionDispatcher {
     let contextText = '';
     let agentEnvVars: Record<string, string> | undefined;
     let disabledToolKinds: AgentInfo['disabledToolKinds'];
-    let useNotificationPrompt = false;
     if (row.agentId) {
       const agent = this.getAgentById(row.agentId);
       if (agent) {
@@ -81,7 +82,8 @@ export class ExecutionDispatcher {
         }
 
         if (recordAsUserMessage) {
-          // Write user message to channel_messages so agent can read via check_messages
+          // Persist DM user messages to channel_messages so history/replay stay complete
+          // even though the triggering message is also injected directly into this run prompt.
           const dmChannelId = `dm:${row.agentId}`;
           const msgSeq = (() => {
             const r = this.db
@@ -94,16 +96,16 @@ export class ExecutionDispatcher {
              VALUES(?, ?, 'user', 'User', 'user', ?, ?, ?, ?)`,
           ).run(randomUUID(), dmChannelId, `dm:@${agent.name}`, promptText, msgSeq, Date.now());
 
-          // Ensure agent checkpoint is at most msgSeq-1 so check_messages returns the new message.
-          // Use MIN to never advance the checkpoint past what the agent has already read.
-          this.db.prepare(
-            `INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq)
-             VALUES(?, ?, '', ?)
-             ON CONFLICT(agent_id, channel_id, thread_root_id) DO UPDATE SET last_seq = MIN(last_seq, excluded.last_seq)`,
-          ).run(row.agentId, dmChannelId, msgSeq - 1);
-        }
+          // The triggering DM is already present in the activation prompt, so mark
+          // it as delivered in the DM root stream to avoid re-fetching it immediately.
+          bumpAgentMessageCheckpoint(this.db, row.agentId, dmChannelId, msgSeq, null);
 
-        useNotificationPrompt = true;
+          promptText = buildDirectActivationPrompt({
+            agentName: agent.name,
+            senderName: 'User',
+            content: promptText,
+          });
+        }
       }
     }
 
@@ -145,9 +147,7 @@ export class ExecutionDispatcher {
         ...(driver.defaultEnv ?? {}),
       },
       disabledToolKinds,
-      prompt: useNotificationPrompt
-        ? '[System notification: You have 1 new message(s) waiting. Call check_messages to read them when you\'re ready.]'
-        : promptText,
+      prompt: promptText,
       sessionKey: row.sessionKey,
       hostKey,
       dispatchMode,

@@ -4,15 +4,14 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CreateDialog } from "@/components/ui/create-dialog";
 import { cn } from "@/lib/utils";
 import {
-  PlusIcon, TrashIcon, ChevronRightIcon, ChevronDownIcon, PencilIcon, Rows3Icon, HashIcon,
+  PlusIcon, TrashIcon, ChevronRightIcon, ChevronDownIcon, Rows3Icon, HashIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type {
   AgentInfo, MachineInfo, ChannelInfo,
   CreateAgentRequest,
-  UpdateAgentRequest, CreateMachineRequest, ConversationInfo,
+  CreateMachineRequest, ConversationInfo,
 } from "@agent-collab/protocol";
-import { AgentDetailPanel } from "./AgentDetailPanel";
 import { MachineCreatePanel } from "./MachineCreatePanel";
 import { ChannelCreatePanel } from "./ChannelCreatePanel";
 import { AgentCreateDialog } from "./AgentCreateDialog";
@@ -50,10 +49,6 @@ type SidebarProps = {
   onCreateMachine: (req: CreateMachineRequest) => Promise<MachineInfo>;
   onDeleteMachine: (id: string) => void;
   onCreateAgent: (req: CreateAgentRequest) => void;
-  onUpdateAgent: (id: string, req: UpdateAgentRequest) => Promise<void>;
-  onRestartAgent: (id: string) => Promise<void>;
-  onClearAgentChat: (id: string) => Promise<void>;
-  onResetAgent: (id: string) => Promise<void>;
   onDeleteAgent: (id: string) => void;
   onOpenAgentThread: (agentId: string) => void;
   onSelectChannel: (channelId: string) => void;
@@ -89,15 +84,13 @@ export function Sidebar({
   selectedView,
   onCreateMachine, onDeleteMachine,
   onOpenSessions,
-  onCreateAgent, onUpdateAgent, onDeleteAgent,
-  onRestartAgent, onClearAgentChat, onResetAgent,
+  onCreateAgent, onDeleteAgent,
   onOpenAgentThread,
   onSelectChannel, onCreateChannel,
 }: SidebarProps) {
   const [expandedMachines, setExpandedMachines] = useState<Set<string>>(
     () => readStoredSet(EXPANDED_MACHINES_STORAGE_KEY),
   );
-  const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [showCreateMachine, setShowCreateMachine] = useState(false);
   const [showCreateAgent, setShowCreateAgent] = useState(false);
   const [createAgentMachineId, setCreateAgentMachineId] = useState<string | null>(null);
@@ -343,34 +336,19 @@ export function Sidebar({
                     )}
 
                     {machineAgents.map((agent) => {
-                      const isEditing = editingAgentId === agent.agentId;
                       const primaryConversation = conversations.find(
                         (conversation) => conversation.agentId === agent.agentId && conversation.isPrimaryThread,
                       );
 
                       return (
-                        <div key={agent.agentId}>
-                          <AgentRow
-                            agent={agent}
-                            isEditing={isEditing}
-                            isSelected={selectedAgentId === agent.agentId}
-                            updatedAt={primaryConversation?.updatedAt ?? agent.updatedAt}
-                            onOpen={() => onOpenAgentThread(agent.agentId)}
-                            onEdit={() => setEditingAgentId(isEditing ? null : agent.agentId)}
-                            onDelete={() => handleOpenDeleteDialog(agent)}
-                          />
-
-                          {isEditing && (
-                            <AgentDetailPanel
-                              agent={agent}
-                              onUpdate={(req) => onUpdateAgent(agent.agentId, req)}
-                              onRestart={() => onRestartAgent(agent.agentId)}
-                              onClearChat={() => onClearAgentChat(agent.agentId)}
-                              onReset={() => onResetAgent(agent.agentId)}
-                              onClose={() => setEditingAgentId(null)}
-                            />
-                          )}
-                        </div>
+                        <AgentRow
+                          key={agent.agentId}
+                          agent={agent}
+                          isSelected={selectedAgentId === agent.agentId}
+                          updatedAt={primaryConversation?.updatedAt ?? agent.updatedAt}
+                          onOpen={() => onOpenAgentThread(agent.agentId)}
+                          onDelete={() => handleOpenDeleteDialog(agent)}
+                        />
                       );
                     })}
                   </div>
@@ -449,11 +427,9 @@ export function Sidebar({
 
 type AgentRowProps = {
   agent: AgentInfo;
-  isEditing: boolean;
   isSelected: boolean;
   updatedAt: number;
   onOpen: () => void;
-  onEdit: () => void;
   onDelete: () => void;
 };
 
@@ -483,7 +459,7 @@ function ChannelRow({ channel, isSelected, onSelect }: ChannelRowProps) {
 
 // ─── AgentRow ───
 
-function AgentRow({ agent, isEditing, isSelected, updatedAt, onOpen, onEdit, onDelete }: AgentRowProps) {
+function AgentRow({ agent, isSelected, updatedAt, onOpen, onDelete }: AgentRowProps) {
   return (
     <div className={cn(
       "group flex items-center gap-1.5 rounded-md border-2 border-zinc-900 px-2 py-1.5 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)] w-fit max-w-full",
@@ -504,17 +480,6 @@ function AgentRow({ agent, isEditing, isSelected, updatedAt, onOpen, onEdit, onD
         </div>
       </button>
       <div className="flex items-center gap-1 shrink-0">
-        <button
-          type="button"
-          className={cn(
-            "p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer",
-            isEditing ? "opacity-100 text-zinc-950" : "text-zinc-500 hover:text-zinc-950",
-          )}
-          onClick={(e) => { e.stopPropagation(); onEdit(); }}
-          title="Edit agent"
-        >
-          <PencilIcon className="size-3" />
-        </button>
         <button
           type="button"
           className={cn(

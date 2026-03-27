@@ -36,7 +36,8 @@ import { AgentWorkspacePanel } from "./AgentWorkspacePanel";
 import { AgentProfilePanel } from "./AgentProfilePanel";
 import { AgentActivityPanel } from "./AgentActivityPanel";
 import { ChatAvatar, readStoredUserIdentity } from "./ChatAvatar";
-import type { AgentInfo, ConversationInfo } from "@agent-collab/protocol";
+import { AgentSettingsPanel } from "./AgentSettingsPanel";
+import type { AgentInfo, ConversationInfo, UpdateAgentRequest } from "@agent-collab/protocol";
 import type { LiveMessage, LiveToolCall } from "@/hooks/types";
 import { cn } from "@/lib/utils";
 
@@ -44,6 +45,10 @@ type ChatPanelProps = {
   conversation: ConversationInfo;
   agent: AgentInfo | null;
   onOpenSidebar?: () => void;
+  onUpdateAgent?: (id: string, req: UpdateAgentRequest) => Promise<void>;
+  onRestartAgent?: (id: string) => Promise<void>;
+  onClearAgentChat?: (id: string) => Promise<void>;
+  onResetAgent?: (id: string) => Promise<void>;
 };
 
 /** Determine tool display state from LiveToolCall */
@@ -66,8 +71,16 @@ function isDispatchFailureError(error?: string): boolean {
 }
 
 /** Main chat panel: header + messages + composer */
-export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps) {
-  const [activeTab, setActiveTab] = useState<"chat" | "activity" | "workspace" | "profile">("chat");
+export function ChatPanel({
+  conversation,
+  agent,
+  onOpenSidebar,
+  onUpdateAgent,
+  onRestartAgent,
+  onClearAgentChat,
+  onResetAgent,
+}: ChatPanelProps) {
+  const [activeTab, setActiveTab] = useState<"chat" | "activity" | "workspace" | "profile" | "setting">("chat");
   const userIdentity = useMemo(() => readStoredUserIdentity(), []);
   const {
     messages,
@@ -186,6 +199,17 @@ export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps
           >
             Profile
           </Button>
+          <Button
+            size="sm"
+            variant={activeTab === "setting" ? "default" : "outline"}
+            className={cn(
+              "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+              activeTab === "setting" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+            )}
+            onClick={() => setActiveTab("setting")}
+          >
+            Setting
+          </Button>
         </div>
       </div>
 
@@ -193,6 +217,20 @@ export function ChatPanel({ conversation, agent, onOpenSidebar }: ChatPanelProps
         <AgentWorkspacePanel agent={agent} />
       ) : activeTab === "profile" ? (
         <AgentProfilePanel agent={agent} />
+      ) : activeTab === "setting" ? (
+        agent ? (
+          <AgentSettingsPanel
+            agent={agent}
+            onUpdate={(req) => onUpdateAgent?.(agent.agentId, req) ?? Promise.resolve()}
+            onRestart={() => onRestartAgent?.(agent.agentId) ?? Promise.resolve()}
+            onClearChat={() => onClearAgentChat?.(agent.agentId) ?? Promise.resolve()}
+            onReset={() => onResetAgent?.(agent.agentId) ?? Promise.resolve()}
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            Agent settings unavailable.
+          </div>
+        )
       ) : activeTab === "activity" ? (
         <AgentActivityPanel runs={runs} />
       ) : (

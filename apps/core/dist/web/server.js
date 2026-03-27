@@ -248,7 +248,35 @@ export async function startServer(params) {
                 ended_at as endedAt, stop_reason as stopReason, error
          FROM runs WHERE session_key = ? ORDER BY started_at ASC`)
             .all(sessionRow.sessionKey);
-        return runs;
+        return runs.map((run) => {
+            const nodeEvents = db
+                .prepare(`SELECT payload_json as payloadJson
+           FROM events
+           WHERE run_id = ? AND method = 'node/event'
+           ORDER BY seq ASC`)
+                .all(run.runId);
+            let assistantText = '';
+            let thinkingText = '';
+            for (const evt of nodeEvents) {
+                try {
+                    const parsed = JSON.parse(evt.payloadJson);
+                    if (parsed?.type === 'content.delta' && typeof parsed.text === 'string') {
+                        assistantText += parsed.text;
+                    }
+                    if (parsed?.type === 'thinking.delta' && typeof parsed.text === 'string') {
+                        thinkingText += parsed.text;
+                    }
+                }
+                catch {
+                    // ignore malformed rows
+                }
+            }
+            return {
+                ...run,
+                assistantText: assistantText || undefined,
+                thinkingText: thinkingText || undefined,
+            };
+        });
     });
     // Channel message history for a conversation (used by frontend to load DM history)
     app.get('/api/conversations/:id/channel-messages', async (req, reply) => {

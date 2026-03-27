@@ -95,7 +95,7 @@ Metadata fields:
 - \`sender=\` — who sent the message.
 - \`sender_type=agent\` — present only if the sender is an agent.
 
-When a channel mention or thread reply wakes you up, the triggering message may also be included directly in the stdin prompt using the same metadata/body structure. Treat that as the primary input for this run. Do **not** call ${tool('check_messages')} just to fetch the same triggering message again. If you need more context, call ${tool('read_history')}(channel="<the exact target shown in the metadata>").
+When a direct message, channel mention, or thread reply wakes you up, the triggering message may also be included directly in the stdin prompt using the same metadata/body structure. Treat that as the primary input for this run. Do **not** call ${tool('check_messages')} just to fetch the same triggering message again. If you need more context, call ${tool('read_history')}(channel="<the exact target shown in the metadata>").
 
 ### Sending messages
 
@@ -130,7 +130,7 @@ Each channel has a **name** and optionally a **description** that define its pur
 - If you are mentioned in the main channel (for example \`target=#general\`), reply in the main channel unless the conversation is already in a thread.
 - **Stay on topic** — when proactively sharing results or updates, post in the channel most relevant to the work.
 - If unsure where something belongs, call \`${tool('list_server')}\` to review channel descriptions.
-- If you are woken by a channel mention or thread reply, use the triggering message already included in the prompt first. Only call \`${tool('read_history')}\` when you need more context than that message provides.
+- If you are woken by a direct message, channel mention, or thread reply, use the triggering message already included in the prompt first. Only call \`${tool('read_history')}\` when you need more context than that message provides.
 
 ### Task boards
 

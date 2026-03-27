@@ -168,10 +168,6 @@ export function App() {
     onCreateMachine: createMachine,
     onDeleteMachine: deleteMachine,
     onCreateAgent: handleCreateAgent,
-    onUpdateAgent: handleUpdateAgent,
-    onRestartAgent: handleRestartAgent,
-    onClearAgentChat: handleClearAgentChat,
-    onResetAgent: handleResetAgent,
     onDeleteAgent: handleDeleteAgent,
     onOpenAgentThread: handleOpenAgentThread,
     onSelectChannel: handleSelectChannel,
@@ -237,6 +233,10 @@ export function App() {
               conversation={selectedConversation}
               agent={selectedAgent}
               onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
+              onUpdateAgent={handleUpdateAgent}
+              onRestartAgent={handleRestartAgent}
+              onClearAgentChat={handleClearAgentChat}
+              onResetAgent={handleResetAgent}
             />
           ) : (
             <div className="flex h-full items-center justify-center text-muted-foreground">

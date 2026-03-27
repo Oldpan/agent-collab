@@ -195,6 +195,39 @@ describe('ExecutionDispatcher', () => {
     expect(countRow.count).toBe(0);
   });
 
+  it('私聊用户消息应直接作为激活 prompt 下发，并推进 DM root checkpoint', async () => {
+    const agent = manager.createAgent({
+      name: 'Direct Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/direct-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    await manager.submitPrompt(conv.id, '你好，帮我总结一下刚才的结论');
+
+    const dispatch = sent[0]?.msg;
+    if (!dispatch || dispatch.type !== 'run.dispatch') throw new Error('missing dispatch');
+    expect(dispatch.prompt).toContain('[Triggered message metadata]');
+    expect(dispatch.prompt).toContain('target: dm:@User');
+    expect(dispatch.prompt).toContain('recipient: @Direct Bob');
+    expect(dispatch.prompt).toContain('[Triggered message body]');
+    expect(dispatch.prompt).toContain('你好，帮我总结一下刚才的结论');
+    expect(dispatch.prompt).not.toContain('Call check_messages to read them when you\'re ready');
+
+    const dmChannelId = `dm:${agent.agentId}`;
+    const msgRow = db.prepare(
+      'SELECT content, seq FROM channel_messages WHERE channel_id = ? ORDER BY seq DESC LIMIT 1'
+    ).get(dmChannelId) as { content: string; seq: number } | undefined;
+    expect(msgRow?.content).toBe('你好，帮我总结一下刚才的结论');
+
+    const checkpointRow = db.prepare(
+      'SELECT last_seq as lastSeq FROM agent_message_checkpoints WHERE agent_id = ? AND channel_id = ? AND thread_root_id = ?'
+    ).get(agent.agentId, dmChannelId, '') as { lastSeq: number } | undefined;
+    expect(checkpointRow?.lastSeq).toBe(msgRow?.seq);
+  });
+
   it('cancelConversationRun 应发送 run.cancel 到节点', () => {
     const conv = manager.createConversation({
       title: 'Cancel Test',

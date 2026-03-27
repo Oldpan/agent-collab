@@ -35,6 +35,63 @@ beforeAll(async () => {
   // REST routes
   app.get('/api/conversations', async () => manager.listConversations());
   app.get('/api/channels', async () => manager.listChannels());
+  app.get<{ Params: { id: string } }>('/api/conversations/:id/history', async (req, reply) => {
+    const conv = manager.getConversation(req.params.id);
+    if (!conv) {
+      reply.code(404);
+      return { error: 'Not found' };
+    }
+
+    const sessionRow = db
+      .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(req.params.id) as { sessionKey: string } | undefined;
+
+    if (!sessionRow) return [];
+
+    const runs = db
+      .prepare(
+        `SELECT run_id as runId, prompt_text as promptText, started_at as startedAt,
+                ended_at as endedAt, stop_reason as stopReason, error
+         FROM runs WHERE session_key = ? ORDER BY started_at ASC`,
+      )
+      .all(sessionRow.sessionKey) as Array<{
+      runId: string;
+      promptText: string;
+      startedAt: number;
+      endedAt: number | null;
+      stopReason: string | null;
+      error: string | null;
+    }>;
+
+    return runs.map((run) => {
+      const nodeEvents = db
+        .prepare(
+          `SELECT payload_json as payloadJson
+           FROM events
+           WHERE run_id = ? AND method = 'node/event'
+           ORDER BY seq ASC`,
+        )
+        .all(run.runId) as Array<{ payloadJson: string }>;
+
+      let assistantText = '';
+      let thinkingText = '';
+      for (const evt of nodeEvents) {
+        try {
+          const parsed = JSON.parse(evt.payloadJson) as { type?: string; text?: string };
+          if (parsed?.type === 'content.delta' && typeof parsed.text === 'string') assistantText += parsed.text;
+          if (parsed?.type === 'thinking.delta' && typeof parsed.text === 'string') thinkingText += parsed.text;
+        } catch {
+          // ignore malformed rows
+        }
+      }
+
+      return {
+        ...run,
+        assistantText: assistantText || undefined,
+        thinkingText: thinkingText || undefined,
+      };
+    });
+  });
 
   app.post<{ Body: any }>('/api/channels', async (req, reply) => {
     const body = (req.body ?? {}) as any;

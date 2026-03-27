@@ -197,6 +197,25 @@ function waitForEvents(events, count, timeoutMs = 5000) {
 }
 // ─── Tests ───
 describe('REST API', () => {
+    it('GET /api/conversations/:id/history 应返回聚合后的 assistantText 和 thinkingText', async () => {
+        const conv = manager.createConversation({ title: 'history text', nodeId: 'node-1' });
+        const row = db
+            .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+            .get(conv.id);
+        createRun(db, { runId: 'run-history-1', sessionKey: row.sessionKey, promptText: 'hello' });
+        db.prepare(`UPDATE runs SET started_at = ?, ended_at = ?, stop_reason = 'end_turn' WHERE run_id = ?`).run(1000, 2000, 'run-history-1');
+        db.prepare(`INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, 1, 'node/event', ?, ?), (?, 2, 'node/event', ?, ?)`).run('run-history-1', JSON.stringify({ type: 'thinking.delta', text: 'reason' }), 1100, 'run-history-1', JSON.stringify({ type: 'content.delta', text: 'result text' }), 1200);
+        const { status, body } = await fetchJson(`/api/conversations/${conv.id}/history`);
+        expect(status).toBe(200);
+        expect(body).toEqual([
+            expect.objectContaining({
+                runId: 'run-history-1',
+                assistantText: 'result text',
+                thinkingText: 'reason',
+            }),
+        ]);
+    });
     it('GET /api/conversations 初始为空', async () => {
         const { status, body } = await fetchJson('/api/conversations');
         expect(status).toBe(200);
