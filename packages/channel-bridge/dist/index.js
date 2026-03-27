@@ -84,9 +84,12 @@ server.tool('send_message', 'Send a message to the current conversation by defau
     }
 });
 // ── check_messages ────────────────────────────────────────────────────────────
-server.tool('check_messages', 'Check for new messages without waiting. Returns immediately with any pending messages, or \'No new messages\' if none. Use this freely during work — at natural breakpoints, after notifications, or whenever you want to see if anything new came in.', {}, async () => {
+server.tool('check_messages', "Check for new messages without waiting. Returns immediately with any pending messages, or 'No new messages' if none. Use this freely during work — at natural breakpoints or whenever you want to see if anything new came in. Optionally filter to a specific channel or DM.", {
+    channel: z.string().optional().describe("Optional: filter to a specific channel or DM (e.g. '#general', 'dm:@alice'). Omit to check all channels."),
+}, async ({ channel }) => {
     try {
-        const { ok, data } = await apiFetch('/receive');
+        const qs = channel ? `?channel=${encodeURIComponent(channel)}` : '';
+        const { ok, data } = await apiFetch(`/receive${qs}`);
         if (!ok)
             return toText(`Error: ${errText(data, 'receive failed')}`);
         const d = data;

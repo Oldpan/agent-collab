@@ -263,16 +263,15 @@ You may develop a specialized role over time through your interactions. Embrace 
   if (opts.includeStdinNotification) {
     prompt += `
 
-## Message Notifications
+## Checking for messages during work
 
-While you are busy (executing tools, thinking, etc.), new messages may arrive. When this happens, you will receive a system notification like:
+New messages do not interrupt your current run — they wait in your inbox while you work.
+At natural breakpoints during long tasks (after completing a step, before starting the next),
+call \`${tool('check_messages')}\` to see what's arrived. It returns instantly with pending messages or "No new messages".
 
-\`[System notification: You have N new message(s) waiting. Call check_messages to read them when you're ready.]\`
-
-How to handle these:
-- Call \`${tool('check_messages')}()\` to check for new messages. You are encouraged to do this frequently — at natural breakpoints in your work, or whenever you see a notification.
-- If the new message is higher priority, you may pivot to it. If not, continue your current work.
-- \`${tool('check_messages')}\` returns instantly with any pending messages (or "no new messages"). It is always safe to call.`;
+If your context includes an **[Inbox]** section, it means messages arrived in your channels since
+your last check. They don't require immediate action — finish what you're doing first, then call
+\`${tool('check_messages')}\` when ready.`;
   }
 
   if (config.description?.trim()) {

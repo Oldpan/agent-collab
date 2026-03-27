@@ -138,7 +138,7 @@ export function registerInternalAgentRoutes(
    * Poll for new messages since the agent's last-read checkpoint.
    * Returns immediately with pending messages (or empty array).
    */
-  app.get<{ Params: { agentId: string } }>(
+  app.get<{ Params: { agentId: string }; Querystring: { channel?: string } }>(
     '/api/internal/agent/:agentId/receive',
     async (req, reply) => {
       const { agentId } = req.params;
@@ -150,7 +150,21 @@ export function registerInternalAgentRoutes(
       // Query all channels the agent has joined, plus the user DM channel
       const agent = conversationManager.getAgent(agentId)!;
       const dmChannelId = `dm:${agentId}`;
-      const channelsToQuery = Array.from(new Set([...(agent.channelIds ?? []), dmChannelId]));
+
+      let channelsToQuery: string[];
+      const channelFilter = req.query.channel?.trim();
+      if (channelFilter) {
+        const filteredId = resolveChannelFromTarget(channelFilter, db)
+          ?? (channelFilter.startsWith('dm:') ? dmChannelId : null);
+        if (!filteredId) {
+          reply.code(400);
+          return { error: `Cannot resolve channel: ${channelFilter}` };
+        }
+        const memberOf = new Set([...(agent.channelIds ?? []), dmChannelId]);
+        channelsToQuery = memberOf.has(filteredId) ? [filteredId] : [];
+      } else {
+        channelsToQuery = Array.from(new Set([...(agent.channelIds ?? []), dmChannelId]));
+      }
 
       let allRows: MessageRow[] = [];
       for (const channelId of channelsToQuery) {

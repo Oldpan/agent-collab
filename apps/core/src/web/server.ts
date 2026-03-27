@@ -597,7 +597,6 @@ export async function startServer(params: {
         if (rootMsg?.sender_type === 'agent') {
           const conv = conversationManager.openAgentChannelThread(rootMsg.sender_id, req.params.id, threadRootId);
           if (conv) {
-            bumpAgentMessageCheckpoint(db, rootMsg.sender_id, req.params.id, seq, threadRootId);
             conversationManager.submitPrompt(
               conv.id,
               buildChannelActivationPrompt({
@@ -608,7 +607,9 @@ export async function startServer(params: {
                 reason: 'thread_reply',
               }),
               { recordAsUserMessage: false },
-            ).catch(() => {});
+            ).then(() => {
+              bumpAgentMessageCheckpoint(db, rootMsg.sender_id, req.params.id, seq, threadRootId);
+            }).catch(() => {});
           }
         }
       }
@@ -621,7 +622,6 @@ export async function startServer(params: {
           const conv = conversationManager.openAgentChannelThread(agent.agentId, req.params.id, threadRootId ?? null);
           if (conv) {
             const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
-            bumpAgentMessageCheckpoint(db, agent.agentId, req.params.id, seq, threadRootId ?? null);
             broadcastToChannel(req.params.id, {
               type: 'channel.notice',
               notice: {
@@ -639,7 +639,9 @@ export async function startServer(params: {
                 reason: 'mention',
               }),
               { recordAsUserMessage: false },
-            ).catch(() => {});
+            ).then(() => {
+              bumpAgentMessageCheckpoint(db, agent.agentId, req.params.id, seq, threadRootId ?? null);
+            }).catch(() => {});
           }
         }
       })();
