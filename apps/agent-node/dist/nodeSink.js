@@ -35,6 +35,7 @@ export class NodeSink {
     }
     async sendUi(event) {
         if (event.kind === 'tool') {
+            const toolEvent = event;
             if (event.stage === 'complete') {
                 const normalizedStatus = event.status === 'cancelled'
                     ? 'cancelled'
@@ -45,7 +46,7 @@ export class NodeSink {
                 this.emitEvent({
                     type: 'tool.result',
                     toolCallId: event.toolCallId ?? '',
-                    output: event.detail ?? event.status ?? 'done',
+                    output: toolEvent.output ?? event.detail ?? event.status ?? 'done',
                     error: isError,
                     status: normalizedStatus,
                 });
@@ -55,7 +56,7 @@ export class NodeSink {
                     type: 'tool.call',
                     toolCallId: event.toolCallId ?? '',
                     name: event.title,
-                    input: event.detail ?? null,
+                    input: toolEvent.input ?? event.detail ?? null,
                 });
             }
         }

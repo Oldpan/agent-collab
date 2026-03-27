@@ -156,6 +156,7 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.systemPromptText).toContain('mcp__chat__check_messages');
     expect(dispatch.systemPromptText).toContain('Compaction safety');
     expect(dispatch.systemPromptText).toContain('prefer `mcp__chat__send_message(content="...")` with no target');
+    expect(dispatch.systemPromptText).toContain('Sending `kind="final"` ends the current run. After that');
     expect(dispatch.systemPromptText).toContain('Do **not** convert a main-channel message');
     expect(dispatch.systemPromptText).toContain('Do **not** quote or repeat that metadata block back to the user');
     expect(dispatch.systemPromptText).toContain('Maintain memory carefully');
@@ -166,6 +167,8 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.contextText).toContain('notes/*.md');
     expect(dispatch.contextText).not.toContain('[System Prompt]');
     expect(dispatch.prompt).toContain('[Reply contract]');
+    expect(dispatch.prompt).toContain('Use mcp__chat__send_message(..., kind="progress") only while work is still ongoing.');
+    expect(dispatch.prompt).toContain('kind="final" ends this run. Do not send anything after it.');
     expect(dispatch.channelBridgeConfig).toMatchObject({
       agentId: agent.agentId,
       conversationId: conv.id,

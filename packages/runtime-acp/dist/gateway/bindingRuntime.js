@@ -108,6 +108,8 @@ export class BindingRuntime {
                                     mode: this.currentUiMode,
                                     title: ui.title,
                                     detail,
+                                    input: ui.input,
+                                    output: ui.output,
                                     toolCallId: ui.toolCallId,
                                     stage: ui.stage,
                                     status: ui.status,
@@ -552,9 +554,24 @@ export class BindingRuntime {
                 status,
             })
             : undefined;
+        const summaryDetail = this.currentUiMode === 'summary'
+            ? buildToolSummaryDetailText(update, stage, status)
+            : undefined;
+        const input = buildToolInputSnapshot({
+            update,
+            rawTitle,
+            toolCallId,
+            detail,
+            status,
+        });
+        const output = stage === 'complete'
+            ? detail ?? summaryDetail ?? status
+            : undefined;
         return {
             title: `${baseTitle} · ${status}`,
             detail,
+            input,
+            output,
             toolCallId,
             stage,
             status,
@@ -879,6 +896,109 @@ function buildToolSummaryDetailText(update, stage, status) {
     if (lines.length === 0)
         return undefined;
     return lines.join('\n');
+}
+function buildToolInputSnapshot(params) {
+    const parsedArgs = resolvePermissionToolArgs(params.update);
+    const parsedArgsRecord = asRecord(parsedArgs);
+    const snapshot = parsedArgsRecord
+        ? sanitizeToolRecord(parsedArgsRecord)
+        : {};
+    if (!parsedArgsRecord && parsedArgs !== null && parsedArgs !== undefined) {
+        snapshot.arguments = sanitizeToolValue(parsedArgs);
+    }
+    const kind = String(params.update?.kind ?? '').trim();
+    if (kind && snapshot.kind === undefined)
+        snapshot.kind = kind;
+    if (params.toolCallId && snapshot.tool_call_id === undefined) {
+        snapshot.tool_call_id = params.toolCallId;
+    }
+    const cwd = extractFirstString(params.update, ['cwd', 'input.cwd', 'arguments.cwd']);
+    if (cwd && snapshot.cwd === undefined)
+        snapshot.cwd = cwd;
+    const command = extractCommandHint(params.update);
+    if (command && snapshot.command === undefined)
+        snapshot.command = command;
+    const path = extractPathHint(params.update);
+    if (path && snapshot.path === undefined)
+        snapshot.path = path;
+    const query = extractSearchHint(params.update);
+    if (query && snapshot.query === undefined)
+        snapshot.query = query;
+    if (params.rawTitle && params.rawTitle !== 'tool_call' && snapshot.title === undefined) {
+        snapshot.title = truncateInline(params.rawTitle, 220);
+    }
+    if (params.status && snapshot.status === undefined)
+        snapshot.status = params.status;
+    const rawPreview = buildRawToolUpdatePreview(params.update);
+    if (rawPreview && snapshot.raw_update === undefined) {
+        snapshot.raw_update = rawPreview;
+    }
+    if (Object.keys(snapshot).length === 0) {
+        return params.detail ? { detail: params.detail } : null;
+    }
+    return snapshot;
+}
+function buildRawToolUpdatePreview(update) {
+    const record = asRecord(update);
+    if (!record)
+        return null;
+    const preview = {};
+    for (const key of [
+        'sessionUpdate',
+        'title',
+        'kind',
+        'status',
+        'state',
+        'outcome',
+        'toolCallId',
+        'tool_call_id',
+        'command',
+        'path',
+        'query',
+        'pattern',
+        'input',
+        'arguments',
+        'params',
+        'result',
+        'error',
+    ]) {
+        if (!(key in record))
+            continue;
+        const value = sanitizeToolValue(record[key]);
+        if (value !== undefined)
+            preview[key] = value;
+    }
+    return Object.keys(preview).length > 0 ? preview : null;
+}
+function sanitizeToolRecord(record) {
+    const sanitized = sanitizeToolValue(record);
+    return asRecord(sanitized) ?? {};
+}
+function sanitizeToolValue(value, depth = 0) {
+    if (value === null || value === undefined)
+        return value;
+    if (typeof value === 'string') {
+        return value.length > 800 ? value.slice(0, 797) + '...' : value;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean')
+        return value;
+    if (depth >= 3) {
+        if (Array.isArray(value))
+            return `[array(${value.length})]`;
+        return '[object]';
+    }
+    if (Array.isArray(value)) {
+        return value.slice(0, 12).map((item) => sanitizeToolValue(item, depth + 1));
+    }
+    if (typeof value === 'object') {
+        const record = value;
+        const out = {};
+        for (const [key, item] of Object.entries(record).slice(0, 20)) {
+            out[key] = sanitizeToolValue(item, depth + 1);
+        }
+        return out;
+    }
+    return String(value);
 }
 function extractCommandHint(update) {
     const command = extractFirstString(update, [

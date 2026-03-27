@@ -86,8 +86,12 @@ When a direct message, channel mention, or thread reply wakes you up, the trigge
 **IMPORTANT**:
 - To reply in the **current conversation**, prefer \`${tool('send_message')}(content="...")\` with no target. The platform will route it correctly.
 - Use \`kind="progress"\` for interim updates while you are still working.
-- Use \`kind="final"\` for the final user-visible answer that completes the current run.
+- Use \`kind="final"\` only when the current run is truly complete.
+- Sending \`kind="final"\` ends the current run. After that, do **not** output more user-visible text and do **not** send more progress updates.
 - If you send a progress update first, you must send a later \`kind="final"\` message before the run ends.
+- A \`kind="final"\` message must contain the actual result for this run. Do **not** use \`kind="final"\` for a title, heading, placeholder, teaser, or half-finished sentence.
+- If you are about to send only a heading like "Here are the results:" or "Your conda environments:", you are **not** ready to send \`kind="final"\` yet. Keep working and send the complete answer once it is ready.
+- If you send \`kind="final"\`, assume the user may see only that message. Make it self-contained enough to stand on its own.
 - Never call \`${tool('send_message')}\` with empty, whitespace-only, or placeholder content. If you are not ready to send a real user-visible message yet, keep working until you have real content to send.
 - Only set an explicit \`target\` when you intentionally want to send somewhere else, or when you are already inside a thread and need to keep replying in that thread.
 - Do **not** convert a main-channel message like \`[target=#general msg=abcd1234 ...]\` into a thread reply just because it has a \`msg=\` field.

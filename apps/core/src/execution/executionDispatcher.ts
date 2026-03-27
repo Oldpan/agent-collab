@@ -13,7 +13,9 @@ import { buildDirectActivationPrompt } from '../web/directActivationPrompt.js';
 const TURN_REPLY_CONTRACT = [
   '[Reply contract]',
   'Reply only via mcp__chat__send_message(...). Do not output user-visible text directly.',
-  'Before this run ends, send a final user-visible message with mcp__chat__send_message(..., kind="final").',
+  'Use mcp__chat__send_message(..., kind="progress") only while work is still ongoing.',
+  'Before this run ends, send one final user-visible message with mcp__chat__send_message(..., kind="final").',
+  'kind="final" ends this run. Do not send anything after it.',
 ].join('\n');
 
 export class ExecutionDispatcher {

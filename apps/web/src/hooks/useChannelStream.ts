@@ -2,6 +2,10 @@ import { useState, useCallback, useRef, useLayoutEffect, useEffect } from "react
 import type { ChannelMessage } from "@/lib/api";
 import * as api from "@/lib/api";
 
+function canMarkSeen(): boolean {
+  return typeof document === "undefined" || document.visibilityState === "visible";
+}
+
 function readUserName(): string {
   try {
     const stored = JSON.parse(localStorage.getItem("agent-collab:user-identity") ?? "{}") as { name?: string };
@@ -51,7 +55,7 @@ export function useChannelStream(options: UseChannelStreamOptions): {
           setMessages(d.messages);
           if (d.messages.length < 100) setHasMore(false);
           const latestSeq = d.messages.reduce((max, message) => Math.max(max, Number(message.seq ?? 0)), 0);
-          if (latestSeq > 0) {
+          if (latestSeq > 0 && canMarkSeen()) {
             onSeenSeqRef.current?.(latestSeq);
           }
         }
@@ -74,7 +78,7 @@ export function useChannelStream(options: UseChannelStreamOptions): {
         };
         if (event.type === "channel.message" && event.message) {
           const msg = event.message;
-          if (typeof msg.seq === "number") {
+          if (typeof msg.seq === "number" && canMarkSeen()) {
             onSeenSeqRef.current?.(msg.seq);
           }
           if (!msg.threadRootId) {

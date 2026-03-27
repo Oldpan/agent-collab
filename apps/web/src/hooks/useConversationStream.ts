@@ -14,6 +14,10 @@ function isDispatchFailureError(error?: string): boolean {
   return error === "Node not connected" || error === "Node disconnected during dispatch";
 }
 
+function canMarkSeen(): boolean {
+  return typeof document === "undefined" || document.visibilityState === "visible";
+}
+
 function getRunTerminalStatus(params: {
   stopReason?: string;
   error?: string;
@@ -165,7 +169,7 @@ export function useConversationStream(
               isStreaming: false,
             },
           ]);
-          if (typeof event.message.seq === "number") {
+          if (typeof event.message.seq === "number" && canMarkSeen()) {
             onSeenSeqRef.current?.(event.message.seq);
           }
           break;
@@ -570,7 +574,7 @@ export function useConversationStream(
             (max, message) => Math.max(max, Number(message.seq ?? 0)),
             0,
           );
-          if (latestSeq > 0) {
+          if (latestSeq > 0 && canMarkSeen()) {
             onSeenSeqRef.current?.(latestSeq);
           }
           setMessages(

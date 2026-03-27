@@ -1,5 +1,6 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import Fastify from 'fastify';
+import type { CoreToNode } from '@agent-collab/protocol';
 import type { Db } from '@agent-collab/runtime-acp';
 import { createRun } from '@agent-collab/runtime-acp';
 import { createTestConfig, createTestDb } from './helpers.js';
@@ -10,10 +11,25 @@ let db: Db;
 let manager: ConversationManager;
 let baseUrl: string;
 let serverClose: () => Promise<void>;
+const dispatches: CoreToNode[] = [];
 
 beforeAll(async () => {
   db = createTestDb();
-  manager = new ConversationManager({ db, config: createTestConfig() });
+  const fakeRegistry = {
+    getNode(nodeId: string) {
+      return {
+        nodeId,
+        hostname: 'test-node',
+        agentTypes: ['claude_acp', 'codex_acp'],
+        version: 'test',
+      };
+    },
+    send(_nodeId: string, msg: CoreToNode) {
+      dispatches.push(msg);
+      return true;
+    },
+  };
+  manager = new ConversationManager({ db, config: createTestConfig(), nodeRegistry: fakeRegistry as any });
   manager.start();
 
   const app = Fastify({ logger: false });
@@ -23,6 +39,10 @@ beforeAll(async () => {
   const addr = app.server.address() as { port: number };
   baseUrl = `http://127.0.0.1:${addr.port}`;
   serverClose = () => app.close();
+});
+
+beforeEach(() => {
+  dispatches.length = 0;
 });
 
 afterAll(async () => {
@@ -72,6 +92,7 @@ describe('internalAgentRouter', () => {
     expect(row.runId).toBe('run-router-1');
     expect(row.channelId).toBe(`dm:${agent.agentId}`);
     expect(row.messageKind).toBe('final');
+    expect(dispatches).toHaveLength(0);
   });
 
   it('未提供 target 时应默认回复当前私聊会话', async () => {
@@ -141,6 +162,105 @@ describe('internalAgentRouter', () => {
       'SELECT COUNT(*) as count FROM channel_messages WHERE sender_id = ?',
     ).get(agent.agentId) as { count: number };
     expect(row.count).toBe(0);
+  });
+
+  it('同一 run 在 final 之后应拒绝 progress 和未标注消息，但允许继续补同 target final', async () => {
+    const agent = manager.createAgent({
+      name: 'FinalGateBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/final-gate-bob-router',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-final-gate',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'gate me',
+    });
+
+    const firstFinal = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'done',
+        kind: 'final',
+        conversationId: conv.id,
+      }),
+    });
+    expect(firstFinal.status).toBe(200);
+    expect(dispatches).toHaveLength(0);
+    const trailingFinal = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'done, tail',
+        kind: 'final',
+        conversationId: conv.id,
+      }),
+    });
+    expect(trailingFinal.status).toBe(200);
+    expect(dispatches).toHaveLength(0);
+    const thirdAllowedFinal = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'done, final tail 2',
+        kind: 'final',
+        conversationId: conv.id,
+      }),
+    });
+    expect(thirdAllowedFinal.status).toBe(200);
+    expect(dispatches).toHaveLength(0);
+
+    const progressAfterFinal = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'still working',
+        kind: 'progress',
+        conversationId: conv.id,
+      }),
+    });
+    expect(progressAfterFinal.status).toBe(400);
+    expect(await progressAfterFinal.json()).toEqual({
+      error: 'run already sent a final reply; no further messages are allowed for this run',
+    });
+
+    const untypedAfterFinal = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'plain text',
+        conversationId: conv.id,
+      }),
+    });
+    expect(untypedAfterFinal.status).toBe(400);
+
+    const crossTargetFinal = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target: '#default',
+        content: 'different target final',
+        kind: 'final',
+        conversationId: conv.id,
+      }),
+    });
+    expect(crossTargetFinal.status).toBe(400);
+
+    const rows = db.prepare(
+      `SELECT content, message_kind as messageKind, target
+       FROM channel_messages
+       WHERE run_id = ?
+       ORDER BY created_at ASC, seq ASC`,
+    ).all('run-router-final-gate') as Array<{ content: string; messageKind: string | null; target: string }>;
+    expect(rows).toHaveLength(3);
+    expect(rows.map((row) => row.messageKind)).toEqual(['final', 'final', 'final']);
+    expect(rows.every((row) => row.target === 'dm:@oldpan')).toBe(true);
   });
 
   it('branch thread 未提供 target 时应默认回复当前 channel thread', async () => {

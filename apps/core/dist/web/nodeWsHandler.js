@@ -30,8 +30,16 @@ function hasRunFinalReplyMessage(db, runId) {
         .get(runId);
     return (row?.count ?? 0) > 0;
 }
+function isCancelStopReason(stopReason) {
+    return Boolean(stopReason?.includes('cancel'));
+}
 function normalizeReplyText(text) {
     return text.replace(/\s+/g, ' ').trim();
+}
+function stripInternalReminderTail(text) {
+    return text
+        .replace(/\(?System reminder acknowledged[\s\S]*$/i, '')
+        .trim();
 }
 function analyzeOutputAfterLastReply(db, runId) {
     const replyRows = db
@@ -40,16 +48,33 @@ function analyzeOutputAfterLastReply(db, runId) {
        WHERE run_id = ?
          AND sender_type = 'agent'`).all(runId);
     if (replyRows.length === 0) {
-        return { hasSubstantiveOutput: false, duplicatesLegacyReply: false };
+        return { hasSubstantiveOutput: false, duplicatesLastReply: false, textAfterReply: '' };
     }
     const lastReply = replyRows.reduce((latest, row) => (row.created_at > latest.created_at ? row : latest));
+    return analyzeOutputAfterTimestamp(db, runId, lastReply.created_at, lastReply.content ?? '', lastReply.message_kind);
+}
+function analyzeOutputAfterLastFinal(db, runId) {
+    const finalRows = db.prepare(`SELECT content, created_at, message_kind
+     FROM channel_messages
+     WHERE run_id = ?
+       AND sender_type = 'agent'
+       AND message_kind = 'final'
+     ORDER BY created_at DESC
+     LIMIT 1`).all(runId);
+    const lastFinal = finalRows[0];
+    if (!lastFinal) {
+        return { hasSubstantiveOutput: false, duplicatesLastReply: false, textAfterReply: '' };
+    }
+    return analyzeOutputAfterTimestamp(db, runId, lastFinal.created_at, lastFinal.content ?? '', lastFinal.message_kind);
+}
+function analyzeOutputAfterTimestamp(db, runId, createdAfter, replyContent, replyKind) {
     const rows = db
         .prepare(`SELECT payload_json as payloadJson
        FROM events
        WHERE run_id = ?
          AND method = 'node/event'
          AND created_at > ?
-       ORDER BY seq ASC`).all(runId, lastReply.created_at);
+       ORDER BY seq ASC`).all(runId, createdAfter);
     let textAfterReply = '';
     for (const row of rows) {
         try {
@@ -62,25 +87,25 @@ function analyzeOutputAfterLastReply(db, runId) {
             // Ignore malformed historic payloads
         }
     }
-    const normalizedOutput = normalizeReplyText(textAfterReply);
+    const normalizedOutput = stripInternalReminderTail(normalizeReplyText(textAfterReply));
     if (normalizedOutput.length < 32) {
-        return { hasSubstantiveOutput: false, duplicatesLegacyReply: false };
+        return { hasSubstantiveOutput: false, duplicatesLastReply: false, textAfterReply: normalizedOutput };
     }
-    const normalizedLastReply = normalizeReplyText(lastReply.content ?? '');
-    const duplicatesLegacyReply = !lastReply.message_kind &&
-        !!normalizedLastReply &&
+    const normalizedLastReply = normalizeReplyText(replyContent);
+    const duplicatesLastReply = !!normalizedLastReply &&
         (normalizedOutput === normalizedLastReply ||
             normalizedOutput.includes(normalizedLastReply) ||
             normalizedLastReply.includes(normalizedOutput));
     return {
         hasSubstantiveOutput: true,
-        duplicatesLegacyReply,
+        duplicatesLastReply,
+        textAfterReply: normalizedOutput,
     };
 }
 function getReplyContractError(msg, db, conversationId, runId) {
     if (msg.error)
         return null;
-    if (msg.stopReason?.includes('cancel'))
+    if (isCancelStopReason(msg.stopReason))
         return null;
     if (!requiresMcpReplyContract(db, conversationId))
         return null;
@@ -91,10 +116,35 @@ function getReplyContractError(msg, db, conversationId, runId) {
         return null;
     }
     const outputAnalysis = analyzeOutputAfterLastReply(db, runId);
-    if (outputAnalysis.hasSubstantiveOutput && !outputAnalysis.duplicatesLegacyReply) {
+    if (outputAnalysis.hasSubstantiveOutput && !(outputAnalysis.duplicatesLastReply && !hasRunFinalReplyMessage(db, runId))) {
         return 'Agent did not send a final reply via send_message';
     }
     return null;
+}
+function shouldRepairTrailingDeltaAfterFinal(msg, db, conversationId, runId) {
+    if (msg.error)
+        return false;
+    if (isCancelStopReason(msg.stopReason))
+        return false;
+    if (!requiresMcpReplyContract(db, conversationId))
+        return false;
+    if (!hasRunFinalReplyMessage(db, runId))
+        return false;
+    const outputAnalysis = analyzeOutputAfterLastFinal(db, runId);
+    return outputAnalysis.hasSubstantiveOutput && !outputAnalysis.duplicatesLastReply;
+}
+function getRunEndError(msg, db, conversationId, runId) {
+    if (msg.error)
+        return msg.error;
+    if (isCancelStopReason(msg.stopReason)) {
+        if (hasRunFinalReplyMessage(db, runId))
+            return null;
+        if (requiresMcpReplyContract(db, conversationId)) {
+            return 'Agent run was cancelled before sending a final reply';
+        }
+        return 'Run cancelled before completion';
+    }
+    return getReplyContractError(msg, db, conversationId, runId);
 }
 function collectRunOutputText(db, runId, createdAfter) {
     const rows = db.prepare(`SELECT payload_json as payloadJson
@@ -115,7 +165,7 @@ function collectRunOutputText(db, runId, createdAfter) {
             // Ignore malformed historic payloads
         }
     }
-    return normalizeReplyText(text);
+    return stripInternalReminderTail(normalizeReplyText(text));
 }
 function buildReplyRepairPrompt(db, runId, replyContractError) {
     const replyRows = db.prepare(`SELECT content, created_at
@@ -137,6 +187,29 @@ function buildReplyRepairPrompt(db, runId, replyContractError) {
         '',
         '[Draft reply to send]',
         draftText,
+    ].join('\n');
+}
+function buildTrailingFinalRepairPrompt(db, runId) {
+    const finalRow = db.prepare(`SELECT content, created_at
+     FROM channel_messages
+     WHERE run_id = ?
+       AND sender_type = 'agent'
+       AND message_kind = 'final'
+     ORDER BY created_at DESC
+     LIMIT 1`).get(runId);
+    if (!finalRow)
+        return null;
+    const trailingOutput = collectRunOutputText(db, runId, finalRow.created_at);
+    if (!trailingOutput || trailingOutput.length < 32)
+        return null;
+    return [
+        '[System: Repair the previous run\'s final reply with the additional trailing output.]',
+        'The previous run already sent a final reply, but then continued outputting more user-visible text.',
+        'Send exactly one updated final user-visible reply for the current conversation via mcp__chat__send_message(content="...", kind="final").',
+        'Use only the trailing output below as the content to send. Do not do any new work. Do not call check_messages. Do not send progress updates. Do not mention this repair step.',
+        '',
+        '[Trailing output to send]',
+        trailingOutput,
     ].join('\n');
 }
 function updateConversationStatus(db, broadcast, conversationId, status) {
@@ -259,9 +332,11 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
                     break;
                 }
                 const replyContractError = getReplyContractError(msg, db, msg.conversationId, msg.runId);
+                const runEndError = getRunEndError(msg, db, msg.conversationId, msg.runId);
+                const trailingFinalNeedsRepair = shouldRepairTrailingDeltaAfterFinal(msg, db, msg.conversationId, msg.runId);
                 const pendingRepair = pendingRepairs.get(msg.conversationId);
                 const isRepairRun = Boolean(pendingRepair && pendingRepair.sourceRunId !== msg.runId);
-                if (!msg.error && replyContractError && !isRepairRun) {
+                if (!msg.error && !isCancelStopReason(msg.stopReason) && replyContractError && !isRepairRun) {
                     const repairPrompt = buildReplyRepairPrompt(db, msg.runId, replyContractError);
                     if (repairPrompt) {
                         log.info('[node-ws] scheduling reply-contract repair run', {
@@ -317,6 +392,61 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
                         break;
                     }
                 }
+                if (!msg.error && !isCancelStopReason(msg.stopReason) && !replyContractError && trailingFinalNeedsRepair && !isRepairRun) {
+                    const repairPrompt = buildTrailingFinalRepairPrompt(db, msg.runId);
+                    if (repairPrompt) {
+                        log.info('[node-ws] scheduling trailing-final repair run', {
+                            conversationId: msg.conversationId,
+                            sourceRunId: msg.runId,
+                        });
+                        const endedAt = Date.now();
+                        finishRun(db, { runId: msg.runId, stopReason: msg.stopReason ?? 'end_turn' });
+                        broadcast(msg.conversationId, {
+                            type: 'turn.end',
+                            turnId: msg.runId,
+                            stopReason: msg.stopReason ?? 'end_turn',
+                            endedAt,
+                        });
+                        updateConversationStatus(db, broadcast, msg.conversationId, 'recovering');
+                        pendingRepairs.set(msg.conversationId, { sourceRunId: msg.runId });
+                        void manager.submitPrompt(msg.conversationId, repairPrompt, { recordAsUserMessage: false })
+                            .then((result) => {
+                            const state = pendingRepairs.get(msg.conversationId);
+                            if (!state || state.sourceRunId !== msg.runId)
+                                return;
+                            if (result.runId) {
+                                log.info('[node-ws] trailing-final repair dispatched', {
+                                    conversationId: msg.conversationId,
+                                    sourceRunId: msg.runId,
+                                    repairRunId: result.runId,
+                                    queued: result.queued,
+                                });
+                                pendingRepairs.set(msg.conversationId, { ...state, repairRunId: result.runId });
+                            }
+                            if (result.queued) {
+                                updateConversationStatus(db, broadcast, msg.conversationId, 'queued');
+                            }
+                        })
+                            .catch((error) => {
+                            const state = pendingRepairs.get(msg.conversationId);
+                            if (!state || state.sourceRunId !== msg.runId)
+                                return;
+                            log.warn('[node-ws] trailing-final repair failed to dispatch', {
+                                conversationId: msg.conversationId,
+                                sourceRunId: msg.runId,
+                                error: String(error?.message ?? error),
+                            });
+                            pendingRepairs.delete(msg.conversationId);
+                            updateConversationStatus(db, broadcast, msg.conversationId, 'failed');
+                            broadcast(msg.conversationId, {
+                                type: 'error',
+                                message: String(error?.message ?? 'Agent final reply was stale and repair dispatch failed'),
+                            });
+                            void manager.onConversationSettled(msg.conversationId);
+                        });
+                        break;
+                    }
+                }
                 if (pendingRepair && (!pendingRepair.repairRunId || pendingRepair.repairRunId === msg.runId || isRepairRun)) {
                     pendingRepairs.delete(msg.conversationId);
                 }
@@ -327,7 +457,7 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
                     conversationId: msg.conversationId,
                     runId: msg.runId,
                     stopReason: msg.stopReason,
-                    error: msg.error ?? replyContractError ?? undefined,
+                    error: runEndError ?? undefined,
                 });
                 break;
             }

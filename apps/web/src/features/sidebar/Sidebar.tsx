@@ -450,7 +450,7 @@ type ChannelRowProps = {
 function UnreadBadge({ count }: { count: number }) {
   if (count <= 0) return null;
   return (
-    <span className="inline-flex min-w-5 items-center justify-center rounded-full border-2 border-zinc-900 bg-[#ff6b6b] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]">
+    <span className="inline-flex min-w-5 items-center justify-center rounded-sm border-2 border-zinc-900 bg-[#e85d75] px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]">
       {count > 99 ? "99+" : count}
     </span>
   );
@@ -461,7 +461,7 @@ function ChannelRow({ channel, isSelected, unreadCount, onSelect }: ChannelRowPr
     <button
       type="button"
       className={cn(
-        "flex w-fit max-w-full items-center gap-1.5 rounded-md border-2 border-zinc-900 px-2.5 py-1.5 text-left shadow-[3px_3px_0_0_rgba(0,0,0,0.1)] transition-colors cursor-pointer",
+        "flex w-full items-center gap-1.5 rounded-md border-2 border-zinc-900 px-2.5 py-1.5 text-left shadow-[3px_3px_0_0_rgba(0,0,0,0.1)] transition-colors cursor-pointer",
         isSelected ? "bg-[#c4b5fd] text-zinc-950" : "bg-[#fff8d8] hover:bg-[#fff1a9]",
       )}
       onClick={onSelect}
@@ -478,7 +478,7 @@ function ChannelRow({ channel, isSelected, unreadCount, onSelect }: ChannelRowPr
 function AgentRow({ agent, isSelected, updatedAt, unreadCount, onOpen, onDelete }: AgentRowProps) {
   return (
     <div className={cn(
-      "group flex items-center gap-1.5 rounded-md border-2 border-zinc-900 px-2 py-1.5 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)] w-fit max-w-full",
+      "group flex w-full items-center gap-1.5 rounded-md border-2 border-zinc-900 px-2 py-1.5 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]",
       isSelected ? "bg-[#c4b5fd] text-zinc-950" : "bg-[#fff8d8] hover:bg-[#fff1a9]",
     )}>
       <button

@@ -28,6 +28,8 @@ export type UiEvent =
       mode: UiMode;
       title: string;
       detail?: string;
+      input?: unknown;
+      output?: string;
       toolCallId?: string;
       stage?: ToolUiStage;
       status?: string;

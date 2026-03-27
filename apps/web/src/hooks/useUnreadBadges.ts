@@ -2,8 +2,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentInfo, ChannelInfo } from "@agent-collab/protocol";
 import * as api from "@/lib/api";
 
-const AGENT_READ_STORAGE_KEY = "agent-collab:agent-dm-read-seqs";
-const CHANNEL_READ_STORAGE_KEY = "agent-collab:channel-read-seqs";
+const AGENT_READ_STORAGE_KEY = "agent-collab:agent-dm-read-seqs:v2";
+const CHANNEL_READ_STORAGE_KEY = "agent-collab:channel-read-seqs:v2";
 const POLL_INTERVAL_MS = 3000;
 
 type SeqMap = Record<string, number>;
@@ -65,6 +65,9 @@ export function useUnreadBadges(params: {
   const { agents, channels, activeAgentId, activeChannelId } = params;
   const agentIds = useMemo(() => agents.map((agent) => agent.agentId), [agents]);
   const channelIds = useMemo(() => channels.map((channel) => channel.channelId), [channels]);
+  const [isVisible, setIsVisible] = useState(
+    () => typeof document === "undefined" || document.visibilityState === "visible",
+  );
 
   const [agentReadSeqs, setAgentReadSeqs] = useState<SeqMap>(() => readStoredSeqMap(AGENT_READ_STORAGE_KEY));
   const [channelReadSeqs, setChannelReadSeqs] = useState<SeqMap>(() => readStoredSeqMap(CHANNEL_READ_STORAGE_KEY));
@@ -134,6 +137,15 @@ export function useUnreadBadges(params: {
   }, [agentIds, agentReadSeqs, channelIds, channelReadSeqs]);
 
   useEffect(() => {
+    if (typeof document === "undefined") return;
+    const updateVisibility = () => {
+      setIsVisible(document.visibilityState === "visible");
+    };
+    document.addEventListener("visibilitychange", updateVisibility);
+    return () => document.removeEventListener("visibilitychange", updateVisibility);
+  }, []);
+
+  useEffect(() => {
     void refresh();
     const intervalId = window.setInterval(() => {
       void refresh();
@@ -142,16 +154,16 @@ export function useUnreadBadges(params: {
   }, [refresh]);
 
   useEffect(() => {
-    if (activeAgentId) {
+    if (isVisible && activeAgentId) {
       markAgentReadUpTo(activeAgentId);
     }
-  }, [activeAgentId, markAgentReadUpTo]);
+  }, [activeAgentId, isVisible, markAgentReadUpTo]);
 
   useEffect(() => {
-    if (activeChannelId) {
+    if (isVisible && activeChannelId) {
       markChannelReadUpTo(activeChannelId);
     }
-  }, [activeChannelId, markChannelReadUpTo]);
+  }, [activeChannelId, isVisible, markChannelReadUpTo]);
 
   return {
     agentUnreadCounts: Object.fromEntries(agentIds.map((agentId) => [agentId, agentEntries[agentId]?.unreadCount ?? 0])),

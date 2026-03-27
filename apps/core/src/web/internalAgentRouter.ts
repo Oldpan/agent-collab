@@ -116,6 +116,20 @@ export function registerInternalAgentRoutes(
     const seq = nextSeq(db, channelId);
     const runId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
     const threadRootId = resolveThreadRootId(resolvedTarget);
+    const priorFinals = runId ? listRunFinalMessages(db, runId) : [];
+    const hasPriorFinal = priorFinals.length > 0;
+
+    if (hasPriorFinal) {
+      const allowAdditionalFinal =
+        kind === 'final' &&
+        priorFinals.every((row) => row.target === resolvedTarget);
+      if (!allowAdditionalFinal) {
+        reply.code(400);
+        return {
+          error: 'run already sent a final reply; no further messages are allowed for this run',
+        };
+      }
+    }
 
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
@@ -784,6 +798,17 @@ function findActiveConversationRunId(db: Db, conversationId: string): string | n
     )
     .get(conversationId) as { runId: string } | undefined;
   return row?.runId ?? null;
+}
+
+function listRunFinalMessages(db: Db, runId: string): Array<{ target: string }> {
+  return db.prepare(
+    `SELECT target
+     FROM channel_messages
+     WHERE run_id = ?
+       AND sender_type = 'agent'
+       AND message_kind = 'final'
+     ORDER BY created_at ASC, seq ASC`,
+  ).all(runId) as Array<{ target: string }>;
 }
 
 function nextTaskNumber(db: Db, channelId: string): number {

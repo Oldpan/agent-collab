@@ -203,3 +203,12 @@
 - reply contract 的“是否已经正式回复”现在按 `run_id + sender_type='agent'` 统计，不再错误地只看私聊 DM，因此 channel branch runs 也会进入同一套补救逻辑。
 - 新增了 channel branch 场景的回归测试：如果 agent 在频道里只产出内部正文却没调用 `send_message`，core 会先静默派发一次 repair run，要求它补发最终可见回复。
 - `node-ws` 现在会记录 reply-contract repair 的调度、派发和派发失败日志，便于排查“明明该补救却没有补出去”的问题。
+- 2026-03-27 (unread badge visibility fix)
+  - Fixed unread badges being prematurely cleared on the frontend.
+  - Bumped local unread anchor storage keys to `v2` to discard stale/bad read state from the previous implementation.
+  - Sidebar unread anchors are now only auto-advanced while the document is visible.
+  - Active DM/channel streams no longer mark incoming/history messages as seen while the page is hidden.
+- 2026-03-27 (final reply prompt hardening)
+  - Strengthened prompt rules around `send_message(kind="final")`.
+  - Final replies must now contain the actual result, not just a heading, teaser, or half-finished sentence.
+  - Added explicit guidance that a final reply should be self-contained and that agents must keep working until the full answer is ready.

@@ -37,6 +37,7 @@ export class WsSink implements OutboundSink {
 
   async sendUi(event: UiEvent): Promise<void> {
     if (event.kind === 'tool') {
+      const toolEvent = event as UiEvent & { input?: unknown; output?: string };
       if (event.stage === 'complete') {
         const normalizedStatus =
           event.status === 'cancelled'
@@ -49,7 +50,7 @@ export class WsSink implements OutboundSink {
         this.broadcast({
           type: 'tool.result',
           toolCallId: event.toolCallId ?? '',
-          output: event.detail ?? event.status ?? 'done',
+          output: toolEvent.output ?? event.detail ?? event.status ?? 'done',
           error: isError,
           status: normalizedStatus,
         });
@@ -59,7 +60,7 @@ export class WsSink implements OutboundSink {
           type: 'tool.call',
           toolCallId: event.toolCallId ?? '',
           name: event.title,
-          input: event.detail ?? null,
+          input: toolEvent.input ?? event.detail ?? null,
         });
       }
     }

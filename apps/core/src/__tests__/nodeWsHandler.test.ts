@@ -279,6 +279,242 @@ describe('nodeWsHandler', () => {
     expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
   });
 
+  it('已发送 final 后若继续输出实质性 delta 且没有更新的 final，应触发 trailing-final repair', async () => {
+    const agent = manager.createAgent({
+      name: 'TrailingFinalBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/trailing-final-bob-contract',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const socket = new FakeSocket();
+    const events: any[] = [];
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(socket as any, registry as any, (_conversationId, event) => {
+      events.push(event);
+    }, db, manager);
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-trailing-final-1',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'list envs',
+    });
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'msg-trailing-final-1',
+      `dm:${agent.agentId}`,
+      agent.agentId,
+      agent.name,
+      'dm:@oldpan',
+      '你的 conda 环境列表：',
+      1,
+      1000,
+      'run-trailing-final-1',
+      'final',
+    );
+
+    db.prepare(
+      `INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, ?, 'node/event', ?, ?)`,
+    ).run(
+      'run-trailing-final-1',
+      1,
+      JSON.stringify({
+        type: 'content.delta',
+        text: '1. base - 基础环境\n2. develop - 开发环境\n3. vllm - 推理环境',
+      }),
+      2000,
+    );
+
+    socket.emit('message', JSON.stringify({
+      type: 'run.end',
+      runId: 'run-trailing-final-1',
+      conversationId: conv.id,
+      stopReason: 'end_turn',
+    }));
+    await expect.poll(() => dispatches.length, { timeout: 5000 }).toBeGreaterThan(0);
+
+    const originalRun = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
+      .get('run-trailing-final-1') as { error: string | null; stopReason: string | null };
+    expect(originalRun.error).toBeNull();
+    expect(originalRun.stopReason).toBe('end_turn');
+    expect(events).toContainEqual({
+      type: 'conversation.status',
+      conversationId: conv.id,
+      status: 'recovering',
+    });
+
+    const repairDispatch = dispatches[0];
+    if (!repairDispatch || repairDispatch.type !== 'run.dispatch') throw new Error('missing repair dispatch');
+    expect(repairDispatch.prompt).toContain('[System: Repair the previous run\'s final reply with the additional trailing output.]');
+    expect(repairDispatch.prompt).toContain('mcp__chat__send_message(content="...", kind="final")');
+    expect(repairDispatch.prompt).toContain('1. base - 基础环境');
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'msg-trailing-final-repair-1',
+      `dm:${agent.agentId}`,
+      agent.agentId,
+      agent.name,
+      'dm:@oldpan',
+      '1. base - 基础环境\n2. develop - 开发环境\n3. vllm - 推理环境',
+      2,
+      Date.now(),
+      repairDispatch.runId,
+      'final',
+    );
+
+    socket.emit('message', JSON.stringify({
+      type: 'run.end',
+      runId: repairDispatch.runId,
+      conversationId: conv.id,
+      stopReason: 'end_turn',
+    }));
+
+    const repairRun = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
+      .get(repairDispatch.runId) as { error: string | null; stopReason: string | null };
+    expect(repairRun.error).toBeNull();
+    expect(repairRun.stopReason).toBe('end_turn');
+    expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
+  });
+
+  it('已发送 final 后收到 cancel stopReason 时应按成功收口，不触发 repair', () => {
+    const agent = manager.createAgent({
+      name: 'CancelFinalBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/cancel-final-bob-contract',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const socket = new FakeSocket();
+    const events: any[] = [];
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(socket as any, registry as any, (_conversationId, event) => {
+      events.push(event);
+    }, db, manager);
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-cancel-final-1',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'hello',
+    });
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'msg-cancel-final-1',
+      `dm:${agent.agentId}`,
+      agent.agentId,
+      agent.name,
+      'dm:@oldpan',
+      'done',
+      1,
+      Date.now(),
+      'run-cancel-final-1',
+      'final',
+    );
+
+    socket.emit('message', JSON.stringify({
+      type: 'run.end',
+      runId: 'run-cancel-final-1',
+      conversationId: conv.id,
+      stopReason: 'cancelled',
+    }));
+
+    const runRow = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
+      .get('run-cancel-final-1') as { error: string | null; stopReason: string | null };
+    expect(runRow.error).toBeNull();
+    expect(runRow.stopReason).toBe('cancelled');
+    expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(dispatches).toHaveLength(0);
+  });
+
+  it('未发送 final 就 cancel 时应按失败收口，且不触发 repair', () => {
+    const agent = manager.createAgent({
+      name: 'CancelNoFinalBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/cancel-no-final-bob-contract',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const socket = new FakeSocket();
+    const events: any[] = [];
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(socket as any, registry as any, (_conversationId, event) => {
+      events.push(event);
+    }, db, manager);
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-cancel-no-final-1',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'hello',
+    });
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'msg-cancel-progress-1',
+      `dm:${agent.agentId}`,
+      agent.agentId,
+      agent.name,
+      'dm:@oldpan',
+      'working',
+      1,
+      Date.now(),
+      'run-cancel-no-final-1',
+      'progress',
+    );
+
+    socket.emit('message', JSON.stringify({
+      type: 'run.end',
+      runId: 'run-cancel-no-final-1',
+      conversationId: conv.id,
+      stopReason: 'cancelled',
+    }));
+
+    const runRow = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
+      .get('run-cancel-no-final-1') as { error: string | null; stopReason: string | null };
+    expect(runRow.error).toBe('Agent run was cancelled before sending a final reply');
+    expect(runRow.stopReason).toBeNull();
+    expect(events).toContainEqual({
+      type: 'error',
+      message: 'Agent run was cancelled before sending a final reply',
+    });
+    expect(dispatches).toHaveLength(0);
+  });
+
   it('仅发送 progress 消息且后续仍有大量输出时应先 repair，repair 失败后再按失败收口', async () => {
     const agent = manager.createAgent({
       name: 'Charlie',
