@@ -17,7 +17,7 @@ beforeAll(async () => {
   manager.start();
 
   const app = Fastify({ logger: false });
-  registerInternalAgentRoutes(app, db, manager, () => {}, () => {});
+  registerInternalAgentRoutes(app, db, manager, () => {}, () => {}, createTestConfig().humanUserName);
 
   await app.listen({ port: 0, host: '127.0.0.1' });
   const addr = app.server.address() as { port: number };
@@ -101,14 +101,14 @@ describe('internalAgentRouter', () => {
     expect(res.status).toBe(200);
     const body = await res.json() as { runId?: string; target?: string };
     expect(body.runId).toBe('run-router-2');
-    expect(body.target).toBe('dm:@User');
+    expect(body.target).toBe('dm:@oldpan');
 
     const row = db.prepare(
       'SELECT run_id as runId, channel_id as channelId, target FROM channel_messages WHERE sender_id = ? ORDER BY created_at DESC LIMIT 1',
     ).get(agent.agentId) as { runId: string | null; channelId: string; target: string };
     expect(row.runId).toBe('run-router-2');
     expect(row.channelId).toBe(`dm:${agent.agentId}`);
-    expect(row.target).toBe('dm:@User');
+    expect(row.target).toBe('dm:@oldpan');
   });
 
   it('branch thread 未提供 target 时应默认回复当前 channel thread', async () => {

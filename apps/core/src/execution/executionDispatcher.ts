@@ -91,10 +91,11 @@ export class ExecutionDispatcher {
               .get(dmChannelId) as { maxSeq: number | null };
             return (r.maxSeq ?? 0) + 1;
           })();
+          const humanUserName = this.config.humanUserName;
           this.db.prepare(
             `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
-             VALUES(?, ?, 'user', 'User', 'user', ?, ?, ?, ?)`,
-          ).run(randomUUID(), dmChannelId, `dm:@${agent.name}`, promptText, msgSeq, Date.now());
+             VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?)`,
+          ).run(randomUUID(), dmChannelId, humanUserName, `dm:@${agent.name}`, promptText, msgSeq, Date.now());
 
           // The triggering DM is already present in the activation prompt, so mark
           // it as delivered in the DM root stream to avoid re-fetching it immediately.
@@ -102,7 +103,7 @@ export class ExecutionDispatcher {
 
           promptText = buildDirectActivationPrompt({
             agentName: agent.name,
-            senderName: 'User',
+            senderName: humanUserName,
             content: promptText,
           });
         }

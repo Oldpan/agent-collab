@@ -524,7 +524,7 @@ export async function startServer(params: {
     async (req, reply) => {
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
-      const { content, senderName = 'User', replyTo } = req.body ?? {};
+      const { content, senderName = config.humanUserName, replyTo } = req.body ?? {};
       if (!content) { reply.code(400); return { error: 'content is required' }; }
       const threadRootId = replyTo ?? null;
       const now = Date.now();
@@ -674,7 +674,7 @@ export async function startServer(params: {
     }
   }
 
-  registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel);
+  registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel, config.humanUserName);
 
   // ─── User-facing Task routes ───
 

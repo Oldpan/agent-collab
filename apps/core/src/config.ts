@@ -70,6 +70,8 @@ function createConfigSchema(defaults: {
     contextReplayEnabled: z.boolean().default(true),
     contextReplayRuns: z.number().int().min(0).max(100).default(16),
     contextReplayMaxChars: z.number().int().min(200).max(512_000).default(128_000),
+
+    humanUserName: z.string().min(1).default('oldpan'),
   });
 }
 

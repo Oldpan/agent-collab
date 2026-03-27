@@ -48,6 +48,7 @@ export function registerInternalAgentRoutes(
   conversationManager: ConversationManager,
   broadcastToAgent: (agentId: string, event: ServerEvent, conversationId?: string) => void,
   broadcastToChannel: (channelId: string, event: ServerEvent) => void,
+  humanUserName: string,
 ): void {
   // ─── Messaging ───────────────────────────────────────────────────────────
 
@@ -81,7 +82,7 @@ export function registerInternalAgentRoutes(
       }
     }
 
-    const defaultTarget = conversationId ? resolveDefaultReplyTarget(db, conversationId) : null;
+    const defaultTarget = conversationId ? resolveDefaultReplyTarget(db, conversationId, humanUserName) : null;
     const initialTarget = target?.trim() || defaultTarget;
     if (!initialTarget) {
       reply.code(400);
@@ -673,7 +674,7 @@ function resolveChannelFromTarget(target: string, db: Db): string | null {
   return null;
 }
 
-function resolveDefaultReplyTarget(db: Db, conversationId: string): string | null {
+function resolveDefaultReplyTarget(db: Db, conversationId: string, humanUserName: string): string | null {
   const row = db.prepare(
     `SELECT c.id as conversationId, c.channel_id as channelId, c.thread_kind as threadKind,
             c.is_primary_thread as isPrimaryThread, c.thread_root_id as threadRootId,
@@ -694,8 +695,8 @@ function resolveDefaultReplyTarget(db: Db, conversationId: string): string | nul
 
   if (row.threadKind === 'direct') {
     return row.isPrimaryThread
-      ? 'dm:@User'
-      : `dm:@User:${row.conversationId.slice(0, 8)}`;
+      ? `dm:@${humanUserName}`
+      : `dm:@${humanUserName}:${row.conversationId.slice(0, 8)}`;
   }
 
   const channelName = row.channelName ?? row.channelId;

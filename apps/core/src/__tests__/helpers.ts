@@ -59,6 +59,7 @@ export function createTestConfig(overrides?: Partial<AppConfig>): AppConfig {
     contextReplayEnabled: false,
     contextReplayRuns: 0,
     contextReplayMaxChars: 12000,
+    humanUserName: 'oldpan',
     ...overrides,
   } as AppConfig;
 }
