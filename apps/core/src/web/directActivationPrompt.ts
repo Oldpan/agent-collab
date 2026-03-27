@@ -9,6 +9,7 @@ export function buildDirectActivationPrompt(params: DirectActivationPromptParams
     `[System: ${params.senderName} sent you a direct message.]`,
     'The triggering message is included below. Do not call check_messages just to retrieve this same message again.',
     `If you need more context, call read_history(channel="dm:@${params.senderName}") for this direct conversation.`,
+    'Reply only via mcp__chat__send_message(...). Do not output text directly.',
     '',
     '[Triggered message metadata]',
     `target: dm:@${params.senderName}`,

@@ -14,9 +14,26 @@ class FakeSocket extends EventEmitter {
 describe('nodeWsHandler', () => {
     let db;
     let manager;
+    let dispatches;
+    let fakeRegistry;
     beforeEach(() => {
         db = createTestDb();
-        manager = new ConversationManager({ db, config: createTestConfig() });
+        dispatches = [];
+        fakeRegistry = {
+            getNode(nodeId) {
+                return {
+                    nodeId,
+                    hostname: 'test-node',
+                    agentTypes: ['claude_acp', 'codex_acp'],
+                    version: 'test',
+                };
+            },
+            send(_nodeId, msg) {
+                dispatches.push(msg);
+                return true;
+            },
+        };
+        manager = new ConversationManager({ db, config: createTestConfig(), nodeRegistry: fakeRegistry });
         manager.start();
     });
     afterEach(() => {
@@ -98,7 +115,7 @@ describe('nodeWsHandler', () => {
             error: 'runtime crashed',
         });
     });
-    it('私聊 run 未通过 send_message 回复时应按失败收口', () => {
+    it('私聊 run 未通过 send_message 回复时应触发静默 repair，并在 repair 成功后正常收口', async () => {
         const agent = manager.createAgent({
             name: 'Bob',
             agentType: 'claude_acp',
@@ -125,19 +142,48 @@ describe('nodeWsHandler', () => {
             sessionKey: sessionRow.sessionKey,
             promptText: 'hello',
         });
+        db.prepare(`INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, ?, 'node/event', ?, ?)`).run('run-1', 1, JSON.stringify({
+            type: 'content.delta',
+            text: '这是上一轮已经写好的结论，请把它发送给当前会话用户。',
+        }), 1000);
         socket.emit('message', JSON.stringify({
             type: 'run.end',
             runId: 'run-1',
             conversationId: conv.id,
             stopReason: 'end_turn',
         }));
-        const runRow = db.prepare('SELECT error FROM runs WHERE run_id = ?')
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const originalRun = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
             .get('run-1');
-        expect(runRow.error).toBe('Agent did not reply via send_message');
+        expect(originalRun.error).toBeNull();
+        expect(originalRun.stopReason).toBe('end_turn');
         expect(events).toContainEqual({
-            type: 'error',
-            message: 'Agent did not reply via send_message',
+            type: 'conversation.status',
+            conversationId: conv.id,
+            status: 'recovering',
         });
+        const repairDispatch = dispatches[0];
+        if (!repairDispatch || repairDispatch.type !== 'run.dispatch')
+            throw new Error('missing repair dispatch');
+        expect(repairDispatch.prompt).toContain('[Reply contract]');
+        expect(repairDispatch.prompt).toContain('[System: Repair the previous run\'s reply contract violation.]');
+        expect(repairDispatch.prompt).toContain('mcp__chat__send_message(content="...", kind="final")');
+        expect(repairDispatch.prompt).toContain('这是上一轮已经写好的结论');
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`).run('msg-repair-1', `dm:${agent.agentId}`, agent.agentId, agent.name, `dm:@${agent.name}`, '这是上一轮已经写好的结论，请把它发送给当前会话用户。', 1, Date.now(), repairDispatch.runId, 'final');
+        socket.emit('message', JSON.stringify({
+            type: 'run.end',
+            runId: repairDispatch.runId,
+            conversationId: conv.id,
+            stopReason: 'end_turn',
+        }));
+        const repairRun = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
+            .get(repairDispatch.runId);
+        expect(repairRun.error).toBeNull();
+        expect(repairRun.stopReason).toBe('end_turn');
+        expect(events.some((event) => event.type === 'error')).toBe(false);
+        expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
     });
     it('私聊 run 已绑定 send_message 时应允许正常完成', () => {
         const agent = manager.createAgent({
@@ -180,7 +226,7 @@ describe('nodeWsHandler', () => {
         expect(runRow.stopReason).toBe('end_turn');
         expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
     });
-    it('仅发送 progress 消息且后续仍有大量输出时应要求 final reply', () => {
+    it('仅发送 progress 消息且后续仍有大量输出时应先 repair，repair 失败后再按失败收口', async () => {
         const agent = manager.createAgent({
             name: 'Charlie',
             agentType: 'claude_acp',
@@ -220,12 +266,27 @@ describe('nodeWsHandler', () => {
             conversationId: conv.id,
             stopReason: 'end_turn',
         }));
-        const runRow = db.prepare('SELECT error FROM runs WHERE run_id = ?')
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        const originalRun = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
             .get('run-3');
-        expect(runRow.error).toBe('Agent did not send a final reply via send_message');
+        expect(originalRun.error).toBeNull();
+        expect(originalRun.stopReason).toBe('end_turn');
+        const repairDispatch = dispatches[0];
+        if (!repairDispatch || repairDispatch.type !== 'run.dispatch')
+            throw new Error('missing repair dispatch');
+        expect(repairDispatch.prompt).toContain('Agent did not send a final reply via send_message');
+        socket.emit('message', JSON.stringify({
+            type: 'run.end',
+            runId: repairDispatch.runId,
+            conversationId: conv.id,
+            stopReason: 'end_turn',
+        }));
+        const runRow = db.prepare('SELECT error FROM runs WHERE run_id = ?')
+            .get(repairDispatch.runId);
+        expect(runRow.error).toBe('Agent did not reply via send_message');
         expect(events).toContainEqual({
             type: 'error',
-            message: 'Agent did not send a final reply via send_message',
+            message: 'Agent did not reply via send_message',
         });
     });
     it('旧式未标注 kind 的单条回复若与后续输出只是重复，不应误判缺少 final reply', () => {

@@ -19,11 +19,25 @@ function buildLocalMemoryGuide(workspacePath: string): string {
   ].join('\n');
 }
 
+export function buildAgentSessionSystemPromptText(params: {
+  agentName: string;
+  agentDescription?: string;
+  workspacePath: string;
+  toolPrefix?: string;
+}): string {
+  const { agentName, agentDescription, workspacePath, toolPrefix = 'mcp__chat__' } = params;
+
+  return buildAgentSystemPrompt(
+    { name: agentName, description: agentDescription },
+    { toolPrefix, workspacePath, includeStdinNotification: true },
+  );
+}
+
 /**
- * Builds the full context text to inject at the start of a fresh ACP session.
- * Combines: dynamic system prompt + local memory guide + local native memory (from filesystem).
+ * Builds the non-system context text to inject at the start of a fresh ACP session.
+ * Combines: local memory guide + local native memory (from filesystem).
  *
- * agentDescription is the agent's role description (previously stored as systemPrompt in DB).
+ * agentDescription is intentionally excluded here and belongs in the true system prompt.
  * toolPrefix controls the MCP tool name prefix (default: 'mcp__chat__').
  */
 export async function buildAgentContextText(params: {
@@ -33,18 +47,12 @@ export async function buildAgentContextText(params: {
   workspacePath: string;
   toolPrefix?: string;
 }): Promise<string> {
-  const { agentName, agentDescription, agentType, workspacePath, toolPrefix = 'mcp__chat__' } = params;
-
-  const systemPrompt = buildAgentSystemPrompt(
-    { name: agentName, description: agentDescription },
-    { toolPrefix, workspacePath, includeStdinNotification: true },
-  );
+  const { agentType, workspacePath } = params;
 
   const backend = resolveMemoryBackend(agentType, workspacePath);
   const nativeMemory = await backend.load();
 
   const parts: string[] = [];
-  parts.push(`[System Prompt]\n${systemPrompt}`);
   parts.push(`[Local Memory Guide]\n${buildLocalMemoryGuide(workspacePath)}`);
   if (nativeMemory.trim()) parts.push(`[Local Memory]\n${nativeMemory.trim()}`);
 

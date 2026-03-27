@@ -369,6 +369,10 @@ export class BindingRuntime {
   }
 
   async ensureSessionId(): Promise<string> {
+    return this.ensureSessionIdWithPrompt();
+  }
+
+  async ensureSessionIdWithPrompt(systemPromptText?: string): Promise<string> {
     if (this.acpSessionId) return this.acpSessionId;
 
     await this.ensureInitialized();
@@ -376,6 +380,9 @@ export class BindingRuntime {
     const newSession = await this.client.newSession({
       cwd: this.workspaceRoot,
       mcpServers: this.channelBridgeMcpEntry ? [this.channelBridgeMcpEntry] : [],
+      ...(systemPromptText?.trim()
+        ? { _meta: { systemPrompt: systemPromptText.trim() } }
+        : {}),
     });
 
     this.acpSessionId = newSession.sessionId;
@@ -564,11 +571,12 @@ export class BindingRuntime {
     promptResources?: Array<{ uri: string; mimeType?: string }>;
     sink: OutboundSink;
     uiMode: UiMode;
+    systemPromptText?: string;
     contextText?: string;
     actorUserId?: string;
   }): Promise<{ stopReason: string; lastSeq: number; isFreshSession: boolean }> {
     const isFreshSession = !this.acpSessionId;
-    const sessionId = await this.ensureSessionId();
+    const sessionId = await this.ensureSessionIdWithPrompt(params.systemPromptText);
 
     const run = {
       runId: params.runId,
@@ -618,6 +626,7 @@ export class BindingRuntime {
     promptResources?: Array<{ uri: string; mimeType?: string }>;
     sink: OutboundSink;
     uiMode: UiMode;
+    systemPromptText?: string;
     contextText?: string;
     actorUserId?: string;
   }): Promise<{ stopReason: string; lastSeq: number }> {

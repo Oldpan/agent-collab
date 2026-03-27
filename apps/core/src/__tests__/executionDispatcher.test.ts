@@ -77,6 +77,7 @@ describe('ExecutionDispatcher', () => {
     const second = sent[1]?.msg;
     if (!second || second.type !== 'run.dispatch') throw new Error('missing second dispatch');
     expect(second.dispatchMode).toBe('resume');
+    expect(second.prompt).toContain('[Reply contract]');
     expect(second.envVars?.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
   });
 
@@ -133,7 +134,7 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.disabledToolKinds).toEqual(['execute', 'delete']);
   });
 
-  it('dispatchToNode 的 contextText 应包含动态 system prompt 和 local memory 指引', async () => {
+  it('dispatchToNode 应分开发送 true system prompt 和本地 memory context', async () => {
     const agent = manager.createAgent({
       name: 'Memory Agent',
       agentType: 'claude_acp',
@@ -150,23 +151,21 @@ describe('ExecutionDispatcher', () => {
 
     const dispatch = sent[0]?.msg;
     if (!dispatch || dispatch.type !== 'run.dispatch') throw new Error('missing dispatch');
-    // Dynamic system prompt section
-    expect(dispatch.contextText).toContain('[System Prompt]');
-    expect(dispatch.contextText).toContain('"Memory Agent"');
-    expect(dispatch.contextText).toContain('mcp__chat__send_message');
-    expect(dispatch.contextText).toContain('mcp__chat__check_messages');
-    expect(dispatch.contextText).toContain('Compaction safety');
-    expect(dispatch.contextText).toContain('prefer `mcp__chat__send_message(content="...")` with no target');
-    expect(dispatch.contextText).toContain('Do **not** convert a main-channel message');
-    expect(dispatch.contextText).toContain('Do **not** quote or repeat that metadata block back to the user');
-    // description appended as initial role
-    expect(dispatch.contextText).toContain('Maintain memory carefully');
-    // Local memory guide section still present
+    expect(dispatch.systemPromptText).toContain('"Memory Agent"');
+    expect(dispatch.systemPromptText).toContain('mcp__chat__send_message');
+    expect(dispatch.systemPromptText).toContain('mcp__chat__check_messages');
+    expect(dispatch.systemPromptText).toContain('Compaction safety');
+    expect(dispatch.systemPromptText).toContain('prefer `mcp__chat__send_message(content="...")` with no target');
+    expect(dispatch.systemPromptText).toContain('Do **not** convert a main-channel message');
+    expect(dispatch.systemPromptText).toContain('Do **not** quote or repeat that metadata block back to the user');
+    expect(dispatch.systemPromptText).toContain('Maintain memory carefully');
     expect(dispatch.contextText).toContain('[Local Memory Guide]');
     expect(dispatch.contextText).toContain('Local memory is stored as ordinary workspace files');
     expect(dispatch.contextText).toContain('Do not use MCP resource-reading tools');
     expect(dispatch.contextText).toContain('MEMORY.md');
     expect(dispatch.contextText).toContain('notes/*.md');
+    expect(dispatch.contextText).not.toContain('[System Prompt]');
+    expect(dispatch.prompt).toContain('[Reply contract]');
     expect(dispatch.channelBridgeConfig).toMatchObject({
       agentId: agent.agentId,
       conversationId: conv.id,
@@ -209,11 +208,13 @@ describe('ExecutionDispatcher', () => {
 
     const dispatch = sent[0]?.msg;
     if (!dispatch || dispatch.type !== 'run.dispatch') throw new Error('missing dispatch');
+    expect(dispatch.prompt).toContain('[Reply contract]');
     expect(dispatch.prompt).toContain('[Triggered message metadata]');
     expect(dispatch.prompt).toContain('target: dm:@oldpan');
     expect(dispatch.prompt).toContain('recipient: @Direct Bob');
     expect(dispatch.prompt).toContain('[Triggered message body]');
     expect(dispatch.prompt).toContain('你好，帮我总结一下刚才的结论');
+    expect(dispatch.prompt).toContain('Reply only via mcp__chat__send_message(...)');
     expect(dispatch.prompt).not.toContain('Call check_messages to read them when you\'re ready');
 
     const dmChannelId = `dm:${agent.agentId}`;

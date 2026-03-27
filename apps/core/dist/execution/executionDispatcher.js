@@ -1,9 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { getRuntimeDriver } from '@agent-collab/protocol';
-import { buildAgentContextText } from '@agent-collab/memory';
+import { buildAgentContextText, buildAgentSessionSystemPromptText } from '@agent-collab/memory';
 import { createRun, finishRun, log } from '@agent-collab/runtime-acp';
 import { bumpAgentMessageCheckpoint, getAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
 import { buildDirectActivationPrompt } from '../web/directActivationPrompt.js';
+const TURN_REPLY_CONTRACT = [
+    '[Reply contract]',
+    'Reply only via mcp__chat__send_message(...). Do not output user-visible text directly.',
+    'Before this run ends, send a final user-visible message with mcp__chat__send_message(..., kind="final").',
+].join('\n');
 export class ExecutionDispatcher {
     db;
     config;
@@ -34,6 +39,7 @@ export class ExecutionDispatcher {
         createRun(this.db, { runId, sessionKey: row.sessionKey, promptText });
         this.updateStatus(conversationId, 'active');
         let contextText = '';
+        let systemPromptText = '';
         let agentEnvVars;
         let disabledToolKinds;
         let dmActivationCheckpoint;
@@ -42,6 +48,11 @@ export class ExecutionDispatcher {
             if (agent) {
                 agentEnvVars = agent.envVars;
                 disabledToolKinds = agent.disabledToolKinds;
+                systemPromptText = buildAgentSessionSystemPromptText({
+                    agentName: agent.name,
+                    agentDescription: agent.systemPrompt || undefined,
+                    workspacePath: row.workspacePath ?? this.config.workspaceRoot,
+                });
                 contextText = await buildAgentContextText({
                     agentName: agent.name,
                     agentDescription: agent.systemPrompt || undefined,
@@ -82,6 +93,7 @@ export class ExecutionDispatcher {
                 }
             }
         }
+        const dispatchedPrompt = prependTurnReplyContract(promptText);
         const node = this.nodeRegistry?.getNode(row.nodeId);
         if (!node) {
             finishRun(this.db, { runId, error: 'Node not connected' });
@@ -117,10 +129,11 @@ export class ExecutionDispatcher {
                 ...(driver.defaultEnv ?? {}),
             },
             disabledToolKinds,
-            prompt: promptText,
+            prompt: dispatchedPrompt,
             sessionKey: row.sessionKey,
             hostKey,
             dispatchMode,
+            systemPromptText: systemPromptText || undefined,
             contextText: contextText || undefined,
             channelBridgeConfig,
         });
@@ -141,8 +154,8 @@ export class ExecutionDispatcher {
         if (!row)
             throw new Error(`Unknown conversation: ${conversationId}`);
         if (!row.agentId) {
-            await this.dispatchPrompt(conversationId, promptText, options);
-            return { queued: false };
+            const dispatched = await this.dispatchPrompt(conversationId, promptText, options);
+            return { queued: false, runId: dispatched.runId };
         }
         const blocking = this.findBlockingConversation(row.agentId, conversationId);
         if (blocking) {
@@ -150,8 +163,8 @@ export class ExecutionDispatcher {
             this.updateStatus(conversationId, 'queued');
             return { queued: true };
         }
-        await this.dispatchPrompt(conversationId, promptText, options);
-        return { queued: false };
+        const dispatched = await this.dispatchPrompt(conversationId, promptText, options);
+        return { queued: false, runId: dispatched.runId };
     }
     async handleApproval(conversationId, requestId, decision) {
         const convRow = this.db
@@ -333,4 +346,9 @@ function parseEnvVars(raw) {
         // ignore
     }
     return undefined;
+}
+function prependTurnReplyContract(promptText) {
+    if (promptText.includes('[Reply contract]'))
+        return promptText;
+    return `${TURN_REPLY_CONTRACT}\n\n${promptText}`;
 }

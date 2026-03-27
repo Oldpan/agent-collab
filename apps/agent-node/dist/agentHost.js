@@ -167,6 +167,7 @@ export class AgentHost {
                 promptText: prompt,
                 sink,
                 uiMode,
+                systemPromptText: msg.systemPromptText,
                 contextText: msg.contextText,
                 actorUserId: 'node_user',
             });

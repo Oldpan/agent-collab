@@ -286,12 +286,18 @@ export class BindingRuntime {
         return this.init;
     }
     async ensureSessionId() {
+        return this.ensureSessionIdWithPrompt();
+    }
+    async ensureSessionIdWithPrompt(systemPromptText) {
         if (this.acpSessionId)
             return this.acpSessionId;
         await this.ensureInitialized();
         const newSession = await this.client.newSession({
             cwd: this.workspaceRoot,
             mcpServers: this.channelBridgeMcpEntry ? [this.channelBridgeMcpEntry] : [],
+            ...(systemPromptText?.trim()
+                ? { _meta: { systemPrompt: systemPromptText.trim() } }
+                : {}),
         });
         this.acpSessionId = newSession.sessionId;
         updateAcpSessionId(this.db, this.sessionKey, this.acpSessionId);
@@ -432,7 +438,7 @@ export class BindingRuntime {
     }
     async promptOnce(params) {
         const isFreshSession = !this.acpSessionId;
-        const sessionId = await this.ensureSessionId();
+        const sessionId = await this.ensureSessionIdWithPrompt(params.systemPromptText);
         const run = {
             runId: params.runId,
             sessionKey: this.sessionKey,

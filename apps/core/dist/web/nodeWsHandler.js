@@ -100,10 +100,81 @@ function getReplyContractError(msg, db, conversationId, runId) {
     }
     return null;
 }
+function collectRunOutputText(db, runId, createdAfter) {
+    const rows = db.prepare(`SELECT payload_json as payloadJson
+     FROM events
+     WHERE run_id = ?
+       AND method = 'node/event'
+       AND (? IS NULL OR created_at > ?)
+     ORDER BY seq ASC`).all(runId, createdAfter ?? null, createdAfter ?? null);
+    let text = '';
+    for (const row of rows) {
+        try {
+            const payload = JSON.parse(row.payloadJson);
+            if (payload.type === 'content.delta' && typeof payload.text === 'string') {
+                text += payload.text;
+            }
+        }
+        catch {
+            // Ignore malformed historic payloads
+        }
+    }
+    return normalizeReplyText(text);
+}
+function buildReplyRepairPrompt(db, runId, replyContractError) {
+    const replyRows = db.prepare(`SELECT content, created_at
+     FROM channel_messages
+     WHERE run_id = ?
+       AND sender_type = 'agent'
+     ORDER BY created_at DESC`).all(runId);
+    const lastReply = replyRows[0];
+    const draftText = lastReply
+        ? collectRunOutputText(db, runId, lastReply.created_at)
+        : collectRunOutputText(db, runId);
+    if (!draftText)
+        return null;
+    return [
+        '[System: Repair the previous run\'s reply contract violation.]',
+        `The previous run ended with: ${replyContractError}`,
+        'Send exactly one final user-visible reply for the current conversation via mcp__chat__send_message(content="...", kind="final").',
+        'Do not do any new work. Do not call check_messages. Do not send progress updates. Do not mention this repair step.',
+        '',
+        '[Draft reply to send]',
+        draftText,
+    ].join('\n');
+}
+function updateConversationStatus(db, broadcast, conversationId, status) {
+    db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
+        .run(status, Date.now(), conversationId);
+    broadcast(conversationId, {
+        type: 'conversation.status',
+        conversationId,
+        status,
+    });
+}
+function finishConversationRun(params) {
+    const endedAt = Date.now();
+    finishRun(params.db, params.error
+        ? { runId: params.runId, error: params.error }
+        : { runId: params.runId, stopReason: params.stopReason ?? 'end_turn' });
+    updateConversationStatus(params.db, params.broadcast, params.conversationId, params.error ? 'failed' : 'idle');
+    params.broadcast(params.conversationId, {
+        type: 'turn.end',
+        turnId: params.runId,
+        stopReason: params.error ? 'error' : (params.stopReason ?? 'end_turn'),
+        endedAt,
+        error: params.error,
+    });
+    if (params.error) {
+        params.broadcast(params.conversationId, { type: 'error', message: params.error });
+    }
+    void params.manager.onConversationSettled(params.conversationId);
+}
 export function handleNodeWebSocket(socket, registry, broadcast, db, manager, workspaceBroker) {
     let nodeId = null;
     // Sequence counter per runId for node/event persistence
     const runSeq = new Map();
+    const pendingRepairs = new Map();
     socket.on('message', (raw) => {
         let msg;
         try {
@@ -180,7 +251,6 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
             case 'run.end': {
                 log.info('[node-ws] run.end', { runId: msg.runId, conversationId: msg.conversationId, error: msg.error ?? null });
                 runSeq.delete(msg.runId);
-                const endedAt = Date.now();
                 // Check if this run still exists in core's DB.
                 // After reset/clear-chat the run rows are deleted — ignore stale run.end messages
                 // so they don't overwrite the conversation status set by the reset operation.
@@ -193,30 +263,60 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
                     break;
                 }
                 const replyContractError = getReplyContractError(msg, db, msg.conversationId, msg.runId);
-                const terminalError = msg.error ?? replyContractError ?? undefined;
-                // Mark run as finished in core DB
-                finishRun(db, terminalError
-                    ? { runId: msg.runId, error: terminalError }
-                    : { runId: msg.runId, stopReason: msg.stopReason ?? 'end_turn' });
-                // Update conversation status in DB
-                db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
-                    .run(terminalError ? 'failed' : 'idle', endedAt, msg.conversationId);
-                broadcast(msg.conversationId, {
-                    type: 'turn.end',
-                    turnId: msg.runId,
-                    stopReason: terminalError ? 'error' : (msg.stopReason ?? 'end_turn'),
-                    endedAt,
-                    error: terminalError,
-                });
-                if (terminalError) {
-                    broadcast(msg.conversationId, { type: 'error', message: terminalError });
+                const pendingRepair = pendingRepairs.get(msg.conversationId);
+                const isRepairRun = Boolean(pendingRepair && pendingRepair.sourceRunId !== msg.runId);
+                if (!msg.error && replyContractError && !isRepairRun) {
+                    const repairPrompt = buildReplyRepairPrompt(db, msg.runId, replyContractError);
+                    if (repairPrompt) {
+                        const endedAt = Date.now();
+                        finishRun(db, { runId: msg.runId, stopReason: msg.stopReason ?? 'end_turn' });
+                        broadcast(msg.conversationId, {
+                            type: 'turn.end',
+                            turnId: msg.runId,
+                            stopReason: msg.stopReason ?? 'end_turn',
+                            endedAt,
+                        });
+                        updateConversationStatus(db, broadcast, msg.conversationId, 'recovering');
+                        pendingRepairs.set(msg.conversationId, { sourceRunId: msg.runId });
+                        void manager.submitPrompt(msg.conversationId, repairPrompt, { recordAsUserMessage: false })
+                            .then((result) => {
+                            const state = pendingRepairs.get(msg.conversationId);
+                            if (!state || state.sourceRunId !== msg.runId)
+                                return;
+                            if (result.runId) {
+                                pendingRepairs.set(msg.conversationId, { ...state, repairRunId: result.runId });
+                            }
+                            if (result.queued) {
+                                updateConversationStatus(db, broadcast, msg.conversationId, 'queued');
+                            }
+                        })
+                            .catch((error) => {
+                            const state = pendingRepairs.get(msg.conversationId);
+                            if (!state || state.sourceRunId !== msg.runId)
+                                return;
+                            pendingRepairs.delete(msg.conversationId);
+                            updateConversationStatus(db, broadcast, msg.conversationId, 'failed');
+                            broadcast(msg.conversationId, {
+                                type: 'error',
+                                message: String(error?.message ?? replyContractError),
+                            });
+                            void manager.onConversationSettled(msg.conversationId);
+                        });
+                        break;
+                    }
                 }
-                broadcast(msg.conversationId, {
-                    type: 'conversation.status',
+                if (pendingRepair && (!pendingRepair.repairRunId || pendingRepair.repairRunId === msg.runId || isRepairRun)) {
+                    pendingRepairs.delete(msg.conversationId);
+                }
+                finishConversationRun({
+                    db,
+                    broadcast,
+                    manager,
                     conversationId: msg.conversationId,
-                    status: terminalError ? 'failed' : 'idle',
+                    runId: msg.runId,
+                    stopReason: msg.stopReason,
+                    error: msg.error ?? replyContractError ?? undefined,
                 });
-                void manager.onConversationSettled(msg.conversationId);
                 break;
             }
             case 'permission.request': {

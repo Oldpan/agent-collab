@@ -598,7 +598,7 @@ export class ConversationManager {
     conversationId: string,
     promptText: string,
     options?: { recordAsUserMessage?: boolean },
-  ): Promise<{ queued: boolean }> {
+  ): Promise<{ queued: boolean; runId?: string }> {
     return this.executionDispatcher.submitPrompt(conversationId, promptText, options);
   }
 

@@ -347,6 +347,7 @@ export type RunDispatchMsg = {
   sessionKey: string;
   hostKey: string;
   dispatchMode: RuntimeDispatchMode;
+  systemPromptText?: string;
   contextText?: string;
   channelBridgeConfig?: {
     agentId: string;
