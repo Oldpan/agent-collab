@@ -177,6 +177,147 @@ describe('ConversationManager', () => {
     });
   });
 
+  describe('clearChannelChat', () => {
+    it('应清空 channel 消息与 checkpoints，并仅重置该 channel 的 branch 会话历史', () => {
+      const agent = manager.createAgent({
+        name: 'ChannelBob',
+        agentType: 'claude_acp',
+        nodeId: 'node-1',
+        workspacePath: '/tmp/channel-bob',
+      });
+      manager.joinChannel(agent.agentId, 'default');
+      const opsChannel = manager.createChannel({ name: 'ops-room' });
+      manager.joinChannel(agent.agentId, opsChannel.channelId);
+
+      const direct = manager.openAgentThread(agent.agentId);
+      const defaultBranch = manager.openAgentChannelThread(agent.agentId, 'default', null);
+      const opsBranch = manager.openAgentChannelThread(agent.agentId, opsChannel.channelId, null);
+
+      expect(direct).not.toBeNull();
+      expect(defaultBranch).not.toBeNull();
+      expect(opsBranch).not.toBeNull();
+      if (!direct || !defaultBranch || !opsBranch) throw new Error('missing conversations');
+
+      const directSession = db.prepare(
+        'SELECT session_key as sessionKey FROM conversations WHERE id = ?',
+      ).get(direct.id) as { sessionKey: string };
+      const defaultSession = db.prepare(
+        'SELECT session_key as sessionKey FROM conversations WHERE id = ?',
+      ).get(defaultBranch.id) as { sessionKey: string };
+      const opsSession = db.prepare(
+        'SELECT session_key as sessionKey FROM conversations WHERE id = ?',
+      ).get(opsBranch.id) as { sessionKey: string };
+
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+         VALUES(?, 'default', 'user', 'User', 'user', '#default', 'hello', 1, ?, NULL)`,
+      ).run('msg-default-1', Date.now());
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+         VALUES(?, 'default', 'user', 'User', 'user', '#default:abc12345', 'thread hello', 2, ?, 'abc12345')`,
+      ).run('msg-default-2', Date.now());
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+         VALUES(?, ?, 'user', 'User', 'user', ?, 'dm hello', 1, ?, NULL)`,
+      ).run('msg-dm-1', `dm:${agent.agentId}`, 'dm:@User', Date.now());
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+         VALUES(?, ?, 'user', 'User', 'user', ?, 'keep me', 1, ?, NULL)`,
+      ).run('msg-ops-1', opsChannel.channelId, `#${opsChannel.name}`, Date.now());
+
+      db.prepare(
+        `INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq) VALUES(?, 'default', '', 2)`,
+      ).run(agent.agentId);
+      db.prepare(
+        `INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq) VALUES(?, ?, '', 1)`,
+      ).run(agent.agentId, `dm:${agent.agentId}`);
+      db.prepare(
+        `INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq) VALUES(?, ?, '', 1)`,
+      ).run(agent.agentId, opsChannel.channelId);
+
+      db.prepare(
+        'INSERT INTO runs(run_id, session_key, prompt_text, started_at) VALUES(?, ?, ?, ?)',
+      ).run('run-default-1', defaultSession.sessionKey, 'default run', Date.now());
+      db.prepare(
+        'INSERT INTO events(run_id, seq, method, payload_json, created_at) VALUES(?, ?, ?, ?, ?)',
+      ).run('run-default-1', 1, 'node/event', JSON.stringify({ type: 'content.delta', text: 'default output' }), Date.now());
+      db.prepare(
+        'INSERT INTO conversation_prompt_queue(agent_id, conversation_id, prompt_text, created_at, updated_at) VALUES(?, ?, ?, ?, ?)',
+      ).run(agent.agentId, defaultBranch.id, 'queued default', Date.now(), Date.now());
+
+      db.prepare(
+        'INSERT INTO runs(run_id, session_key, prompt_text, started_at) VALUES(?, ?, ?, ?)',
+      ).run('run-direct-1', directSession.sessionKey, 'direct run', Date.now());
+      db.prepare(
+        'INSERT INTO runs(run_id, session_key, prompt_text, started_at) VALUES(?, ?, ?, ?)',
+      ).run('run-ops-1', opsSession.sessionKey, 'ops run', Date.now());
+
+      const result = manager.clearChannelChat('default');
+      const resetConv = result.find((item) => item.id === defaultBranch.id);
+
+      expect(resetConv).toBeTruthy();
+      expect(resetConv?.status).toBe('idle');
+
+      const defaultMessages = db.prepare(
+        `SELECT count(*) as count FROM channel_messages WHERE channel_id = 'default'`,
+      ).get() as { count: number };
+      const dmMessages = db.prepare(
+        `SELECT count(*) as count FROM channel_messages WHERE channel_id = ?`,
+      ).get(`dm:${agent.agentId}`) as { count: number };
+      const opsMessages = db.prepare(
+        `SELECT count(*) as count FROM channel_messages WHERE channel_id = ?`,
+      ).get(opsChannel.channelId) as { count: number };
+
+      expect(defaultMessages.count).toBe(0);
+      expect(dmMessages.count).toBe(1);
+      expect(opsMessages.count).toBe(1);
+
+      const defaultCheckpoint = db.prepare(
+        `SELECT count(*) as count FROM agent_message_checkpoints WHERE channel_id = 'default'`,
+      ).get() as { count: number };
+      const dmCheckpoint = db.prepare(
+        `SELECT count(*) as count FROM agent_message_checkpoints WHERE channel_id = ?`,
+      ).get(`dm:${agent.agentId}`) as { count: number };
+      const opsCheckpoint = db.prepare(
+        `SELECT count(*) as count FROM agent_message_checkpoints WHERE channel_id = ?`,
+      ).get(opsChannel.channelId) as { count: number };
+
+      expect(defaultCheckpoint.count).toBe(0);
+      expect(dmCheckpoint.count).toBe(1);
+      expect(opsCheckpoint.count).toBe(1);
+
+      const branchAfter = db.prepare(
+        'SELECT session_key as sessionKey, status, title FROM conversations WHERE id = ?',
+      ).get(defaultBranch.id) as { sessionKey: string; status: string; title: string };
+
+      expect(branchAfter.sessionKey).not.toBe(defaultSession.sessionKey);
+      expect(branchAfter.status).toBe('idle');
+      expect(branchAfter.title).toBe('');
+
+      const oldDefaultRuns = db.prepare(
+        'SELECT count(*) as count FROM runs WHERE session_key = ?',
+      ).get(defaultSession.sessionKey) as { count: number };
+      const oldDefaultEvents = db.prepare(
+        'SELECT count(*) as count FROM events WHERE run_id = ?',
+      ).get('run-default-1') as { count: number };
+      const defaultQueue = db.prepare(
+        'SELECT count(*) as count FROM conversation_prompt_queue WHERE conversation_id = ?',
+      ).get(defaultBranch.id) as { count: number };
+      const directRuns = db.prepare(
+        'SELECT count(*) as count FROM runs WHERE session_key = ?',
+      ).get(directSession.sessionKey) as { count: number };
+      const opsRuns = db.prepare(
+        'SELECT count(*) as count FROM runs WHERE session_key = ?',
+      ).get(opsSession.sessionKey) as { count: number };
+
+      expect(oldDefaultRuns.count).toBe(0);
+      expect(oldDefaultEvents.count).toBe(0);
+      expect(defaultQueue.count).toBe(0);
+      expect(directRuns.count).toBe(1);
+      expect(opsRuns.count).toBe(1);
+    });
+  });
+
   describe('deleteMachine', () => {
     it('应级联删除机器下的 agents、会话和运行数据', () => {
       db.prepare(

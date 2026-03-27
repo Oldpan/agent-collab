@@ -185,7 +185,7 @@ describe('ExecutionDispatcher', () => {
         if (!dispatch || dispatch.type !== 'run.dispatch')
             throw new Error('missing dispatch');
         expect(dispatch.prompt).toContain('[Triggered message metadata]');
-        expect(dispatch.prompt).toContain('target: dm:@User');
+        expect(dispatch.prompt).toContain('target: dm:@oldpan');
         expect(dispatch.prompt).toContain('recipient: @Direct Bob');
         expect(dispatch.prompt).toContain('[Triggered message body]');
         expect(dispatch.prompt).toContain('你好，帮我总结一下刚才的结论');

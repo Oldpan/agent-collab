@@ -116,6 +116,19 @@ beforeAll(async () => {
     }
   });
 
+  app.post<{ Params: { id: string } }>('/api/channels/:id/clear-chat', async (req, reply) => {
+    const channel = manager.getChannel(req.params.id);
+    if (!channel) {
+      reply.code(404);
+      return { error: 'Channel not found' };
+    }
+    const cleared = manager.clearChannelChat(req.params.id);
+    return {
+      ok: true,
+      clearedConversationIds: cleared.map((item) => item.id),
+    };
+  });
+
   app.post<{ Params: { id: string }; Body: { content: string; senderName?: string; replyTo?: string } }>(
     '/api/channels/:id/messages',
     async (req, reply) => {
@@ -562,6 +575,78 @@ describe('REST API', () => {
     const tab = manager.getAgent(a2.agentId);
     expect(bob?.channelIds).toContain(body.channelId);
     expect(tab?.channelIds).toContain(body.channelId);
+  });
+
+  it('POST /api/channels/:id/clear-chat 应清空 channel 消息并重置 branch 历史，但保留 tasks', async () => {
+    const agent = manager.createAgent({
+      name: 'ClearRoomBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/clear-room-bob',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    const branch = manager.openAgentChannelThread(agent.agentId, 'default', null);
+    expect(branch).not.toBeNull();
+    if (!branch) throw new Error('missing branch conversation');
+
+    const sessionRow = db.prepare(
+      'SELECT session_key as sessionKey FROM conversations WHERE id = ?',
+    ).get(branch.id) as { sessionKey: string };
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+       VALUES(?, 'default', 'user', 'User', 'user', '#default', 'hello', 1, ?, NULL, NULL)`,
+    ).run(randomUUID(), Date.now());
+    db.prepare(
+      'INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq) VALUES(?, ?, ?, ?)',
+    ).run(agent.agentId, 'default', '', 1);
+    db.prepare(
+      'INSERT INTO runs(run_id, session_key, prompt_text, started_at) VALUES(?, ?, ?, ?)',
+    ).run('run-clear-channel', sessionRow.sessionKey, 'hello', Date.now());
+    db.prepare(
+      'INSERT INTO events(run_id, seq, method, payload_json, created_at) VALUES(?, ?, ?, ?, ?)',
+    ).run('run-clear-channel', 1, 'node/event', JSON.stringify({ type: 'content.delta', text: 'hi' }), Date.now());
+    db.prepare(
+      'INSERT INTO conversation_prompt_queue(agent_id, conversation_id, prompt_text, created_at, updated_at) VALUES(?, ?, ?, ?, ?)',
+    ).run(agent.agentId, branch.id, 'queued', Date.now(), Date.now());
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, created_at, updated_at)
+       VALUES(?, 'default', 1, 'Keep task', 'todo', ?, ?)`,
+    ).run(randomUUID(), Date.now(), Date.now());
+
+    const { status, body } = await fetchJson('/api/channels/default/clear-chat', {
+      method: 'POST',
+    });
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.clearedConversationIds).toContain(branch.id);
+
+    const messageCount = db.prepare(
+      `SELECT count(*) as count FROM channel_messages WHERE channel_id = 'default'`,
+    ).get() as { count: number };
+    const checkpointCount = db.prepare(
+      `SELECT count(*) as count FROM agent_message_checkpoints WHERE channel_id = 'default'`,
+    ).get() as { count: number };
+    const oldRunCount = db.prepare(
+      'SELECT count(*) as count FROM runs WHERE session_key = ?',
+    ).get(sessionRow.sessionKey) as { count: number };
+    const eventCount = db.prepare(
+      `SELECT count(*) as count FROM events WHERE run_id = 'run-clear-channel'`,
+    ).get() as { count: number };
+    const queueCount = db.prepare(
+      'SELECT count(*) as count FROM conversation_prompt_queue WHERE conversation_id = ?',
+    ).get(branch.id) as { count: number };
+    const taskCount = db.prepare(
+      `SELECT count(*) as count FROM tasks WHERE channel_id = 'default'`,
+    ).get() as { count: number };
+
+    expect(messageCount.count).toBe(0);
+    expect(checkpointCount.count).toBe(0);
+    expect(oldRunCount.count).toBe(0);
+    expect(eventCount.count).toBe(0);
+    expect(queueCount.count).toBe(0);
+    expect(taskCount.count).toBe(1);
   });
 });
 

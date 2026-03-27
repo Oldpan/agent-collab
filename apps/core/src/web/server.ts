@@ -26,6 +26,7 @@ export async function startServer(params: {
   workspaceBroker?: AgentWorkspaceBroker;
 }): Promise<void> {
   const { port, host, conversationManager, db } = params;
+  const config = conversationManager.getConfig();
   const nodeRegistry = params.nodeRegistry ?? new NodeRegistry();
   const workspaceBroker = params.workspaceBroker ?? new AgentWorkspaceBroker({ nodeRegistry });
   const workspaceService = new AgentWorkspaceService({
@@ -396,6 +397,46 @@ export async function startServer(params: {
       const updated = conversationManager.updateChannel(req.params.id, req.body ?? {});
       if (!updated) { reply.code(404); return { error: 'Not found' }; }
       return updated;
+    },
+  );
+
+  app.post<{ Params: { id: string } }>(
+    '/api/channels/:id/clear-chat',
+    async (req, reply) => {
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) {
+        reply.code(404);
+        return { error: 'Channel not found' };
+      }
+
+      const branchConversations = conversationManager
+        .listConversations({ channelId: req.params.id })
+        .filter((item) => item.threadKind === 'branch');
+
+      for (const conversation of branchConversations) {
+        if (conversation.nodeId) {
+          nodeRegistry.send(conversation.nodeId, {
+            type: 'host.close',
+            hostKey: `conversation:${conversation.id}:${conversation.agentType}`,
+          });
+        }
+      }
+
+      const clearedConversations = conversationManager.clearChannelChat(req.params.id);
+      for (const conversation of clearedConversations) {
+        broadcast(conversation.id, { type: 'history.reset' });
+        broadcast(conversation.id, {
+          type: 'conversation.status',
+          conversationId: conversation.id,
+          status: 'idle',
+        });
+      }
+      broadcastToChannel(req.params.id, { type: 'channel.history.reset' });
+
+      return {
+        ok: true,
+        clearedConversationIds: clearedConversations.map((item) => item.id),
+      };
     },
   );
 

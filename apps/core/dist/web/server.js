@@ -14,6 +14,7 @@ import { buildChannelActivationPrompt } from './channelActivationPrompt.js';
 import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
 export async function startServer(params) {
     const { port, host, conversationManager, db } = params;
+    const config = conversationManager.getConfig();
     const nodeRegistry = params.nodeRegistry ?? new NodeRegistry();
     const workspaceBroker = params.workspaceBroker ?? new AgentWorkspaceBroker({ nodeRegistry });
     const workspaceService = new AgentWorkspaceService({
@@ -346,6 +347,38 @@ export async function startServer(params) {
         }
         return updated;
     });
+    app.post('/api/channels/:id/clear-chat', async (req, reply) => {
+        const channel = conversationManager.getChannel(req.params.id);
+        if (!channel) {
+            reply.code(404);
+            return { error: 'Channel not found' };
+        }
+        const branchConversations = conversationManager
+            .listConversations({ channelId: req.params.id })
+            .filter((item) => item.threadKind === 'branch');
+        for (const conversation of branchConversations) {
+            if (conversation.nodeId) {
+                nodeRegistry.send(conversation.nodeId, {
+                    type: 'host.close',
+                    hostKey: `conversation:${conversation.id}:${conversation.agentType}`,
+                });
+            }
+        }
+        const clearedConversations = conversationManager.clearChannelChat(req.params.id);
+        for (const conversation of clearedConversations) {
+            broadcast(conversation.id, { type: 'history.reset' });
+            broadcast(conversation.id, {
+                type: 'conversation.status',
+                conversationId: conversation.id,
+                status: 'idle',
+            });
+        }
+        broadcastToChannel(req.params.id, { type: 'channel.history.reset' });
+        return {
+            ok: true,
+            clearedConversationIds: clearedConversations.map((item) => item.id),
+        };
+    });
     // Join agent to a channel
     app.post('/api/agents/:id/channels/:channelId', async (req, reply) => {
         const agent = conversationManager.getAgent(req.params.id);
@@ -457,7 +490,7 @@ export async function startServer(params) {
             reply.code(404);
             return { error: 'Channel not found' };
         }
-        const { content, senderName = 'User', replyTo } = req.body ?? {};
+        const { content, senderName = config.humanUserName, replyTo } = req.body ?? {};
         if (!content) {
             reply.code(400);
             return { error: 'content is required' };
@@ -585,7 +618,7 @@ export async function startServer(params) {
             broadcast(row.id, event);
         }
     }
-    registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel);
+    registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel, config.humanUserName);
     // ─── User-facing Task routes ───
     // GET /api/channels/:id/tasks
     app.get('/api/channels/:id/tasks', async (req, reply) => {

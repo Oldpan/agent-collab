@@ -159,3 +159,10 @@
 - Activity 里运行中但没有活跃工具调用时，提示文案改成了更准确的 `Waiting for run to finish...`。
 - Activity 现在会显示每轮 run 的 `content.delta` 聚合结果，放在 `Output stream` 折叠区里，便于排查“消息已发出但 run 还在继续输出”的问题。
 - `/api/conversations/:id/history` 会聚合返回 `assistantText` 和 `thinkingText`，所以刷新后 Activity 也能继续看到这些调试输出。
+
+## 2026-03-27 (channel settings clear chat)
+
+- ChannelPanel 新增 `Settings` tab，与 `Chat / Tasks / Members` 同级；当前先提供 `Clear chat history` 动作。
+- 新增 `POST /api/channels/:id/clear-chat`，会删除该 channel 的主流与 thread 消息、对应 checkpoints，并重置该 channel 下 branch conversations 的 runs / events / queued prompts / session。
+- 该清理动作会保留 channel 本身、成员关系、description 与 tasks，不会影响 agent 私聊主 thread 或 workspace。
+- 新增 `channel.history.reset` 事件；前端收到后会立即清空频道消息并关闭已打开的 thread 面板，无需手动刷新。

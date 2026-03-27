@@ -96,11 +96,14 @@ export type ChannelNoticeEvent = {
         createdAt: string;
     };
 };
+export type ChannelHistoryResetEvent = {
+    type: 'channel.history.reset';
+};
 export type SystemNoticeEvent = {
     type: 'system.notice';
     message: string;
 };
-export type ServerEvent = ConversationStatusEvent | TurnBeginEvent | TurnEndEvent | ContentDeltaEvent | ThinkingDeltaEvent | ToolCallEvent | ToolResultEvent | ApprovalRequestEvent | ErrorEvent | HistoryCompleteEvent | HistoryResetEvent | HistoryUserMessageEvent | ChannelMessageEvent | ChannelNoticeEvent | SystemNoticeEvent;
+export type ServerEvent = ConversationStatusEvent | TurnBeginEvent | TurnEndEvent | ContentDeltaEvent | ThinkingDeltaEvent | ToolCallEvent | ToolResultEvent | ApprovalRequestEvent | ErrorEvent | HistoryCompleteEvent | HistoryResetEvent | HistoryUserMessageEvent | ChannelMessageEvent | ChannelNoticeEvent | ChannelHistoryResetEvent | SystemNoticeEvent;
 export type FileRef = {
     uri: string;
     mimeType?: string;

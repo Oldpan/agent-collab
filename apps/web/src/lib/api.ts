@@ -95,6 +95,14 @@ export async function updateChannel(channelId: string, req: { description?: stri
   return res.json();
 }
 
+export async function clearChannelChat(channelId: string): Promise<{ ok: true; clearedConversationIds: string[] }> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/clear-chat`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`Failed to clear channel chat: ${res.statusText}`);
+  return res.json();
+}
+
 export async function getChannelTasks(
   channelId: string,
   status?: TaskInfo["status"] | "all",

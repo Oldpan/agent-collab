@@ -6,7 +6,7 @@ import { checkpointThreadKey, getAgentMessageCheckpoint, setAgentMessageCheckpoi
  * These endpoints let agents (via the channel-bridge) send messages to channels,
  * poll for new messages, browse the server directory, and manage task boards.
  */
-export function registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel) {
+export function registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel, humanUserName) {
     // ─── Messaging ───────────────────────────────────────────────────────────
     /**
      * POST /api/internal/agent/:agentId/send
@@ -32,7 +32,7 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
                 return { error: 'conversationId does not belong to this agent' };
             }
         }
-        const defaultTarget = conversationId ? resolveDefaultReplyTarget(db, conversationId) : null;
+        const defaultTarget = conversationId ? resolveDefaultReplyTarget(db, conversationId, humanUserName) : null;
         const initialTarget = target?.trim() || defaultTarget;
         if (!initialTarget) {
             reply.code(400);
@@ -487,7 +487,7 @@ function resolveChannelFromTarget(target, db) {
     }
     return null;
 }
-function resolveDefaultReplyTarget(db, conversationId) {
+function resolveDefaultReplyTarget(db, conversationId, humanUserName) {
     const row = db.prepare(`SELECT c.id as conversationId, c.channel_id as channelId, c.thread_kind as threadKind,
             c.is_primary_thread as isPrimaryThread, c.thread_root_id as threadRootId,
             ch.name as channelName
@@ -498,8 +498,8 @@ function resolveDefaultReplyTarget(db, conversationId) {
         return null;
     if (row.threadKind === 'direct') {
         return row.isPrimaryThread
-            ? 'dm:@User'
-            : `dm:@User:${row.conversationId.slice(0, 8)}`;
+            ? `dm:@${humanUserName}`
+            : `dm:@${humanUserName}:${row.conversationId.slice(0, 8)}`;
     }
     const channelName = row.channelName ?? row.channelId;
     const baseTarget = `#${channelName}`;

@@ -16,14 +16,17 @@ export function useChannelStream(channelId: string | null): {
   sendMessage: (content: string) => Promise<void>;
   loadMore: () => Promise<void>;
   hasMore: boolean;
+  resetVersion: number;
 } {
   const [messages, setMessages] = useState<ChannelMessage[]>([]);
   const [hasMore, setHasMore] = useState(true);
+  const [resetVersion, setResetVersion] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
 
   useLayoutEffect(() => {
     setMessages([]);
     setHasMore(true);
+    setResetVersion(0);
     if (!channelId) {
       wsRef.current = null;
       return;
@@ -83,6 +86,10 @@ export function useChannelStream(channelId: string | null): {
               createdAt: notice.createdAt,
             },
           ]);
+        } else if (event.type === "channel.history.reset") {
+          setMessages([]);
+          setHasMore(false);
+          setResetVersion((prev) => prev + 1);
         }
       } catch {
         // ignore malformed messages
@@ -139,5 +146,5 @@ export function useChannelStream(channelId: string | null): {
     [channelId],
   );
 
-  return { messages, sendMessage, loadMore, hasMore };
+  return { messages, sendMessage, loadMore, hasMore, resetVersion };
 }

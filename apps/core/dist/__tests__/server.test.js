@@ -28,6 +28,50 @@ beforeAll(async () => {
     // REST routes
     app.get('/api/conversations', async () => manager.listConversations());
     app.get('/api/channels', async () => manager.listChannels());
+    app.get('/api/conversations/:id/history', async (req, reply) => {
+        const conv = manager.getConversation(req.params.id);
+        if (!conv) {
+            reply.code(404);
+            return { error: 'Not found' };
+        }
+        const sessionRow = db
+            .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+            .get(req.params.id);
+        if (!sessionRow)
+            return [];
+        const runs = db
+            .prepare(`SELECT run_id as runId, prompt_text as promptText, started_at as startedAt,
+                ended_at as endedAt, stop_reason as stopReason, error
+         FROM runs WHERE session_key = ? ORDER BY started_at ASC`)
+            .all(sessionRow.sessionKey);
+        return runs.map((run) => {
+            const nodeEvents = db
+                .prepare(`SELECT payload_json as payloadJson
+           FROM events
+           WHERE run_id = ? AND method = 'node/event'
+           ORDER BY seq ASC`)
+                .all(run.runId);
+            let assistantText = '';
+            let thinkingText = '';
+            for (const evt of nodeEvents) {
+                try {
+                    const parsed = JSON.parse(evt.payloadJson);
+                    if (parsed?.type === 'content.delta' && typeof parsed.text === 'string')
+                        assistantText += parsed.text;
+                    if (parsed?.type === 'thinking.delta' && typeof parsed.text === 'string')
+                        thinkingText += parsed.text;
+                }
+                catch {
+                    // ignore malformed rows
+                }
+            }
+            return {
+                ...run,
+                assistantText: assistantText || undefined,
+                thinkingText: thinkingText || undefined,
+            };
+        });
+    });
     app.post('/api/channels', async (req, reply) => {
         const body = (req.body ?? {});
         if (!body.name) {
@@ -51,6 +95,18 @@ beforeAll(async () => {
             reply.code(409);
             return { error: 'Channel name already exists' };
         }
+    });
+    app.post('/api/channels/:id/clear-chat', async (req, reply) => {
+        const channel = manager.getChannel(req.params.id);
+        if (!channel) {
+            reply.code(404);
+            return { error: 'Channel not found' };
+        }
+        const cleared = manager.clearChannelChat(req.params.id);
+        return {
+            ok: true,
+            clearedConversationIds: cleared.map((item) => item.id),
+        };
     });
     app.post('/api/channels/:id/messages', async (req, reply) => {
         const channel = manager.getChannel(req.params.id);
@@ -197,25 +253,6 @@ function waitForEvents(events, count, timeoutMs = 5000) {
 }
 // ─── Tests ───
 describe('REST API', () => {
-    it('GET /api/conversations/:id/history 应返回聚合后的 assistantText 和 thinkingText', async () => {
-        const conv = manager.createConversation({ title: 'history text', nodeId: 'node-1' });
-        const row = db
-            .prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
-            .get(conv.id);
-        createRun(db, { runId: 'run-history-1', sessionKey: row.sessionKey, promptText: 'hello' });
-        db.prepare(`UPDATE runs SET started_at = ?, ended_at = ?, stop_reason = 'end_turn' WHERE run_id = ?`).run(1000, 2000, 'run-history-1');
-        db.prepare(`INSERT INTO events(run_id, seq, method, payload_json, created_at)
-       VALUES(?, 1, 'node/event', ?, ?), (?, 2, 'node/event', ?, ?)`).run('run-history-1', JSON.stringify({ type: 'thinking.delta', text: 'reason' }), 1100, 'run-history-1', JSON.stringify({ type: 'content.delta', text: 'result text' }), 1200);
-        const { status, body } = await fetchJson(`/api/conversations/${conv.id}/history`);
-        expect(status).toBe(200);
-        expect(body).toEqual([
-            expect.objectContaining({
-                runId: 'run-history-1',
-                assistantText: 'result text',
-                thinkingText: 'reason',
-            }),
-        ]);
-    });
     it('GET /api/conversations 初始为空', async () => {
         const { status, body } = await fetchJson('/api/conversations');
         expect(status).toBe(200);
@@ -432,6 +469,46 @@ describe('REST API', () => {
         const tab = manager.getAgent(a2.agentId);
         expect(bob?.channelIds).toContain(body.channelId);
         expect(tab?.channelIds).toContain(body.channelId);
+    });
+    it('POST /api/channels/:id/clear-chat 应清空 channel 消息并重置 branch 历史，但保留 tasks', async () => {
+        const agent = manager.createAgent({
+            name: 'ClearRoomBob',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/clear-room-bob',
+        });
+        manager.joinChannel(agent.agentId, 'default');
+        const branch = manager.openAgentChannelThread(agent.agentId, 'default', null);
+        expect(branch).not.toBeNull();
+        if (!branch)
+            throw new Error('missing branch conversation');
+        const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?').get(branch.id);
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+       VALUES(?, 'default', 'user', 'User', 'user', '#default', 'hello', 1, ?, NULL, NULL)`).run(randomUUID(), Date.now());
+        db.prepare('INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq) VALUES(?, ?, ?, ?)').run(agent.agentId, 'default', '', 1);
+        db.prepare('INSERT INTO runs(run_id, session_key, prompt_text, started_at) VALUES(?, ?, ?, ?)').run('run-clear-channel', sessionRow.sessionKey, 'hello', Date.now());
+        db.prepare('INSERT INTO events(run_id, seq, method, payload_json, created_at) VALUES(?, ?, ?, ?, ?)').run('run-clear-channel', 1, 'node/event', JSON.stringify({ type: 'content.delta', text: 'hi' }), Date.now());
+        db.prepare('INSERT INTO conversation_prompt_queue(agent_id, conversation_id, prompt_text, created_at, updated_at) VALUES(?, ?, ?, ?, ?)').run(agent.agentId, branch.id, 'queued', Date.now(), Date.now());
+        db.prepare(`INSERT INTO tasks(task_id, channel_id, task_number, title, status, created_at, updated_at)
+       VALUES(?, 'default', 1, 'Keep task', 'todo', ?, ?)`).run(randomUUID(), Date.now(), Date.now());
+        const { status, body } = await fetchJson('/api/channels/default/clear-chat', {
+            method: 'POST',
+        });
+        expect(status).toBe(200);
+        expect(body.ok).toBe(true);
+        expect(body.clearedConversationIds).toContain(branch.id);
+        const messageCount = db.prepare(`SELECT count(*) as count FROM channel_messages WHERE channel_id = 'default'`).get();
+        const checkpointCount = db.prepare(`SELECT count(*) as count FROM agent_message_checkpoints WHERE channel_id = 'default'`).get();
+        const oldRunCount = db.prepare('SELECT count(*) as count FROM runs WHERE session_key = ?').get(sessionRow.sessionKey);
+        const eventCount = db.prepare(`SELECT count(*) as count FROM events WHERE run_id = 'run-clear-channel'`).get();
+        const queueCount = db.prepare('SELECT count(*) as count FROM conversation_prompt_queue WHERE conversation_id = ?').get(branch.id);
+        const taskCount = db.prepare(`SELECT count(*) as count FROM tasks WHERE channel_id = 'default'`).get();
+        expect(messageCount.count).toBe(0);
+        expect(checkpointCount.count).toBe(0);
+        expect(oldRunCount.count).toBe(0);
+        expect(eventCount.count).toBe(0);
+        expect(queueCount.count).toBe(0);
+        expect(taskCount.count).toBe(1);
     });
 });
 describe('WebSocket', () => {

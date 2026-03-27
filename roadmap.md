@@ -32,6 +32,25 @@
 
 ---
 
+## P1.5 — 消息投递可靠性 & 系统提示准确性
+
+- [ ] **`includeStdinNotification` 描述与实际行为不符**
+  - 现状：system prompt 告诉 agent "你繁忙时会收到 `[System notification: ...]` 推送通知"，但 ACP run 是封闭循环，core 从未实际注入此通知；agent 只能靠主动轮询 `check_messages`
+  - 目标：将该段描述改为"主动轮询"语义，去掉"you will receive a notification"的表述，或者实现真正的 mid-run 注入机制
+  - 改动：`packages/memory/src/systemPrompt.ts` 的 `## Message Notifications` 章节措辞
+
+- [ ] **Checkpoint 先于 dispatch 确认就推进，导致 @mention 可能静默丢失**
+  - 现状：channel @mention 和 DM 激活路径中，`bumpAgentMessageCheckpoint` 在 `submitPrompt` 之前调用；若 dispatch 失败（节点离线等），checkpoint 已推进，agent 再也看不到这条消息
+  - 目标：checkpoint 推进移到 dispatch 成功确认之后，或失败时回滚
+  - 影响路径：`apps/core/src/web/server.ts`（channel @mention）、`apps/core/src/execution/executionDispatcher.ts`（DM 激活）
+
+- [ ] **`check_messages` 无 channel 过滤，多 channel 场景下返回混合消息**
+  - 现状：`/receive` 接口一次性返回所有已加入 channel + DM 的未读，agent 需自行识别来源和优先级
+  - 目标：支持可选 `channel` 过滤参数，或按 channel 分组返回
+  - 影响路径：`apps/core/src/web/internalAgentRouter.ts` `/receive` handler + `packages/channel-bridge/src/index.ts` `check_messages` 工具
+
+---
+
 ## P2 — 新功能
 
 - [ ] **Task board 前端 UI**

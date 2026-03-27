@@ -1,9 +1,10 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon } from "lucide-react";
+import { HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon, Settings2Icon, MessageSquareOffIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChannelInfo, AgentInfo } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
+import { clearChannelChat } from "@/lib/api";
 import { useChannelStream } from "@/hooks/useChannelStream";
 import { ThreadPanel } from "./ThreadPanel";
 import { Streamdown } from "streamdown";
@@ -16,6 +17,7 @@ import {
 } from "@/components/ai-elements/streamdown";
 import { TasksTab } from "./TasksTab";
 import { ChatAvatar } from "@/features/chat/ChatAvatar";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 
 type ChannelPanelProps = {
   channel: ChannelInfo;
@@ -360,9 +362,86 @@ function MembersTab({ members }: { members: AgentInfo[] }) {
   );
 }
 
+function SettingsTab({
+  channel,
+  onClearChat,
+}: {
+  channel: ChannelInfo;
+  onClearChat: () => Promise<void>;
+}) {
+  const [dialogOpen, setDialogOpen] = useState(false);
+  const [clearing, setClearing] = useState(false);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const handleConfirm = useCallback(async () => {
+    setClearing(true);
+    try {
+      await onClearChat();
+      setNotice("Channel chat history cleared.");
+      setDialogOpen(false);
+    } finally {
+      setClearing(false);
+    }
+  }, [onClearChat]);
+
+  return (
+    <>
+      <div className="flex-1 overflow-y-auto p-4">
+        <div className="space-y-4">
+          <section className="rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-4 py-4 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Channel</div>
+            <div className="mt-2 text-sm font-semibold text-zinc-900">#{channel.name}</div>
+            {channel.description ? (
+              <div className="mt-1 text-xs text-zinc-600">{channel.description}</div>
+            ) : (
+              <div className="mt-1 text-xs text-zinc-500">No description</div>
+            )}
+          </section>
+
+          <section className="rounded-md border-2 border-zinc-900 bg-[#fff0d0] px-4 py-4 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Danger Zone</div>
+            <div className="mt-2 text-sm font-semibold text-zinc-900">Clear chat history</div>
+            <p className="mt-1 text-xs leading-5 text-zinc-700">
+              This removes the channel timeline and thread replies, and resets branch conversation activity for this channel.
+              It keeps the channel itself, members, and tasks.
+            </p>
+            {notice ? (
+              <div className="mt-3 rounded-sm border border-zinc-900/20 bg-white/70 px-3 py-2 text-xs text-zinc-700">
+                {notice}
+              </div>
+            ) : null}
+            <Button
+              size="sm"
+              className="mt-3 rounded-sm border-2 border-zinc-900 bg-[#ffd8d8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#ffc6c6]"
+              onClick={() => setDialogOpen(true)}
+              disabled={clearing}
+            >
+              <MessageSquareOffIcon className="mr-1.5 size-3.5" />
+              Clear chat history
+            </Button>
+          </section>
+        </div>
+      </div>
+
+      <ConfirmDialog
+        isOpen={dialogOpen}
+        title="Clear Channel Chat History"
+        message={`Clear chat history for #${channel.name}?\n\nThis will remove channel messages and thread replies, and reset branch conversation activity for this channel. Members and tasks will be kept.`}
+        confirmText={clearing ? "Clearing..." : "Clear"}
+        cancelText="Cancel"
+        variant="warning"
+        onConfirm={handleConfirm}
+        onCancel={() => {
+          if (!clearing) setDialogOpen(false);
+        }}
+      />
+    </>
+  );
+}
+
 export function ChannelPanel({ channel, agents, onOpenSidebar }: ChannelPanelProps) {
-  const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "members">("chat");
-  const { messages, sendMessage, loadMore, hasMore } = useChannelStream(channel.channelId);
+  const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "members" | "settings">("chat");
+  const { messages, sendMessage, loadMore, hasMore, resetVersion } = useChannelStream(channel.channelId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const channelMembers = useMemo(
     () => agents.filter((a) => a.channelIds?.includes(channel.channelId) ?? false),
@@ -381,6 +460,14 @@ export function ChannelPanel({ channel, agents, onOpenSidebar }: ChannelPanelPro
   useEffect(() => {
     setActiveTab("chat");
     setOpenThread(null);
+  }, [channel.channelId]);
+
+  useEffect(() => {
+    setOpenThread(null);
+  }, [resetVersion]);
+
+  const handleClearChat = useCallback(async () => {
+    await clearChannelChat(channel.channelId);
   }, [channel.channelId]);
 
   return (
@@ -459,6 +546,19 @@ export function ChannelPanel({ channel, agents, onOpenSidebar }: ChannelPanelPro
             <UsersIcon className="mr-1.5 size-3" />
             Members
           </Button>
+          <Button
+            size="sm"
+            className={cn(
+              "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+              activeTab === "settings"
+                ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]"
+                : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+            )}
+            onClick={() => setActiveTab("settings")}
+          >
+            <Settings2Icon className="mr-1.5 size-3" />
+            Settings
+          </Button>
         </div>
       </div>
 
@@ -467,6 +567,8 @@ export function ChannelPanel({ channel, agents, onOpenSidebar }: ChannelPanelPro
         <TasksTab channelId={channel.channelId} />
       ) : activeTab === "members" ? (
         <MembersTab members={channelMembers} />
+      ) : activeTab === "settings" ? (
+        <SettingsTab channel={channel} onClearChat={handleClearChat} />
       ) : (
         <div className="flex flex-1 overflow-hidden">
           {/* Main channel messages */}

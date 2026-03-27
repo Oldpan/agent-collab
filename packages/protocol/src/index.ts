@@ -153,6 +153,10 @@ export type ChannelNoticeEvent = {
   };
 };
 
+export type ChannelHistoryResetEvent = {
+  type: 'channel.history.reset';
+};
+
 export type SystemNoticeEvent = {
   type: 'system.notice';
   message: string;
@@ -173,6 +177,7 @@ export type ServerEvent =
   | HistoryUserMessageEvent
   | ChannelMessageEvent
   | ChannelNoticeEvent
+  | ChannelHistoryResetEvent
   | SystemNoticeEvent;
 
 // ─── 客户端 → 服务端 事件 ───

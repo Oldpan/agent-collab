@@ -73,6 +73,10 @@ export class ConversationManager {
     return this.db;
   }
 
+  getConfig(): AppConfig {
+    return this.config;
+  }
+
   start(): void {
     log.info('ConversationManager ready');
   }
@@ -546,6 +550,8 @@ export class ConversationManager {
 
     const now = Date.now();
     this.db.prepare('DELETE FROM conversation_prompt_queue WHERE agent_id = ?').run(agentId);
+    this.db.prepare(`DELETE FROM channel_messages WHERE channel_id = ?`).run(`dm:${agentId}`);
+    this.db.prepare(`DELETE FROM agent_message_checkpoints WHERE agent_id = ?`).run(agentId);
 
     for (const row of rows) {
       const runIds = this.db.prepare(
@@ -646,6 +652,63 @@ export class ConversationManager {
       `UPDATE channels SET description = ?, updated_at = ? WHERE channel_id = ?`
     ).run(req.description ?? existing.description ?? null, now, channelId);
     return { ...existing, description: req.description ?? existing.description, updatedAt: now };
+  }
+
+  clearChannelChat(channelId: string): ConversationInfo[] {
+    const rows = this.db.prepare(
+      `SELECT id, channel_id as channelId, agent_type as agentType, workspace_path as workspacePath,
+              session_key as sessionKey
+       FROM conversations
+       WHERE channel_id = ? AND thread_kind = 'branch'
+       ORDER BY updated_at DESC`,
+    ).all(channelId) as Array<{
+      id: string;
+      channelId: string;
+      agentType: AgentType;
+      workspacePath: string | null;
+      sessionKey: string;
+    }>;
+
+    const now = Date.now();
+
+    this.db.prepare(`DELETE FROM channel_messages WHERE channel_id = ?`).run(channelId);
+    this.db.prepare(`DELETE FROM agent_message_checkpoints WHERE channel_id = ?`).run(channelId);
+
+    for (const row of rows) {
+      const runIds = this.db.prepare(
+        `SELECT run_id as runId FROM runs WHERE session_key = ?`,
+      ).all(row.sessionKey) as Array<{ runId: string }>;
+
+      this.db.prepare('DELETE FROM conversation_prompt_queue WHERE conversation_id = ?').run(row.id);
+
+      for (const run of runIds) {
+        this.db.prepare('DELETE FROM events WHERE run_id = ?').run(run.runId);
+      }
+      this.db.prepare('DELETE FROM runs WHERE session_key = ?').run(row.sessionKey);
+
+      const newSessionKey = randomUUID();
+      const preset = getRuntimeDriver(row.agentType);
+      createSession(this.db, {
+        sessionKey: newSessionKey,
+        agentCommand: preset.command,
+        agentArgs: preset.args,
+        cwd: row.workspacePath ?? this.config.workspaceRoot,
+        loadSupported: false,
+      });
+      upsertBinding(
+        this.db,
+        { platform: 'web', chatId: row.channelId, threadId: row.id, userId: row.agentType },
+        newSessionKey,
+      );
+      this.db.prepare(
+        `UPDATE conversations
+         SET session_key = ?, status = 'idle', title = '', updated_at = ?
+         WHERE id = ?`,
+      ).run(newSessionKey, now, row.id);
+      this.db.prepare('DELETE FROM sessions WHERE session_key = ?').run(row.sessionKey);
+    }
+
+    return this.listConversations({ channelId }).filter((item) => item.threadKind === 'branch');
   }
 
   listChannels(): ChannelInfo[] {

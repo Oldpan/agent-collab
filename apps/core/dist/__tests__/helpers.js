@@ -55,6 +55,7 @@ export function createTestConfig(overrides) {
         contextReplayEnabled: false,
         contextReplayRuns: 0,
         contextReplayMaxChars: 12000,
+        humanUserName: 'oldpan',
         ...overrides,
     };
 }
