@@ -93,9 +93,12 @@ export class BindingRuntime {
                             if (this.shouldBreakTextStreamForToolUpdate(update, ui.toolCallId)) {
                                 await sink.breakTextStream?.();
                             }
+                            const summaryDetail = this.currentUiMode === 'summary'
+                                ? buildToolSummaryDetailText(update, ui.stage, ui.status)
+                                : undefined;
                             const detail = this.currentUiMode === 'verbose'
                                 ? ui.detail ?? renderJson(update, this.config.uiJsonMaxChars)
-                                : undefined;
+                                : summaryDetail;
                             if (!sink.sendUi && this.currentUiMode === 'summary') {
                                 return;
                             }
@@ -844,6 +847,29 @@ function buildToolDetailText(params) {
     const errorText = extractErrorText(params.update);
     if (errorText)
         lines.push(`error: ${truncateInline(errorText, 220)}`);
+    if (lines.length === 0)
+        return undefined;
+    return lines.join('\n');
+}
+function buildToolSummaryDetailText(update, stage, status) {
+    const lines = [];
+    const errorText = extractErrorText(update);
+    if (errorText) {
+        lines.push(`error: ${truncateInline(errorText, 220)}`);
+    }
+    const resultMessage = extractFirstString(update, [
+        'message',
+        'result.message',
+        'output',
+        'result.output',
+        'result.text',
+    ]);
+    if (resultMessage && (!errorText || resultMessage !== errorText)) {
+        lines.push(`result: ${truncateInline(resultMessage, 220)}`);
+    }
+    if (stage === 'complete' && lines.length === 0 && status !== 'completed') {
+        lines.push(`status: ${status}`);
+    }
     if (lines.length === 0)
         return undefined;
     return lines.join('\n');

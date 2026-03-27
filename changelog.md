@@ -190,3 +190,10 @@
   - 没有任何 `send_message` 仍然报 `Agent did not reply via send_message`
   - 只有进度消息、且之后还有明显正文输出但没有最终回复时，报 `Agent did not send a final reply via send_message`
 - 兼容旧行为：如果 run 里只有一条未标注 kind 的正常回复，且后面没有明显正文尾流，仍然视为隐式最终回复，避免把现有单句回答全部打坏。
+
+## 2026-03-27 (empty send_message hardening)
+
+- `send_message` 现在会在工具层直接拒绝空白内容：`content` 改成 `trim().min(1)`，空串或纯空白不再允许发起发送。
+- core 内部 `/api/internal/agent/:id/send` 也同步做了 `trim()` 后的硬校验，并统一返回 `content must not be empty`。
+- `channel-bridge` 对 `/send` 的失败不再包成普通文本结果，而是直接抛出工具错误；这样前端 Activity 里会把这类发送失败显示成真正的 `failed`，而不是看起来像 `completed`。
+- runtime 在 summary 模式下也会把工具失败/结果的简短 detail 继续透传到前端，便于定位 `send_message` 为什么失败。

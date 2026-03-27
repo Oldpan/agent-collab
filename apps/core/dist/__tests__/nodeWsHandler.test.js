@@ -228,6 +228,53 @@ describe('nodeWsHandler', () => {
             message: 'Agent did not send a final reply via send_message',
         });
     });
+    it('旧式未标注 kind 的单条回复若与后续输出只是重复，不应误判缺少 final reply', () => {
+        const agent = manager.createAgent({
+            name: 'LegacyBob',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/legacy-bob-contract',
+        });
+        const conv = manager.openAgentThread(agent.agentId);
+        if (!conv)
+            throw new Error('missing conversation');
+        const socket = new FakeSocket();
+        const events = [];
+        const registry = {
+            register() { },
+            unregister() { },
+            heartbeat() { },
+        };
+        handleNodeWebSocket(socket, registry, (_conversationId, event) => {
+            events.push(event);
+        }, db, manager);
+        const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+            .get(conv.id);
+        createRun(db, {
+            runId: 'run-legacy-1',
+            sessionKey: sessionRow.sessionKey,
+            promptText: 'hello',
+        });
+        const replyText = '你好！我是 Bob，你的 AI 协作助手。有什么我可以帮你的吗？';
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`).run('msg-legacy-1', `dm:${agent.agentId}`, agent.agentId, agent.name, 'dm:@oldpan', replyText, 1, 1000, 'run-legacy-1');
+        db.prepare(`INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, ?, 'node/event', ?, ?)`).run('run-legacy-1', 1, JSON.stringify({
+            type: 'content.delta',
+            text: replyText,
+        }), 2000);
+        socket.emit('message', JSON.stringify({
+            type: 'run.end',
+            runId: 'run-legacy-1',
+            conversationId: conv.id,
+            stopReason: 'end_turn',
+        }));
+        const runRow = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
+            .get('run-legacy-1');
+        expect(runRow.error).toBeNull();
+        expect(runRow.stopReason).toBe('end_turn');
+        expect(events.some((event) => event.type === 'error')).toBe(false);
+    });
     it('run.event 中的 recovering 状态应更新会话状态', () => {
         const conv = manager.createConversation({ title: 'Recovering Test', nodeId: 'node-1' });
         const socket = new FakeSocket();

@@ -78,7 +78,11 @@ server.tool(
     target: z.string().optional().describe(
       'Optional override for where to send. If omitted, the message replies to the current conversation. Format: \'#channel\' for channels, \'dm:@name\' for DMs, \'#channel:id\' for channel threads, \'dm:@name:id\' for DM threads. Examples: \'#general\', \'dm:@alice\', \'#general:abcd1234\'.',
     ),
-    content: z.string().describe('The message content'),
+    content: z
+      .string()
+      .trim()
+      .min(1, 'content must not be empty')
+      .describe('The message content. Must not be empty or whitespace-only.'),
     kind: z
       .enum(['progress', 'final'])
       .optional()
@@ -88,23 +92,27 @@ server.tool(
     attachment_ids: z.array(z.string()).optional().describe('Optional attachment IDs to include'),
   },
   async ({ target, content, kind }) => {
-    try {
-      const { ok, data } = await apiFetch('/send', {
-        method: 'POST',
-        body: { target, content, kind, conversationId },
-      });
-      if (!ok) return toText(`Error: ${errText(data, 'send failed')}`);
-      const d = data as Record<string, unknown>;
-      const msgId = String(d.messageId ?? '');
-      const deliveredTarget = String(d.target ?? target ?? 'current conversation');
-      const shortId = msgId.slice(0, 8);
-      const replyHint = shortId
-        ? ` (to reply in this message's thread, use target "${deliveredTarget.includes(':') ? deliveredTarget : `${deliveredTarget}:${shortId}`}")`
-        : '';
-      return toText(`Message sent to ${deliveredTarget}. Message ID: ${msgId}${replyHint}`);
-    } catch (err: unknown) {
-      return toText(`Error: ${(err as Error).message}`);
+    const normalizedContent = content.trim();
+    if (!normalizedContent) {
+      throw new Error('content must not be empty');
     }
+
+    const { ok, data } = await apiFetch('/send', {
+      method: 'POST',
+      body: { target, content: normalizedContent, kind, conversationId },
+    });
+    if (!ok) {
+      throw new Error(errText(data, 'send failed'));
+    }
+
+    const d = data as Record<string, unknown>;
+    const msgId = String(d.messageId ?? '');
+    const deliveredTarget = String(d.target ?? target ?? 'current conversation');
+    const shortId = msgId.slice(0, 8);
+    const replyHint = shortId
+      ? ` (to reply in this message's thread, use target "${deliveredTarget.includes(':') ? deliveredTarget : `${deliveredTarget}:${shortId}`}")`
+      : '';
+    return toText(`Message sent to ${deliveredTarget}. Message ID: ${msgId}${replyHint}`);
   },
 );
 

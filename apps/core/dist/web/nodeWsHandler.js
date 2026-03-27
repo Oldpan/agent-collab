@@ -34,23 +34,26 @@ function hasRunFinalReplyMessage(db, runId) {
         .get(runId);
     return (row?.count ?? 0) > 0;
 }
-function hasSubstantiveOutputAfterLastReply(db, runId) {
-    const lastReply = db
-        .prepare(`SELECT MAX(created_at) as lastCreatedAt
+function normalizeReplyText(text) {
+    return text.replace(/\s+/g, ' ').trim();
+}
+function analyzeOutputAfterLastReply(db, runId) {
+    const replyRows = db
+        .prepare(`SELECT content, created_at, message_kind
        FROM channel_messages
        WHERE run_id = ?
-         AND sender_type = 'agent'`)
-        .get(runId);
-    if (!lastReply?.lastCreatedAt)
-        return false;
+         AND sender_type = 'agent'`).all(runId);
+    if (replyRows.length === 0) {
+        return { hasSubstantiveOutput: false, duplicatesLegacyReply: false };
+    }
+    const lastReply = replyRows.reduce((latest, row) => (row.created_at > latest.created_at ? row : latest));
     const rows = db
         .prepare(`SELECT payload_json as payloadJson
        FROM events
        WHERE run_id = ?
          AND method = 'node/event'
          AND created_at > ?
-       ORDER BY seq ASC`)
-        .all(runId, lastReply.lastCreatedAt);
+       ORDER BY seq ASC`).all(runId, lastReply.created_at);
     let textAfterReply = '';
     for (const row of rows) {
         try {
@@ -63,8 +66,20 @@ function hasSubstantiveOutputAfterLastReply(db, runId) {
             // Ignore malformed historic payloads
         }
     }
-    const normalized = textAfterReply.replace(/\s+/g, ' ').trim();
-    return normalized.length >= 32;
+    const normalizedOutput = normalizeReplyText(textAfterReply);
+    if (normalizedOutput.length < 32) {
+        return { hasSubstantiveOutput: false, duplicatesLegacyReply: false };
+    }
+    const normalizedLastReply = normalizeReplyText(lastReply.content ?? '');
+    const duplicatesLegacyReply = !lastReply.message_kind &&
+        !!normalizedLastReply &&
+        (normalizedOutput === normalizedLastReply ||
+            normalizedOutput.includes(normalizedLastReply) ||
+            normalizedLastReply.includes(normalizedOutput));
+    return {
+        hasSubstantiveOutput: true,
+        duplicatesLegacyReply,
+    };
 }
 function getReplyContractError(msg, db, conversationId, runId) {
     if (msg.error)
@@ -79,7 +94,8 @@ function getReplyContractError(msg, db, conversationId, runId) {
     if (hasRunFinalReplyMessage(db, runId)) {
         return null;
     }
-    if (hasSubstantiveOutputAfterLastReply(db, runId)) {
+    const outputAnalysis = analyzeOutputAfterLastReply(db, runId);
+    if (outputAnalysis.hasSubstantiveOutput && !outputAnalysis.duplicatesLegacyReply) {
         return 'Agent did not send a final reply via send_message';
     }
     return null;

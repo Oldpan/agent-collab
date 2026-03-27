@@ -60,32 +60,36 @@ const server = new McpServer({ name: 'chat', version: '1.0.0' });
 // ── send_message ──────────────────────────────────────────────────────────────
 server.tool('send_message', 'Send a message to the current conversation by default. You may optionally override the target to send to a specific channel, DM, or thread. Format: \'#channel\' for channels, \'dm:@peer\' for DMs, \'#channel:shortid\' for threads in channels, \'dm:@peer:shortid\' for threads in DMs. To start a NEW DM, use \'dm:@person-name\'.', {
     target: z.string().optional().describe('Optional override for where to send. If omitted, the message replies to the current conversation. Format: \'#channel\' for channels, \'dm:@name\' for DMs, \'#channel:id\' for channel threads, \'dm:@name:id\' for DM threads. Examples: \'#general\', \'dm:@alice\', \'#general:abcd1234\'.'),
-    content: z.string().describe('The message content'),
+    content: z
+        .string()
+        .trim()
+        .min(1, 'content must not be empty')
+        .describe('The message content. Must not be empty or whitespace-only.'),
     kind: z
         .enum(['progress', 'final'])
         .optional()
         .describe('Optional message kind. Use "progress" for interim updates and "final" for the final user-visible answer that completes this run. If omitted, the platform treats the message as a legacy untyped reply.'),
     attachment_ids: z.array(z.string()).optional().describe('Optional attachment IDs to include'),
 }, async ({ target, content, kind }) => {
-    try {
-        const { ok, data } = await apiFetch('/send', {
-            method: 'POST',
-            body: { target, content, kind, conversationId },
-        });
-        if (!ok)
-            return toText(`Error: ${errText(data, 'send failed')}`);
-        const d = data;
-        const msgId = String(d.messageId ?? '');
-        const deliveredTarget = String(d.target ?? target ?? 'current conversation');
-        const shortId = msgId.slice(0, 8);
-        const replyHint = shortId
-            ? ` (to reply in this message's thread, use target "${deliveredTarget.includes(':') ? deliveredTarget : `${deliveredTarget}:${shortId}`}")`
-            : '';
-        return toText(`Message sent to ${deliveredTarget}. Message ID: ${msgId}${replyHint}`);
+    const normalizedContent = content.trim();
+    if (!normalizedContent) {
+        throw new Error('content must not be empty');
     }
-    catch (err) {
-        return toText(`Error: ${err.message}`);
+    const { ok, data } = await apiFetch('/send', {
+        method: 'POST',
+        body: { target, content: normalizedContent, kind, conversationId },
+    });
+    if (!ok) {
+        throw new Error(errText(data, 'send failed'));
     }
+    const d = data;
+    const msgId = String(d.messageId ?? '');
+    const deliveredTarget = String(d.target ?? target ?? 'current conversation');
+    const shortId = msgId.slice(0, 8);
+    const replyHint = shortId
+        ? ` (to reply in this message's thread, use target "${deliveredTarget.includes(':') ? deliveredTarget : `${deliveredTarget}:${shortId}`}")`
+        : '';
+    return toText(`Message sent to ${deliveredTarget}. Message ID: ${msgId}${replyHint}`);
 });
 // ── check_messages ────────────────────────────────────────────────────────────
 server.tool('check_messages', "Check for new messages without waiting. Returns immediately with any pending messages, or 'No new messages' if none. Use this freely during work — at natural breakpoints or whenever you want to see if anything new came in. Optionally filter to a specific channel or DM.", {

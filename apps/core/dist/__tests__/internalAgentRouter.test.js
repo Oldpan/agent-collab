@@ -95,6 +95,30 @@ describe('internalAgentRouter', () => {
         expect(row.channelId).toBe(`dm:${agent.agentId}`);
         expect(row.target).toBe('dm:@oldpan');
     });
+    it('send_message 应拒绝纯空白内容', async () => {
+        const agent = manager.createAgent({
+            name: 'WhitespaceBob',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/whitespace-bob-router',
+        });
+        const conv = manager.openAgentThread(agent.agentId);
+        if (!conv)
+            throw new Error('missing conversation');
+        const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                content: '   \n\t  ',
+                conversationId: conv.id,
+            }),
+        });
+        expect(res.status).toBe(400);
+        const body = await res.json();
+        expect(body.error).toBe('content must not be empty');
+        const row = db.prepare('SELECT COUNT(*) as count FROM channel_messages WHERE sender_id = ?').get(agent.agentId);
+        expect(row.count).toBe(0);
+    });
     it('branch thread 未提供 target 时应默认回复当前 channel thread', async () => {
         const agent = manager.createAgent({
             name: 'Viber',

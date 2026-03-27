@@ -75,9 +75,10 @@ export function registerInternalAgentRoutes(
     }
 
     const { target, content, kind, conversationId } = req.body ?? {};
-    if (!content) {
+    const normalizedContent = typeof content === 'string' ? content.trim() : '';
+    if (!normalizedContent) {
       reply.code(400);
-      return { error: 'content is required' };
+      return { error: 'content must not be empty' };
     }
     if (kind && kind !== 'progress' && kind !== 'final') {
       reply.code(400);
@@ -119,7 +120,7 @@ export function registerInternalAgentRoutes(
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
        VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(messageId, channelId, agentId, agent.name, resolvedTarget, content, seq, now, runId, threadRootId, kind ?? null);
+    ).run(messageId, channelId, agentId, agent.name, resolvedTarget, normalizedContent, seq, now, runId, threadRootId, kind ?? null);
 
     const channelMessageEvent: ServerEvent = {
       type: 'channel.message',
@@ -127,7 +128,7 @@ export function registerInternalAgentRoutes(
         id: messageId,
         senderName: agent.name,
         senderType: 'agent',
-        content,
+        content: normalizedContent,
         createdAt: new Date(now).toISOString(),
         seq,
         ...(threadRootId ? { threadRootId } : {}),

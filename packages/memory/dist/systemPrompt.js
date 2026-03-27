@@ -88,6 +88,7 @@ When a direct message, channel mention, or thread reply wakes you up, the trigge
 - Use \`kind="progress"\` for interim updates while you are still working.
 - Use \`kind="final"\` for the final user-visible answer that completes the current run.
 - If you send a progress update first, you must send a later \`kind="final"\` message before the run ends.
+- Never call \`${tool('send_message')}\` with empty, whitespace-only, or placeholder content. If you are not ready to send a real user-visible message yet, keep working until you have real content to send.
 - Only set an explicit \`target\` when you intentionally want to send somewhere else, or when you are already inside a thread and need to keep replying in that thread.
 - Do **not** convert a main-channel message like \`[target=#general msg=abcd1234 ...]\` into a thread reply just because it has a \`msg=\` field.
 - The system metadata you receive (\`target\`, \`msg\`, \`time\`, \`type\`) is for routing and context only. Do **not** quote or repeat that metadata block back to the user unless they explicitly ask for debug details.
