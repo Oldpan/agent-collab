@@ -11,6 +11,7 @@ import { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/agentWorkspaceService.js';
 import { findMentionedAgents } from './channelMentions.js';
 import { buildChannelActivationPrompt } from './channelActivationPrompt.js';
+import { appendChannelResetMarkers } from './channelMemoryNotes.js';
 import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
 export async function startServer(params) {
     const { port, host, conversationManager, db } = params;
@@ -353,6 +354,27 @@ export async function startServer(params) {
             reply.code(404);
             return { error: 'Channel not found' };
         }
+        const joinedAgents = conversationManager.listAgents(req.params.id);
+        const unmarkableAgents = joinedAgents.filter((agent) => !agent.nodeId || !agent.workspacePath);
+        if (unmarkableAgents.length > 0) {
+            reply.code(409);
+            return {
+                error: `Cannot mark channel memory for: ${unmarkableAgents.map((agent) => agent.name).join(', ')}`,
+            };
+        }
+        const clearedAt = Date.now();
+        try {
+            await appendChannelResetMarkers({
+                broker: workspaceBroker,
+                agents: joinedAgents,
+                channelName: channel.name,
+                clearedAt,
+            });
+        }
+        catch (error) {
+            reply.code(409);
+            return { error: `Failed to mark channel memory: ${String(error?.message ?? error)}` };
+        }
         const branchConversations = conversationManager
             .listConversations({ channelId: req.params.id })
             .filter((item) => item.threadKind === 'branch');
@@ -520,14 +542,15 @@ export async function startServer(params) {
             if (rootMsg?.sender_type === 'agent') {
                 const conv = conversationManager.openAgentChannelThread(rootMsg.sender_id, req.params.id, threadRootId);
                 if (conv) {
-                    bumpAgentMessageCheckpoint(db, rootMsg.sender_id, req.params.id, seq, threadRootId);
                     conversationManager.submitPrompt(conv.id, buildChannelActivationPrompt({
                         channelName: channel.name,
                         target: `#${channel.name}:${threadRootId}`,
                         senderName,
                         content,
                         reason: 'thread_reply',
-                    }), { recordAsUserMessage: false }).catch(() => { });
+                    }), { recordAsUserMessage: false }).then(() => {
+                        bumpAgentMessageCheckpoint(db, rootMsg.sender_id, req.params.id, seq, threadRootId);
+                    }).catch(() => { });
                 }
             }
         }
@@ -539,7 +562,6 @@ export async function startServer(params) {
                 const conv = conversationManager.openAgentChannelThread(agent.agentId, req.params.id, threadRootId ?? null);
                 if (conv) {
                     const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
-                    bumpAgentMessageCheckpoint(db, agent.agentId, req.params.id, seq, threadRootId ?? null);
                     broadcastToChannel(req.params.id, {
                         type: 'channel.notice',
                         notice: {
@@ -553,7 +575,9 @@ export async function startServer(params) {
                         senderName,
                         content,
                         reason: 'mention',
-                    }), { recordAsUserMessage: false }).catch(() => { });
+                    }), { recordAsUserMessage: false }).then(() => {
+                        bumpAgentMessageCheckpoint(db, agent.agentId, req.params.id, seq, threadRootId ?? null);
+                    }).catch(() => { });
                 }
             }
         })();

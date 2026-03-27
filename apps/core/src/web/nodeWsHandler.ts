@@ -217,6 +217,11 @@ export function handleNodeWebSocket(
         break;
       }
 
+      case 'workspace.write.response': {
+        workspaceBroker?.handleWorkspaceWriteResponse(msg);
+        break;
+      }
+
       case 'workspace.reset.response': {
         workspaceBroker?.handleWorkspaceResetResponse(msg);
         break;

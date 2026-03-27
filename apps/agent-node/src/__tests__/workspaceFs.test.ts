@@ -4,7 +4,7 @@ import path from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { listWorkspaceDirectory, readWorkspaceFile, WorkspaceFsError } from '../workspaceFs.js';
+import { listWorkspaceDirectory, readWorkspaceFile, writeWorkspaceFile, WorkspaceFsError } from '../workspaceFs.js';
 
 const tempDirs: string[] = [];
 
@@ -34,6 +34,18 @@ describe('workspaceFs', () => {
 
     expect(result.mimeType).toBe('text/markdown');
     expect(result.content).toContain('# Memory');
+  });
+
+  it('应支持写入和追加文本文件', () => {
+    const root = createWorkspace();
+
+    writeWorkspaceFile(root, 'notes/channels/default.md', '# default\n', 'overwrite');
+    writeWorkspaceFile(root, 'notes/channels/default.md', '\n## History Reset\n', 'append');
+
+    const result = readWorkspaceFile(root, 'notes/channels/default.md');
+
+    expect(result.content).toContain('# default');
+    expect(result.content).toContain('## History Reset');
   });
 
   it('应拒绝跳出 workspace 的路径', () => {

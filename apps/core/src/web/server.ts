@@ -15,6 +15,7 @@ import { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/agentWorkspaceService.js';
 import { findMentionedAgents } from './channelMentions.js';
 import { buildChannelActivationPrompt } from './channelActivationPrompt.js';
+import { appendChannelResetMarkers } from './channelMemoryNotes.js';
 import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
 
 export async function startServer(params: {
@@ -407,6 +408,28 @@ export async function startServer(params: {
       if (!channel) {
         reply.code(404);
         return { error: 'Channel not found' };
+      }
+
+      const joinedAgents = conversationManager.listAgents(req.params.id);
+      const unmarkableAgents = joinedAgents.filter((agent) => !agent.nodeId || !agent.workspacePath);
+      if (unmarkableAgents.length > 0) {
+        reply.code(409);
+        return {
+          error: `Cannot mark channel memory for: ${unmarkableAgents.map((agent) => agent.name).join(', ')}`,
+        };
+      }
+
+      const clearedAt = Date.now();
+      try {
+        await appendChannelResetMarkers({
+          broker: workspaceBroker,
+          agents: joinedAgents,
+          channelName: channel.name,
+          clearedAt,
+        });
+      } catch (error) {
+        reply.code(409);
+        return { error: `Failed to mark channel memory: ${String((error as Error)?.message ?? error)}` };
       }
 
       const branchConversations = conversationManager

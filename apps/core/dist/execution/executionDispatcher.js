@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { getRuntimeDriver } from '@agent-collab/protocol';
 import { buildAgentContextText } from '@agent-collab/memory';
 import { createRun, finishRun, log } from '@agent-collab/runtime-acp';
-import { bumpAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
+import { bumpAgentMessageCheckpoint, getAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
 import { buildDirectActivationPrompt } from '../web/directActivationPrompt.js';
 export class ExecutionDispatcher {
     db;
@@ -36,6 +36,7 @@ export class ExecutionDispatcher {
         let contextText = '';
         let agentEnvVars;
         let disabledToolKinds;
+        let dmActivationCheckpoint;
         if (row.agentId) {
             const agent = this.getAgentById(row.agentId);
             if (agent) {
@@ -65,14 +66,19 @@ export class ExecutionDispatcher {
                     const humanUserName = this.config.humanUserName;
                     this.db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
              VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?)`).run(randomUUID(), dmChannelId, humanUserName, `dm:@${agent.name}`, promptText, msgSeq, Date.now());
-                    // The triggering DM is already present in the activation prompt, so mark
-                    // it as delivered in the DM root stream to avoid re-fetching it immediately.
-                    bumpAgentMessageCheckpoint(this.db, row.agentId, dmChannelId, msgSeq, null);
+                    // Checkpoint will be bumped after confirmed delivery to avoid silent message
+                    // loss if the node is offline or the send fails.
+                    dmActivationCheckpoint = { channelId: dmChannelId, seq: msgSeq };
                     promptText = buildDirectActivationPrompt({
                         agentName: agent.name,
                         senderName: humanUserName,
                         content: promptText,
                     });
+                }
+                const pendingCount = this.countPendingMessages(row.agentId, agent.channelIds ?? []);
+                if (pendingCount > 0) {
+                    const label = pendingCount === 1 ? '1 unread message' : `${pendingCount} unread messages`;
+                    contextText += `\n\n[Inbox]\n${label} in your channels since last check. Call check_messages when ready.`;
                 }
             }
         }
@@ -122,6 +128,9 @@ export class ExecutionDispatcher {
             finishRun(this.db, { runId, error: 'Node disconnected during dispatch' });
             this.updateStatus(conversationId, 'idle');
             throw new Error(`Node disconnected: ${row.nodeId}`);
+        }
+        if (dmActivationCheckpoint) {
+            bumpAgentMessageCheckpoint(this.db, row.agentId, dmActivationCheckpoint.channelId, dmActivationCheckpoint.seq, null);
         }
         return { runId, dispatchMode, hostKey };
     }
@@ -273,6 +282,22 @@ export class ExecutionDispatcher {
         if (full.length <= this.config.contextReplayMaxChars)
             return full;
         return header + raw.slice(Math.max(0, raw.length - this.config.contextReplayMaxChars));
+    }
+    countPendingMessages(agentId, channelIds) {
+        const dmChannelId = `dm:${agentId}`;
+        const allChannels = Array.from(new Set([...channelIds, dmChannelId]));
+        let total = 0;
+        for (const channelId of allChannels) {
+            const threadKeys = this.db.prepare(`SELECT DISTINCT COALESCE(thread_root_id, '') as threadKey
+         FROM channel_messages WHERE channel_id = ? AND sender_id != ?`).all(channelId, agentId).map((r) => r.threadKey);
+            for (const threadKey of threadKeys) {
+                const checkpoint = getAgentMessageCheckpoint(this.db, agentId, channelId, threadKey || null);
+                const row = this.db.prepare(`SELECT COUNT(*) as count FROM channel_messages
+           WHERE channel_id = ? AND seq > ? AND sender_id != ? AND COALESCE(thread_root_id, '') = ?`).get(channelId, checkpoint, agentId, threadKey);
+                total += row.count;
+            }
+        }
+        return total;
     }
     updateStatus(conversationId, status) {
         this.db

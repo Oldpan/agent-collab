@@ -260,6 +260,8 @@ export type WorkspaceErrorCode =
   | 'file_too_large'
   | 'io_error';
 
+export type WorkspaceWriteMode = 'overwrite' | 'append';
+
 export type AgentWorkspaceEntry = {
   name: string;
   path: string;
@@ -289,6 +291,16 @@ export type WorkspaceReadResponseMsg = {
   errorCode?: WorkspaceErrorCode;
 };
 
+export type WorkspaceWriteResponseMsg = {
+  type: 'workspace.write.response';
+  requestId: string;
+  relativePath: string;
+  ok?: boolean;
+  modifiedAt?: number | null;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
 export type WorkspaceResetRequestMsg = {
   type: 'workspace.reset.request';
   requestId: string;
@@ -312,6 +324,7 @@ export type NodeToCore =
   | NodePermissionRequestMsg
   | WorkspaceListResponseMsg
   | WorkspaceReadResponseMsg
+  | WorkspaceWriteResponseMsg
   | WorkspaceResetResponseMsg;
 
 // Core → Node
@@ -367,6 +380,15 @@ export type WorkspaceReadRequestMsg = {
   relativePath: string;
 };
 
+export type WorkspaceWriteRequestMsg = {
+  type: 'workspace.write.request';
+  requestId: string;
+  workspaceRoot: string;
+  relativePath: string;
+  content: string;
+  mode: WorkspaceWriteMode;
+};
+
 export type HostCloseMsg = {
   type: 'host.close';
   hostKey: string;
@@ -379,6 +401,7 @@ export type CoreToNode =
   | NodePermissionResponseMsg
   | WorkspaceListRequestMsg
   | WorkspaceReadRequestMsg
+  | WorkspaceWriteRequestMsg
   | WorkspaceResetRequestMsg
   | HostCloseMsg;
 

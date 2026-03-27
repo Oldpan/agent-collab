@@ -77,4 +77,40 @@ describe('AgentWorkspaceBroker', () => {
 
     await expect(promise).rejects.toThrow('Agent node disconnected: node-1');
   });
+
+  it('应向 node 发送 write 请求并在响应后 resolve', async () => {
+    const registry = new NodeRegistry();
+    const sent: string[] = [];
+
+    registry.register({
+      nodeId: 'node-1',
+      hostname: 'host',
+      agentTypes: ['codex_acp'],
+      version: '0.1.0',
+      ws: {
+        readyState: 1,
+        send(payload: string) {
+          sent.push(payload);
+        },
+      } as unknown as NodeEntry['ws'],
+      lastSeen: Date.now(),
+    });
+
+    const broker = new AgentWorkspaceBroker({ nodeRegistry: registry, timeoutMs: 500 });
+    const promise = broker.writeFile('node-1', '/tmp/bob', 'notes/channels/default.md', 'marker', 'append');
+
+    const message = JSON.parse(sent[0] ?? '{}') as { requestId: string; type: string; mode: string };
+    expect(message.type).toBe('workspace.write.request');
+    expect(message.mode).toBe('append');
+
+    broker.handleWorkspaceWriteResponse({
+      type: 'workspace.write.response',
+      requestId: message.requestId,
+      relativePath: 'notes/channels/default.md',
+      ok: true,
+      modifiedAt: Date.now(),
+    });
+
+    await expect(promise).resolves.toBeUndefined();
+  });
 });

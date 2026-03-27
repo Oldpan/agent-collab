@@ -87,7 +87,21 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
         // Query all channels the agent has joined, plus the user DM channel
         const agent = conversationManager.getAgent(agentId);
         const dmChannelId = `dm:${agentId}`;
-        const channelsToQuery = Array.from(new Set([...(agent.channelIds ?? []), dmChannelId]));
+        let channelsToQuery;
+        const channelFilter = req.query.channel?.trim();
+        if (channelFilter) {
+            const filteredId = resolveChannelFromTarget(channelFilter, db)
+                ?? (channelFilter.startsWith('dm:') ? dmChannelId : null);
+            if (!filteredId) {
+                reply.code(400);
+                return { error: `Cannot resolve channel: ${channelFilter}` };
+            }
+            const memberOf = new Set([...(agent.channelIds ?? []), dmChannelId]);
+            channelsToQuery = memberOf.has(filteredId) ? [filteredId] : [];
+        }
+        else {
+            channelsToQuery = Array.from(new Set([...(agent.channelIds ?? []), dmChannelId]));
+        }
         let allRows = [];
         for (const channelId of channelsToQuery) {
             const threadKeys = db.prepare(`SELECT DISTINCT COALESCE(thread_root_id, '') as threadKey

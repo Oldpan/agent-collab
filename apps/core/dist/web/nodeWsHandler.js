@@ -179,6 +179,10 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
                 workspaceBroker?.handleWorkspaceReadResponse(msg);
                 break;
             }
+            case 'workspace.write.response': {
+                workspaceBroker?.handleWorkspaceWriteResponse(msg);
+                break;
+            }
             case 'workspace.reset.response': {
                 workspaceBroker?.handleWorkspaceResetResponse(msg);
                 break;

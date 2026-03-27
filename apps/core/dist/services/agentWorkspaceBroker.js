@@ -61,6 +61,35 @@ export class AgentWorkspaceBroker {
             }
         });
     }
+    writeFile(nodeId, workspaceRoot, relativePath, content, mode) {
+        const requestId = randomUUID();
+        return new Promise((resolve, reject) => {
+            const timer = setTimeout(() => {
+                this.pending.delete(requestId);
+                reject(new Error('Workspace write request timed out.'));
+            }, this.timeoutMs);
+            this.pending.set(requestId, {
+                kind: 'write',
+                nodeId,
+                resolve,
+                reject,
+                timer,
+            });
+            const sent = this.nodeRegistry.send(nodeId, {
+                type: 'workspace.write.request',
+                requestId,
+                workspaceRoot,
+                relativePath,
+                content,
+                mode,
+            });
+            if (!sent) {
+                clearTimeout(timer);
+                this.pending.delete(requestId);
+                reject(new Error('Agent node is offline.'));
+            }
+        });
+    }
     resetWorkspace(nodeId, workspaceRoot) {
         const requestId = randomUUID();
         return new Promise((resolve, reject) => {
@@ -123,6 +152,18 @@ export class AgentWorkspaceBroker {
     handleWorkspaceResetResponse(msg) {
         const pending = this.pending.get(msg.requestId);
         if (!pending || pending.kind !== 'reset')
+            return;
+        this.pending.delete(msg.requestId);
+        clearTimeout(pending.timer);
+        if (msg.error || !msg.ok) {
+            pending.reject(new Error(this.formatErrorMessage(msg.errorCode, msg.error)));
+            return;
+        }
+        pending.resolve();
+    }
+    handleWorkspaceWriteResponse(msg) {
+        const pending = this.pending.get(msg.requestId);
+        if (!pending || pending.kind !== 'write')
             return;
         this.pending.delete(msg.requestId);
         clearTimeout(pending.timer);

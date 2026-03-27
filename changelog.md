@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-03-27 (channel memory reset markers)
+
+- Channel memory 开始按频道独立组织到 `notes/channels/<channel>.md`，同时保留对旧 `notes/channels.md` 的兼容追加。
+- `clear channel chat` 现在不会删除 agent 关于该频道的长期记忆；它会给已加入该频道的 agent 远程 workspace note 追加一条 `History Reset` 标记，明确旧内容是 durable memory，不代表当前 UI 里仍可见的 live transcript。
+- 为此新增了最小远程 workspace 文本写能力：`workspace.write.request/response`，仅用于在 agent 所在 node 的 workspace 内安全写入文本 note。
+- `ensureWorkspaceScaffold()` 现在会预建 `notes/channels/` 目录，system prompt 也同步改成优先使用 `notes/channels/*.md` 管理频道上下文和 reset 标记。
+
 ## 2026-03-26 (channel-bridge test wiring)
 
 - `@agent-collab/channel-bridge` 现在补了独立的 `vitest` 测试入口。

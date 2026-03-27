@@ -5,6 +5,8 @@ import type {
   AgentWorkspaceListResult,
   WorkspaceListResponseMsg,
   WorkspaceReadResponseMsg,
+  WorkspaceWriteMode,
+  WorkspaceWriteResponseMsg,
   WorkspaceResetResponseMsg,
 } from '@agent-collab/protocol';
 import type { NodeRegistry } from './nodeRegistry.js';
@@ -23,6 +25,13 @@ type PendingRequest =
     reject: (error: Error) => void;
     timer: NodeJS.Timeout;
     kind: 'read';
+  }
+  | {
+    nodeId: string;
+    resolve: () => void;
+    reject: (error: Error) => void;
+    timer: NodeJS.Timeout;
+    kind: 'write';
   }
   | {
     nodeId: string;
@@ -112,6 +121,45 @@ export class AgentWorkspaceBroker {
     });
   }
 
+  writeFile(
+    nodeId: string,
+    workspaceRoot: string,
+    relativePath: string,
+    content: string,
+    mode: WorkspaceWriteMode,
+  ): Promise<void> {
+    const requestId = randomUUID();
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(requestId);
+        reject(new Error('Workspace write request timed out.'));
+      }, this.timeoutMs);
+
+      this.pending.set(requestId, {
+        kind: 'write',
+        nodeId,
+        resolve,
+        reject,
+        timer,
+      });
+
+      const sent = this.nodeRegistry.send(nodeId, {
+        type: 'workspace.write.request',
+        requestId,
+        workspaceRoot,
+        relativePath,
+        content,
+        mode,
+      });
+
+      if (!sent) {
+        clearTimeout(timer);
+        this.pending.delete(requestId);
+        reject(new Error('Agent node is offline.'));
+      }
+    });
+  }
+
   resetWorkspace(
     nodeId: string,
     workspaceRoot: string,
@@ -185,6 +233,20 @@ export class AgentWorkspaceBroker {
   handleWorkspaceResetResponse(msg: WorkspaceResetResponseMsg): void {
     const pending = this.pending.get(msg.requestId);
     if (!pending || pending.kind !== 'reset') return;
+    this.pending.delete(msg.requestId);
+    clearTimeout(pending.timer);
+
+    if (msg.error || !msg.ok) {
+      pending.reject(new Error(this.formatErrorMessage(msg.errorCode, msg.error)));
+      return;
+    }
+
+    pending.resolve();
+  }
+
+  handleWorkspaceWriteResponse(msg: WorkspaceWriteResponseMsg): void {
+    const pending = this.pending.get(msg.requestId);
+    if (!pending || pending.kind !== 'write') return;
     this.pending.delete(msg.requestId);
     clearTimeout(pending.timer);
 

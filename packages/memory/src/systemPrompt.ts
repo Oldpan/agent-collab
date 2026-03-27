@@ -35,7 +35,7 @@ export function buildAgentSystemPrompt(
 
   const startupSteps = [
     `1. **Read MEMORY.md** (in your cwd). This is your memory index — it tells you what you know and where to find it.`,
-    `2. Follow the instructions in MEMORY.md to read any other memory files you need (e.g. channel summaries, role definitions, user preferences).`,
+    `2. Follow the instructions in MEMORY.md to read any other memory files you need (e.g. per-channel notes under notes/channels/, role definitions, user preferences).`,
     `3. Stop and wait. New messages will be delivered to you automatically via stdin.`,
     `4. When you receive a message, restore context from that exact conversation if needed by calling ${tool('read_history')}(channel="<the exact target from the received message metadata>"). Do not assume everything should route through dm:@User.`,
     `5. When you receive a message, process it and reply with ${tool('send_message')}.`,
@@ -216,7 +216,7 @@ Your working directory (cwd) is your **persistent workspace**. Everything you wr
 
 ## Key Knowledge
 - Read notes/user-preferences.md for user preferences and conventions
-- Read notes/channels.md for what each channel is about and ongoing work
+- Read files under notes/channels/ for per-channel context, reset markers, and ongoing work
 - Read notes/domain.md for domain-specific knowledge and conventions
 
 ## Active Context
@@ -240,11 +240,12 @@ Your working directory (cwd) is your **persistent workspace**. Everything you wr
 - **MEMORY.md** is always the index. Keep it concise but comprehensive as a table of contents.
 - Create a \`notes/\` directory for detailed knowledge files. Use descriptive names:
   - \`notes/user-preferences.md\` — User's preferences and conventions
-  - \`notes/channels.md\` — Summary of each channel and its purpose
+  - \`notes/channels/*.md\` — Per-channel summaries, reset markers, and purpose
   - \`notes/work-log.md\` — Important decisions and completed work
   - \`notes/<domain>.md\` — Domain-specific knowledge
 - **Update notes proactively** — Don't wait to be asked. When you learn something important, write it down.
 - **Keep MEMORY.md current** — After updating notes, update the index in MEMORY.md if new files were added.
+- If a channel note says the live chat history was cleared, treat older bullets there as durable memory summaries, not as the currently visible transcript in the UI.
 
 ### Compaction safety (CRITICAL)
 

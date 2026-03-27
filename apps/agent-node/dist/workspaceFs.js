@@ -76,6 +76,26 @@ export function resetWorkspaceDirectory(workspaceRoot) {
     }
     ensureWorkspaceScaffold(resolvedRoot);
 }
+export function writeWorkspaceFile(workspaceRoot, relativePath, content, mode) {
+    ensureWorkspaceScaffold(workspaceRoot);
+    const resolved = resolveRelativeWorkspacePath(workspaceRoot, relativePath);
+    fs.mkdirSync(path.dirname(resolved), { recursive: true });
+    const existing = fs.statSync(resolved, { throwIfNoEntry: false });
+    if (existing?.isDirectory()) {
+        throw new WorkspaceFsError('not_file', 'Path is a directory.');
+    }
+    if (mode === 'append') {
+        fs.appendFileSync(resolved, content, 'utf8');
+    }
+    else {
+        fs.writeFileSync(resolved, content, 'utf8');
+    }
+    const stat = fs.statSync(resolved, { throwIfNoEntry: false });
+    return {
+        relativePath: normalizeRelativePath(relativePath),
+        modifiedAt: stat?.mtimeMs ? Math.floor(stat.mtimeMs) : null,
+    };
+}
 function resolveRelativeWorkspacePath(workspaceRoot, relativePath) {
     const normalized = normalizeRelativePath(relativePath);
     const absoluteRequested = normalized
@@ -91,6 +111,7 @@ function resolveRelativeWorkspacePath(workspaceRoot, relativePath) {
 function ensureWorkspaceScaffold(workspaceRoot) {
     fs.mkdirSync(workspaceRoot, { recursive: true });
     fs.mkdirSync(path.join(workspaceRoot, 'notes'), { recursive: true });
+    fs.mkdirSync(path.join(workspaceRoot, 'notes', 'channels'), { recursive: true });
     const memoryPath = path.join(workspaceRoot, 'MEMORY.md');
     if (!fs.existsSync(memoryPath)) {
         fs.writeFileSync(memoryPath, [

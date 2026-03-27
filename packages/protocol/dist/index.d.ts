@@ -157,6 +157,7 @@ export type NodePermissionRequestMsg = {
     toolKind?: string | null;
 };
 export type WorkspaceErrorCode = 'not_found' | 'not_directory' | 'not_file' | 'path_outside_workspace' | 'binary_file' | 'file_too_large' | 'io_error';
+export type WorkspaceWriteMode = 'overwrite' | 'append';
 export type AgentWorkspaceEntry = {
     name: string;
     path: string;
@@ -183,6 +184,15 @@ export type WorkspaceReadResponseMsg = {
     error?: string;
     errorCode?: WorkspaceErrorCode;
 };
+export type WorkspaceWriteResponseMsg = {
+    type: 'workspace.write.response';
+    requestId: string;
+    relativePath: string;
+    ok?: boolean;
+    modifiedAt?: number | null;
+    error?: string;
+    errorCode?: WorkspaceErrorCode;
+};
 export type WorkspaceResetRequestMsg = {
     type: 'workspace.reset.request';
     requestId: string;
@@ -196,7 +206,7 @@ export type WorkspaceResetResponseMsg = {
     error?: string;
     errorCode?: WorkspaceErrorCode;
 };
-export type NodeToCore = NodeRegisterMsg | NodeHeartbeatMsg | RunEventMsg | RunEndMsg | NodePermissionRequestMsg | WorkspaceListResponseMsg | WorkspaceReadResponseMsg | WorkspaceResetResponseMsg;
+export type NodeToCore = NodeRegisterMsg | NodeHeartbeatMsg | RunEventMsg | RunEndMsg | NodePermissionRequestMsg | WorkspaceListResponseMsg | WorkspaceReadResponseMsg | WorkspaceWriteResponseMsg | WorkspaceResetResponseMsg;
 export type NodeAckMsg = {
     type: 'node.ack';
     nodeId: string;
@@ -242,11 +252,19 @@ export type WorkspaceReadRequestMsg = {
     workspaceRoot: string;
     relativePath: string;
 };
+export type WorkspaceWriteRequestMsg = {
+    type: 'workspace.write.request';
+    requestId: string;
+    workspaceRoot: string;
+    relativePath: string;
+    content: string;
+    mode: WorkspaceWriteMode;
+};
 export type HostCloseMsg = {
     type: 'host.close';
     hostKey: string;
 };
-export type CoreToNode = NodeAckMsg | RunDispatchMsg | RunCancelMsg | NodePermissionResponseMsg | WorkspaceListRequestMsg | WorkspaceReadRequestMsg | WorkspaceResetRequestMsg | HostCloseMsg;
+export type CoreToNode = NodeAckMsg | RunDispatchMsg | RunCancelMsg | NodePermissionResponseMsg | WorkspaceListRequestMsg | WorkspaceReadRequestMsg | WorkspaceWriteRequestMsg | WorkspaceResetRequestMsg | HostCloseMsg;
 export type ConversationInfo = {
     id: string;
     channelId: string;

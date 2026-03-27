@@ -6,7 +6,13 @@ import type { CoreToNode } from '@agent-collab/protocol';
 import { loadConfig } from './config.js';
 import { CoreConnection } from './connection.js';
 import { Executor } from './executor.js';
-import { listWorkspaceDirectory, readWorkspaceFile, resetWorkspaceDirectory, WorkspaceFsError } from './workspaceFs.js';
+import {
+  listWorkspaceDirectory,
+  readWorkspaceFile,
+  resetWorkspaceDirectory,
+  writeWorkspaceFile,
+  WorkspaceFsError,
+} from './workspaceFs.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -79,6 +85,21 @@ async function main(): Promise<void> {
           });
         } catch (error) {
           connection.send(workspacePathErrorResponse('workspace.read.response', msg.requestId, msg.relativePath, error));
+        }
+        break;
+
+      case 'workspace.write.request':
+        try {
+          const result = writeWorkspaceFile(msg.workspaceRoot, msg.relativePath, msg.content, msg.mode);
+          connection.send({
+            type: 'workspace.write.response',
+            requestId: msg.requestId,
+            relativePath: result.relativePath,
+            ok: true,
+            modifiedAt: result.modifiedAt,
+          });
+        } catch (error) {
+          connection.send(workspaceWriteErrorResponse(msg.requestId, msg.relativePath, error));
         }
         break;
 
@@ -180,6 +201,30 @@ function workspaceResetErrorResponse(
     type: 'workspace.reset.response' as const,
     requestId,
     workspaceRoot,
+    error: String((error as Error)?.message ?? error),
+    errorCode: 'io_error' as const,
+  };
+}
+
+function workspaceWriteErrorResponse(
+  requestId: string,
+  relativePath: string,
+  error: unknown,
+) {
+  if (error instanceof WorkspaceFsError) {
+    return {
+      type: 'workspace.write.response' as const,
+      requestId,
+      relativePath,
+      error: error.message,
+      errorCode: error.code,
+    };
+  }
+
+  return {
+    type: 'workspace.write.response' as const,
+    requestId,
+    relativePath,
     error: String((error as Error)?.message ?? error),
     errorCode: 'io_error' as const,
   };
