@@ -65,6 +65,25 @@
 
 ---
 
+## P3 — 性能 / 冗余清理
+
+- [ ] **dispatcher 每轮无条件读 MEMORY.md（resume 时不用）**
+  - 现状：`buildAgentContextText()` 在每次 `dispatchPrompt()` 中无条件执行，读取 workspace 的 `MEMORY.md`；但 `bindingRuntime` 只在 `isFreshSession=true` 时注入 contextText，resume 且 ACP 进程存活时该文件读取结果被丢弃
+  - 目标：仅在确实需要时（cold_start 或节点重启恢复）构建 contextText
+  - 路径：`apps/core/src/execution/executionDispatcher.ts` `dispatchPrompt()`；需要 core 感知节点 ACP session 状态，或节点在响应中回传是否用了 contextText
+
+- [ ] **dispatcher 每轮无条件 build systemPromptText（只在新建 session 时使用）**
+  - 现状：`buildAgentSessionSystemPromptText()` 在每次 dispatch 时调用，但只在 ACP 新建 session（`isFreshSession`）时通过 `_meta.systemPrompt` 传入，resume 路径上为无效计算
+  - 目标：同上，与 contextText 一起按需构建
+  - 路径：同上
+
+- [ ] **dispatcher 在 resume 时无条件跑 conversation replay SQL**
+  - 现状：`dispatchMode !== 'cold_start'` 时总是执行 `buildConversationReplayText()`（多条 SQL + 字符串拼接），但 replay 只在 `isFreshSession=true`（ACP 进程重启）时被实际注入
+  - 目标：仅当节点的 ACP session 确实丢失时才构建 replay
+  - 路径：同上；或在 `RunDispatchMsg` 协议中增加 `contextNeeded` 标志，让节点先告知 core 是否需要 context
+
+---
+
 ## P3 — 体验优化
 
 - [ ] **Activity tab 重复工具调用聚合**
