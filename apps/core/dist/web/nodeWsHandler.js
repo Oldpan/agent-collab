@@ -7,9 +7,9 @@ function appendNodeEvent(db, runId, seq, event) {
 const REPLAY_EVENT_TYPES = new Set(['content.delta', 'tool.call', 'tool.result', 'thinking.delta']);
 function requiresMcpReplyContract(db, conversationId) {
     const row = db
-        .prepare('SELECT agent_id as agentId, thread_kind as threadKind FROM conversations WHERE id = ?')
+        .prepare('SELECT agent_id as agentId FROM conversations WHERE id = ?')
         .get(conversationId);
-    return Boolean(row?.agentId) && row?.threadKind === 'direct';
+    return Boolean(row?.agentId);
 }
 function hasRunReplyMessage(db, conversationId, runId) {
     const row = db
@@ -24,14 +24,65 @@ function hasRunReplyMessage(db, conversationId, runId) {
         .get(runId, conversationId);
     return (row?.count ?? 0) > 0;
 }
-function shouldEnforceReplyContract(msg, db, conversationId, runId) {
+function hasRunFinalReplyMessage(db, runId) {
+    const row = db
+        .prepare(`SELECT COUNT(1) as count
+       FROM channel_messages
+       WHERE run_id = ?
+         AND sender_type = 'agent'
+         AND message_kind = 'final'`)
+        .get(runId);
+    return (row?.count ?? 0) > 0;
+}
+function hasSubstantiveOutputAfterLastReply(db, runId) {
+    const lastReply = db
+        .prepare(`SELECT MAX(created_at) as lastCreatedAt
+       FROM channel_messages
+       WHERE run_id = ?
+         AND sender_type = 'agent'`)
+        .get(runId);
+    if (!lastReply?.lastCreatedAt)
+        return false;
+    const rows = db
+        .prepare(`SELECT payload_json as payloadJson
+       FROM events
+       WHERE run_id = ?
+         AND method = 'node/event'
+         AND created_at > ?
+       ORDER BY seq ASC`)
+        .all(runId, lastReply.lastCreatedAt);
+    let textAfterReply = '';
+    for (const row of rows) {
+        try {
+            const payload = JSON.parse(row.payloadJson);
+            if (payload.type === 'content.delta' && typeof payload.text === 'string') {
+                textAfterReply += payload.text;
+            }
+        }
+        catch {
+            // Ignore malformed historic payloads
+        }
+    }
+    const normalized = textAfterReply.replace(/\s+/g, ' ').trim();
+    return normalized.length >= 32;
+}
+function getReplyContractError(msg, db, conversationId, runId) {
     if (msg.error)
-        return false;
+        return null;
     if (msg.stopReason?.includes('cancel'))
-        return false;
+        return null;
     if (!requiresMcpReplyContract(db, conversationId))
-        return false;
-    return !hasRunReplyMessage(db, conversationId, runId);
+        return null;
+    if (!hasRunReplyMessage(db, conversationId, runId)) {
+        return 'Agent did not reply via send_message';
+    }
+    if (hasRunFinalReplyMessage(db, runId)) {
+        return null;
+    }
+    if (hasSubstantiveOutputAfterLastReply(db, runId)) {
+        return 'Agent did not send a final reply via send_message';
+    }
+    return null;
 }
 export function handleNodeWebSocket(socket, registry, broadcast, db, manager, workspaceBroker) {
     let nodeId = null;
@@ -125,9 +176,7 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
                     void manager.onConversationSettled(msg.conversationId);
                     break;
                 }
-                const replyContractError = shouldEnforceReplyContract(msg, db, msg.conversationId, msg.runId)
-                    ? 'Agent did not reply via send_message'
-                    : null;
+                const replyContractError = getReplyContractError(msg, db, msg.conversationId, msg.runId);
                 const terminalError = msg.error ?? replyContractError ?? undefined;
                 // Mark run as finished in core DB
                 finishRun(db, terminalError

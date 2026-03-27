@@ -56,19 +56,22 @@ describe('internalAgentRouter', () => {
       body: JSON.stringify({
         target: `dm:@${agent.name}`,
         content: 'hi',
+        kind: 'final',
         conversationId: conv.id,
       }),
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json() as { runId?: string };
+    const body = await res.json() as { runId?: string; kind?: string | null };
     expect(body.runId).toBe('run-router-1');
+    expect(body.kind).toBe('final');
 
     const row = db.prepare(
-      'SELECT run_id as runId, channel_id as channelId FROM channel_messages WHERE sender_id = ? ORDER BY created_at DESC LIMIT 1',
-    ).get(agent.agentId) as { runId: string | null; channelId: string };
+      'SELECT run_id as runId, channel_id as channelId, message_kind as messageKind FROM channel_messages WHERE sender_id = ? ORDER BY created_at DESC LIMIT 1',
+    ).get(agent.agentId) as { runId: string | null; channelId: string; messageKind: string | null };
     expect(row.runId).toBe('run-router-1');
     expect(row.channelId).toBe(`dm:${agent.agentId}`);
+    expect(row.messageKind).toBe('final');
   });
 
   it('未提供 target 时应默认回复当前私聊会话', async () => {

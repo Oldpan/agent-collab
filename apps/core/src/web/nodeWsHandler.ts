@@ -20,9 +20,9 @@ type EventBroadcaster = (conversationId: string, event: ServerEvent) => void;
 
 function requiresMcpReplyContract(db: Db, conversationId: string): boolean {
   const row = db
-    .prepare('SELECT agent_id as agentId, thread_kind as threadKind FROM conversations WHERE id = ?')
-    .get(conversationId) as { agentId: string | null; threadKind: string } | undefined;
-  return Boolean(row?.agentId) && row?.threadKind === 'direct';
+    .prepare('SELECT agent_id as agentId FROM conversations WHERE id = ?')
+    .get(conversationId) as { agentId: string | null } | undefined;
+  return Boolean(row?.agentId);
 }
 
 function hasRunReplyMessage(db: Db, conversationId: string, runId: string): boolean {
@@ -41,11 +41,76 @@ function hasRunReplyMessage(db: Db, conversationId: string, runId: string): bool
   return (row?.count ?? 0) > 0;
 }
 
-function shouldEnforceReplyContract(msg: { stopReason?: string; error?: string }, db: Db, conversationId: string, runId: string): boolean {
-  if (msg.error) return false;
-  if (msg.stopReason?.includes('cancel')) return false;
-  if (!requiresMcpReplyContract(db, conversationId)) return false;
-  return !hasRunReplyMessage(db, conversationId, runId);
+function hasRunFinalReplyMessage(db: Db, runId: string): boolean {
+  const row = db
+    .prepare(
+      `SELECT COUNT(1) as count
+       FROM channel_messages
+       WHERE run_id = ?
+         AND sender_type = 'agent'
+         AND message_kind = 'final'`,
+    )
+    .get(runId) as { count: number } | undefined;
+  return (row?.count ?? 0) > 0;
+}
+
+function hasSubstantiveOutputAfterLastReply(db: Db, runId: string): boolean {
+  const lastReply = db
+    .prepare(
+      `SELECT MAX(created_at) as lastCreatedAt
+       FROM channel_messages
+       WHERE run_id = ?
+         AND sender_type = 'agent'`,
+    )
+    .get(runId) as { lastCreatedAt: number | null } | undefined;
+  if (!lastReply?.lastCreatedAt) return false;
+
+  const rows = db
+    .prepare(
+      `SELECT payload_json as payloadJson
+       FROM events
+       WHERE run_id = ?
+         AND method = 'node/event'
+         AND created_at > ?
+       ORDER BY seq ASC`,
+    )
+    .all(runId, lastReply.lastCreatedAt) as Array<{ payloadJson: string }>;
+
+  let textAfterReply = '';
+  for (const row of rows) {
+    try {
+      const payload = JSON.parse(row.payloadJson) as { type?: string; text?: string };
+      if (payload.type === 'content.delta' && typeof payload.text === 'string') {
+        textAfterReply += payload.text;
+      }
+    } catch {
+      // Ignore malformed historic payloads
+    }
+  }
+
+  const normalized = textAfterReply.replace(/\s+/g, ' ').trim();
+  return normalized.length >= 32;
+}
+
+function getReplyContractError(
+  msg: { stopReason?: string; error?: string },
+  db: Db,
+  conversationId: string,
+  runId: string,
+): string | null {
+  if (msg.error) return null;
+  if (msg.stopReason?.includes('cancel')) return null;
+  if (!requiresMcpReplyContract(db, conversationId)) return null;
+  if (!hasRunReplyMessage(db, conversationId, runId)) {
+    return 'Agent did not reply via send_message';
+  }
+  if (hasRunFinalReplyMessage(db, runId)) {
+    return null;
+  }
+  if (hasSubstantiveOutputAfterLastReply(db, runId)) {
+    return 'Agent did not send a final reply via send_message';
+  }
+  return null;
 }
 
 export function handleNodeWebSocket(
@@ -159,9 +224,7 @@ export function handleNodeWebSocket(
           void manager.onConversationSettled(msg.conversationId);
           break;
         }
-        const replyContractError = shouldEnforceReplyContract(msg, db, msg.conversationId, msg.runId)
-          ? 'Agent did not reply via send_message'
-          : null;
+        const replyContractError = getReplyContractError(msg, db, msg.conversationId, msg.runId);
         const terminalError = msg.error ?? replyContractError ?? undefined;
         // Mark run as finished in core DB
         finishRun(db, terminalError

@@ -103,9 +103,14 @@ When a direct message, channel mention, or thread reply wakes you up, the trigge
 - **Reply to a DM**: \`${tool('send_message')}(target="dm:@peer-name", content="...")\`
 - **Reply in a thread**: \`${tool('send_message')}(target="#channel:shortid", content="...")\` or \`${tool('send_message')}(target="dm:@peer:shortid", content="...")\`
 - **Start a NEW DM**: \`${tool('send_message')}(target="dm:@person-name", content="...")\`
+- **Progress update**: \`${tool('send_message')}(content="...", kind="progress")\`
+- **Final answer**: \`${tool('send_message')}(content="...", kind="final")\`
 
 **IMPORTANT**:
 - To reply in the **current conversation**, prefer \`${tool('send_message')}(content="...")\` with no target. The platform will route it correctly.
+- Use \`kind="progress"\` for interim updates while you are still working.
+- Use \`kind="final"\` for the final user-visible answer that completes the current run.
+- If you send a progress update first, you must send a later \`kind="final"\` message before the run ends.
 - Only set an explicit \`target\` when you intentionally want to send somewhere else, or when you are already inside a thread and need to keep replying in that thread.
 - Do **not** convert a main-channel message like \`[target=#general msg=abcd1234 ...]\` into a thread reply just because it has a \`msg=\` field.
 - The system metadata you receive (\`target\`, \`msg\`, \`time\`, \`type\`) is for routing and context only. Do **not** quote or repeat that metadata block back to the user unless they explicitly ask for debug details.

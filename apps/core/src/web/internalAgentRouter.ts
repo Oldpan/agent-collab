@@ -59,7 +59,13 @@ export function registerInternalAgentRoutes(
    */
   app.post<{
     Params: { agentId: string };
-    Body: { target?: string; content: string; attachmentIds?: string[]; conversationId?: string };
+    Body: {
+      target?: string;
+      content: string;
+      kind?: 'progress' | 'final';
+      attachmentIds?: string[];
+      conversationId?: string;
+    };
   }>('/api/internal/agent/:agentId/send', async (req, reply) => {
     const { agentId } = req.params;
     const agent = conversationManager.getAgent(agentId);
@@ -68,10 +74,14 @@ export function registerInternalAgentRoutes(
       return { error: 'Agent not found' };
     }
 
-    const { target, content, conversationId } = req.body ?? {};
+    const { target, content, kind, conversationId } = req.body ?? {};
     if (!content) {
       reply.code(400);
       return { error: 'content is required' };
+    }
+    if (kind && kind !== 'progress' && kind !== 'final') {
+      reply.code(400);
+      return { error: 'kind must be "progress" or "final"' };
     }
 
     if (conversationId) {
@@ -107,9 +117,9 @@ export function registerInternalAgentRoutes(
     const threadRootId = resolveThreadRootId(resolvedTarget);
 
     db.prepare(
-      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
-    ).run(messageId, channelId, agentId, agent.name, resolvedTarget, content, seq, now, runId, threadRootId);
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(messageId, channelId, agentId, agent.name, resolvedTarget, content, seq, now, runId, threadRootId, kind ?? null);
 
     const channelMessageEvent: ServerEvent = {
       type: 'channel.message',
@@ -131,7 +141,7 @@ export function registerInternalAgentRoutes(
       broadcastToChannel(channelId, channelMessageEvent);
     }
 
-    return { messageId, seq, runId, target: resolvedTarget };
+    return { messageId, seq, runId, target: resolvedTarget, kind: kind ?? null };
   });
 
   /**

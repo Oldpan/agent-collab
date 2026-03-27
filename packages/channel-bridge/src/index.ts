@@ -79,13 +79,19 @@ server.tool(
       'Optional override for where to send. If omitted, the message replies to the current conversation. Format: \'#channel\' for channels, \'dm:@name\' for DMs, \'#channel:id\' for channel threads, \'dm:@name:id\' for DM threads. Examples: \'#general\', \'dm:@alice\', \'#general:abcd1234\'.',
     ),
     content: z.string().describe('The message content'),
+    kind: z
+      .enum(['progress', 'final'])
+      .optional()
+      .describe(
+        'Optional message kind. Use "progress" for interim updates and "final" for the final user-visible answer that completes this run. If omitted, the platform treats the message as a legacy untyped reply.',
+      ),
     attachment_ids: z.array(z.string()).optional().describe('Optional attachment IDs to include'),
   },
-  async ({ target, content }) => {
+  async ({ target, content, kind }) => {
     try {
       const { ok, data } = await apiFetch('/send', {
         method: 'POST',
-        body: { target, content, conversationId },
+        body: { target, content, kind, conversationId },
       });
       if (!ok) return toText(`Error: ${errText(data, 'send failed')}`);
       const d = data as Record<string, unknown>;

@@ -181,3 +181,12 @@
 - 新增 `POST /api/channels/:id/clear-chat`，会删除该 channel 的主流与 thread 消息、对应 checkpoints，并重置该 channel 下 branch conversations 的 runs / events / queued prompts / session。
 - 该清理动作会保留 channel 本身、成员关系、description 与 tasks，不会影响 agent 私聊主 thread 或 workspace。
 - 新增 `channel.history.reset` 事件；前端收到后会立即清空频道消息并关闭已打开的 thread 面板，无需手动刷新。
+
+## 2026-03-27 (final reply contract)
+
+- `send_message` 现在支持可选 `kind="progress" | "final"`，用于区分中间进度和最终用户可见回复。
+- `channel_messages` 新增 `message_kind` 字段，平台会把 `send_message(kind=...)` 的语义持久化下来。
+- run 结束时，平台不再只检查“是否发送过某条消息”，还会检查是否发送过最终回复：
+  - 没有任何 `send_message` 仍然报 `Agent did not reply via send_message`
+  - 只有进度消息、且之后还有明显正文输出但没有最终回复时，报 `Agent did not send a final reply via send_message`
+- 兼容旧行为：如果 run 里只有一条未标注 kind 的正常回复，且后面没有明显正文尾流，仍然视为隐式最终回复，避免把现有单句回答全部打坏。

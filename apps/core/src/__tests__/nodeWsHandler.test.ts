@@ -207,6 +207,69 @@ describe('nodeWsHandler', () => {
     expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
   });
 
+  it('仅发送 progress 消息且后续仍有大量输出时应要求 final reply', () => {
+    const agent = manager.createAgent({
+      name: 'Charlie',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/charlie-contract',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const socket = new FakeSocket();
+    const events: any[] = [];
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(socket as any, registry as any, (_conversationId, event) => {
+      events.push(event);
+    }, db, manager);
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-3',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'check torch',
+    });
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
+    ).run('msg-progress', `dm:${agent.agentId}`, agent.agentId, agent.name, `dm:@${agent.name}`, 'I am checking now.', 1, 1000, 'run-3', 'progress');
+
+    db.prepare(
+      `INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, ?, 'node/event', ?, ?)`,
+    ).run(
+      'run-3',
+      1,
+      JSON.stringify({
+        type: 'content.delta',
+        text: 'The environment does not have torch installed. You can install it with pip install torch in the develop environment.',
+      }),
+      2000,
+    );
+
+    socket.emit('message', JSON.stringify({
+      type: 'run.end',
+      runId: 'run-3',
+      conversationId: conv.id,
+      stopReason: 'end_turn',
+    }));
+
+    const runRow = db.prepare('SELECT error FROM runs WHERE run_id = ?')
+      .get('run-3') as { error: string | null };
+    expect(runRow.error).toBe('Agent did not send a final reply via send_message');
+    expect(events).toContainEqual({
+      type: 'error',
+      message: 'Agent did not send a final reply via send_message',
+    });
+  });
+
   it('run.event 中的 recovering 状态应更新会话状态', () => {
     const conv = manager.createConversation({ title: 'Recovering Test', nodeId: 'node-1' });
     const socket = new FakeSocket();

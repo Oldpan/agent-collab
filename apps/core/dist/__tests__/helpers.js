@@ -37,6 +37,9 @@ export function createTestDb() {
         db.exec(`ALTER TABLE channel_messages ADD COLUMN run_id TEXT;`);
         db.exec(`CREATE INDEX IF NOT EXISTS idx_channel_messages_run ON channel_messages(run_id, created_at);`);
     }
+    if (!channelMessageCols.some((col) => col.name === 'message_kind')) {
+        db.exec(`ALTER TABLE channel_messages ADD COLUMN message_kind TEXT;`);
+    }
     return db;
 }
 /** 默认测试配置 */

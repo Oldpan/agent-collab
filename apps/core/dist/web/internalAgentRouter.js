@@ -20,10 +20,14 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
             reply.code(404);
             return { error: 'Agent not found' };
         }
-        const { target, content, conversationId } = req.body ?? {};
+        const { target, content, kind, conversationId } = req.body ?? {};
         if (!content) {
             reply.code(400);
             return { error: 'content is required' };
+        }
+        if (kind && kind !== 'progress' && kind !== 'final') {
+            reply.code(400);
+            return { error: 'kind must be "progress" or "final"' };
         }
         if (conversationId) {
             const conversation = conversationManager.getConversation(conversationId);
@@ -53,8 +57,8 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
         const seq = nextSeq(db, channelId);
         const runId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
         const threadRootId = resolveThreadRootId(resolvedTarget);
-        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`).run(messageId, channelId, agentId, agent.name, resolvedTarget, content, seq, now, runId, threadRootId);
+        db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)`).run(messageId, channelId, agentId, agent.name, resolvedTarget, content, seq, now, runId, threadRootId, kind ?? null);
         const channelMessageEvent = {
             type: 'channel.message',
             message: {
@@ -72,7 +76,7 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
         if (!channelId.startsWith('dm:')) {
             broadcastToChannel(channelId, channelMessageEvent);
         }
-        return { messageId, seq, runId, target: resolvedTarget };
+        return { messageId, seq, runId, target: resolvedTarget, kind: kind ?? null };
     });
     /**
      * GET /api/internal/agent/:agentId/receive

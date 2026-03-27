@@ -61,12 +61,16 @@ const server = new McpServer({ name: 'chat', version: '1.0.0' });
 server.tool('send_message', 'Send a message to the current conversation by default. You may optionally override the target to send to a specific channel, DM, or thread. Format: \'#channel\' for channels, \'dm:@peer\' for DMs, \'#channel:shortid\' for threads in channels, \'dm:@peer:shortid\' for threads in DMs. To start a NEW DM, use \'dm:@person-name\'.', {
     target: z.string().optional().describe('Optional override for where to send. If omitted, the message replies to the current conversation. Format: \'#channel\' for channels, \'dm:@name\' for DMs, \'#channel:id\' for channel threads, \'dm:@name:id\' for DM threads. Examples: \'#general\', \'dm:@alice\', \'#general:abcd1234\'.'),
     content: z.string().describe('The message content'),
+    kind: z
+        .enum(['progress', 'final'])
+        .optional()
+        .describe('Optional message kind. Use "progress" for interim updates and "final" for the final user-visible answer that completes this run. If omitted, the platform treats the message as a legacy untyped reply.'),
     attachment_ids: z.array(z.string()).optional().describe('Optional attachment IDs to include'),
-}, async ({ target, content }) => {
+}, async ({ target, content, kind }) => {
     try {
         const { ok, data } = await apiFetch('/send', {
             method: 'POST',
-            body: { target, content, conversationId },
+            body: { target, content, kind, conversationId },
         });
         if (!ok)
             return toText(`Error: ${errText(data, 'send failed')}`);
