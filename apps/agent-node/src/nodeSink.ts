@@ -69,6 +69,13 @@ export class NodeSink implements OutboundSink {
       }
     }
     if (event.kind === 'plan' || event.kind === 'task') {
+      const createdAt = Date.now();
+      this.emitEvent({
+        type: event.kind === 'plan' ? 'plan.update' : 'task.update',
+        title: event.title,
+        detail: event.detail,
+        createdAt,
+      });
       const text = event.detail
         ? `\n[${event.kind}] ${event.title}\n${event.detail}\n`
         : `\n[${event.kind}] ${event.title}\n`;

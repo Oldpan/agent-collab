@@ -4,7 +4,14 @@ function appendNodeEvent(db, runId, seq, event) {
     db.prepare('INSERT OR IGNORE INTO events(run_id, seq, method, payload_json, created_at) VALUES(?, ?, ?, ?, ?)').run(runId, seq, 'node/event', JSON.stringify(event), Date.now());
 }
 /** Event types worth persisting for history replay */
-const REPLAY_EVENT_TYPES = new Set(['content.delta', 'tool.call', 'tool.result', 'thinking.delta']);
+const REPLAY_EVENT_TYPES = new Set([
+    'content.delta',
+    'tool.call',
+    'tool.result',
+    'thinking.delta',
+    'plan.update',
+    'task.update',
+]);
 function requiresMcpReplyContract(db, conversationId) {
     const row = db
         .prepare('SELECT agent_id as agentId FROM conversations WHERE id = ?')

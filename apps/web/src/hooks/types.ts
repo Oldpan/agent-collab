@@ -13,6 +13,14 @@ export type LiveToolStatus =
   | "failed"
   | "cancelled";
 
+export type LiveRunActivityItem = {
+  id: string;
+  kind: "plan" | "task";
+  title: string;
+  detail?: string;
+  createdAt: number;
+};
+
 /** A single agent run (one ACP turn), containing tool calls and optional thinking */
 export type LiveRun = {
   id: string;
@@ -21,6 +29,7 @@ export type LiveRun = {
   endedAt?: number;
   promptText?: string;
   toolCalls: LiveToolCall[];
+  activityItems: LiveRunActivityItem[];
   thinking?: string;
   outputText?: string;
   isActive: boolean;

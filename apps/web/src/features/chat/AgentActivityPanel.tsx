@@ -15,7 +15,7 @@ import {
 import { Loader } from "@/components/ai-elements/loader";
 import { ChevronRightIcon, ActivityIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
-import type { LiveRun, LiveToolCall } from "@/hooks/types";
+import type { LiveRun, LiveRunActivityItem, LiveToolCall } from "@/hooks/types";
 
 type AgentActivityPanelProps = {
   runs: LiveRun[];
@@ -104,6 +104,10 @@ function getToolDurationLabel(toolCall: LiveToolCall, now: number): string | nul
   const end = toolCall.endedAt ?? (toolCall.completed ? undefined : now);
   if (!end) return null;
   return formatDurationMs(end - toolCall.startedAt);
+}
+
+function getActivityLabel(item: LiveRunActivityItem): string {
+  return item.kind === "plan" ? "Plan" : "Task";
 }
 
 function RunRow({ run }: { run: LiveRun }) {
@@ -218,6 +222,32 @@ function RunRow({ run }: { run: LiveRun }) {
             <div className="flex items-center gap-1.5 py-1 text-xs text-zinc-400">
               <Loader size={10} />
               {formatRunningHint(run)}
+            </div>
+          )}
+
+          {run.activityItems.length > 0 && (
+            <div className="mb-1 space-y-1">
+              {run.activityItems.map((item) => (
+                <div
+                  key={item.id}
+                  className="rounded border border-zinc-200 bg-[#fffdf0] px-2.5 py-2 text-xs text-zinc-600"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="rounded border border-zinc-300 bg-white/70 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                      {getActivityLabel(item)}
+                    </span>
+                    <span className="font-medium text-zinc-700">{item.title}</span>
+                    <span className="text-[10px] text-zinc-400">
+                      {timeFormatter.format(item.createdAt)}
+                    </span>
+                  </div>
+                  {item.detail && (
+                    <div className="mt-1 whitespace-pre-wrap break-words text-[11px] text-zinc-500">
+                      {item.detail}
+                    </div>
+                  )}
+                </div>
+              ))}
             </div>
           )}
 

@@ -41,6 +41,18 @@ export type ThinkingDeltaEvent = {
     type: 'thinking.delta';
     text: string;
 };
+export type PlanUpdateEvent = {
+    type: 'plan.update';
+    title: string;
+    detail?: string;
+    createdAt?: number;
+};
+export type TaskUpdateEvent = {
+    type: 'task.update';
+    title: string;
+    detail?: string;
+    createdAt?: number;
+};
 export type ToolCallEvent = {
     type: 'tool.call';
     toolCallId: string;
@@ -104,7 +116,7 @@ export type SystemNoticeEvent = {
     type: 'system.notice';
     message: string;
 };
-export type ServerEvent = ConversationStatusEvent | TurnBeginEvent | TurnEndEvent | ContentDeltaEvent | ThinkingDeltaEvent | ToolCallEvent | ToolResultEvent | ApprovalRequestEvent | ErrorEvent | HistoryCompleteEvent | HistoryResetEvent | HistoryUserMessageEvent | ChannelMessageEvent | ChannelNoticeEvent | ChannelHistoryResetEvent | SystemNoticeEvent;
+export type ServerEvent = ConversationStatusEvent | TurnBeginEvent | TurnEndEvent | ContentDeltaEvent | ThinkingDeltaEvent | PlanUpdateEvent | TaskUpdateEvent | ToolCallEvent | ToolResultEvent | ApprovalRequestEvent | ErrorEvent | HistoryCompleteEvent | HistoryResetEvent | HistoryUserMessageEvent | ChannelMessageEvent | ChannelNoticeEvent | ChannelHistoryResetEvent | SystemNoticeEvent;
 export type FileRef = {
     uri: string;
     mimeType?: string;

@@ -14,7 +14,14 @@ function appendNodeEvent(db: Db, runId: string, seq: number, event: ServerEvent)
 }
 
 /** Event types worth persisting for history replay */
-const REPLAY_EVENT_TYPES = new Set(['content.delta', 'tool.call', 'tool.result', 'thinking.delta']);
+const REPLAY_EVENT_TYPES = new Set([
+  'content.delta',
+  'tool.call',
+  'tool.result',
+  'thinking.delta',
+  'plan.update',
+  'task.update',
+]);
 
 type EventBroadcaster = (conversationId: string, event: ServerEvent) => void;
 type PendingRepair = { sourceRunId: string; repairRunId?: string };

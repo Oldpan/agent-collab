@@ -88,6 +88,20 @@ export type ThinkingDeltaEvent = {
   text: string;
 };
 
+export type PlanUpdateEvent = {
+  type: 'plan.update';
+  title: string;
+  detail?: string;
+  createdAt?: number;
+};
+
+export type TaskUpdateEvent = {
+  type: 'task.update';
+  title: string;
+  detail?: string;
+  createdAt?: number;
+};
+
 export type ToolCallEvent = {
   type: 'tool.call';
   toolCallId: string;
@@ -169,6 +183,8 @@ export type ServerEvent =
   | TurnEndEvent
   | ContentDeltaEvent
   | ThinkingDeltaEvent
+  | PlanUpdateEvent
+  | TaskUpdateEvent
   | ToolCallEvent
   | ToolResultEvent
   | ApprovalRequestEvent

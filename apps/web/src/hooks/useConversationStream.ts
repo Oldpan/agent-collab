@@ -1,6 +1,13 @@
 import { useState, useCallback, useRef, useLayoutEffect, useEffect } from "react";
 import type { ServerEvent, ClientEvent } from "@agent-collab/protocol";
-import type { LiveMessage, LiveRun, LiveToolCall, PendingApproval, ChatStatus } from "./types";
+import type {
+  LiveMessage,
+  LiveRun,
+  LiveRunActivityItem,
+  LiveToolCall,
+  PendingApproval,
+  ChatStatus,
+} from "./types";
 import * as api from "@/lib/api";
 
 let nextId = 1;
@@ -16,6 +23,11 @@ function isDispatchFailureError(error?: string): boolean {
 
 function canMarkSeen(): boolean {
   return typeof document === "undefined" || document.visibilityState === "visible";
+}
+
+function isLegacyPlanOrTaskDelta(text: string): boolean {
+  const normalized = text.trimStart();
+  return normalized.startsWith("[plan] ") || normalized.startsWith("[task] ");
 }
 
 function getRunTerminalStatus(params: {
@@ -48,6 +60,14 @@ function upsertRun(
     return [...runs, recipe(undefined)].sort((a, b) => a.startedAt - b.startedAt);
   }
   return runs.map((run, index) => (index === existingIndex ? recipe(run) : run));
+}
+
+function appendActivityItem(
+  items: LiveRunActivityItem[],
+  item: LiveRunActivityItem,
+): LiveRunActivityItem[] {
+  if (items.some((existing) => existing.id === item.id)) return items;
+  return [...items, item].sort((a, b) => a.createdAt - b.createdAt);
 }
 
 type UseConversationStreamOptions = {
@@ -196,6 +216,7 @@ export function useConversationStream(
                 endedAt: current?.endedAt,
                 promptText: event.promptText ?? current?.promptText,
                 toolCalls: current?.toolCalls ?? [],
+                activityItems: current?.activityItems ?? [],
                 thinking: current?.thinking,
                 outputText: current?.outputText,
                 isActive: !isReplay,
@@ -226,6 +247,9 @@ export function useConversationStream(
         }
 
         case "content.delta": {
+          if (isLegacyPlanOrTaskDelta(event.text)) {
+            break;
+          }
           textRef.current += event.text;
           // Only update message content in non-channel mode (ACP streaming)
           // In channel mode, content comes via channel.message event
@@ -239,6 +263,31 @@ export function useConversationStream(
               prev.map((r) => (r.id === runId ? { ...r, outputText } : r)),
             );
           }
+          break;
+        }
+
+        case "plan.update":
+        case "task.update": {
+          if (!currentRunIdRef.current) break;
+          const runId = currentRunIdRef.current;
+          const kind = event.type === "plan.update" ? "plan" : "task";
+          const activityItem: LiveRunActivityItem = {
+            id: `${runId}:${kind}:${event.createdAt ?? Date.now()}:${event.title}`,
+            kind,
+            title: event.title,
+            detail: event.detail,
+            createdAt: event.createdAt ?? Date.now(),
+          };
+          setRuns((prev) =>
+            prev.map((r) =>
+              r.id === runId
+                ? {
+                    ...r,
+                    activityItems: appendActivityItem(r.activityItems, activityItem),
+                  }
+                : r,
+            ),
+          );
           break;
         }
 
@@ -406,6 +455,7 @@ export function useConversationStream(
                       stopReason: event.stopReason,
                       error: turnError,
                       toolCalls,
+                      activityItems: r.activityItems,
                       outputText: textRef.current || r.outputText,
                       thinking: thinkingRef.current || r.thinking,
                     }
@@ -544,6 +594,7 @@ export function useConversationStream(
             endedAt: run.endedAt ?? undefined,
             promptText: run.promptText,
             toolCalls: [],
+            activityItems: [],
             thinking: run.thinkingText,
             outputText: run.assistantText,
             isActive: run.endedAt == null,

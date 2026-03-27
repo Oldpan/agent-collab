@@ -96,14 +96,19 @@ describe('WsSink', () => {
             status: 'cancelled',
         });
     });
-    it('sendUi plan 事件应广播 content.delta', async () => {
+    it('sendUi plan 事件应双写广播 plan.update 和 legacy content.delta', async () => {
         const events = [];
         const sink = new WsSink((e) => events.push(e));
         await sink.sendUi({ kind: 'plan', mode: 'verbose', title: 'My Plan', detail: 'step 1' });
-        expect(events).toHaveLength(1);
-        expect(events[0].type).toBe('content.delta');
-        expect(events[0].text).toContain('[plan]');
-        expect(events[0].text).toContain('My Plan');
+        expect(events).toHaveLength(2);
+        expect(events[0]).toMatchObject({
+            type: 'plan.update',
+            title: 'My Plan',
+            detail: 'step 1',
+        });
+        expect(events[1].type).toBe('content.delta');
+        expect(events[1].text).toContain('[plan]');
+        expect(events[1].text).toContain('My Plan');
     });
     it('breakTextStream 和 flush 不应报错', async () => {
         const sink = new WsSink(() => { });
