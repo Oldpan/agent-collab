@@ -157,11 +157,13 @@ describe('nodeWsHandler', () => {
             .get('run-1');
         expect(originalRun.error).toBeNull();
         expect(originalRun.stopReason).toBe('end_turn');
-        const fallbackRow = db.prepare(`SELECT content, message_source as messageSource
+        const fallbackRow = db.prepare(`SELECT channel_id as channelId, target, content, message_source as messageSource
        FROM channel_messages
        WHERE run_id = ?
        ORDER BY created_at DESC, seq DESC
        LIMIT 1`).get('run-1');
+        expect(fallbackRow.channelId).toBe(`dm:${agent.agentId}`);
+        expect(fallbackRow.target).toBe('dm:@oldpan');
         expect(fallbackRow.content).toBe('这是上一轮已经写好的结论，请把它发送给当前会话用户。');
         expect(fallbackRow.messageSource).toBe('delta_fallback');
         expect(events.some((event) => event.type === 'error')).toBe(false);

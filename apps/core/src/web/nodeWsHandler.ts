@@ -235,7 +235,7 @@ function getFallbackMessageContext(
   return {
     agentId: row.agentId,
     agentName: row.agentName,
-    channelId: row.channelId,
+    channelId: row.threadKind === 'direct' ? `dm:${row.agentId}` : row.channelId,
     target,
     threadRootId: row.threadRootId ?? null,
   };

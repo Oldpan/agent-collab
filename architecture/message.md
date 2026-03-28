@@ -179,3 +179,46 @@
   第3轮 (resume, ACP session 还活着)：                                                                                                         
     content blocks: [prompt3 only]                                                                                                             
     模型 context 里已有：system prompt + MEMORY.md + prompt1 + 回复1 + prompt2 + 回复2 
+
+
+
+
+
+      核心逻辑（在 nodeWsHandler.ts）                                                                                                      
+  
+  1. 判断是否需要 reply contract (requiresMcpReplyContract, line 29)                                                                   
+  - 只要 conversation 关联了 agent_id，就适用。即所有真实 agent 会话都受约束。         
+                                                                                                                                       
+  2. 检查是否已经回复                                                                                                                  
+  - hasRunReplyMessage (line 36) — 该 run 是否有任何 sender_type='agent' 的消息                                                        
+  - hasRunFinalReplyMessage (line 69) — 是否有 message_kind='final' 的消息（即 agent 主动调用 send_message(kind="final")）             
+                                                                                                                          
+  3. run.end 时的执行流程 (line 472)                                                                                                   
+  run.end 到达                                                                                                                         
+  ├── 正常结束（无 error，非 cancel）→ persistDeltaFallbackMessages()                                                                  
+  │     如果 agent 没有调用 send_message，                                                                                             
+  │     就把 content.delta 流拼成文本，作为 'delta_fallback' 消息强制写入 channel                                                      
+  └── cancel 结束 → 检查是否已有 final reply                                                                                           
+        ├── 有 → 不报错，正常结束                                                                                                      
+        └── 没有 → 报错 "Agent run was cancelled before sending a final reply"                                                         
+                                                                                                                                       
+  为什么需要这个机制                                                                                                                   
+                                                                                                                                       
+  Agent 通过 send_message 工具主动发送回复（这是"推荐路径"）。但 agent 可能：                                                          
+  - 只产出了思考流（content.delta），没有调用 send_message                                                                             
+  - 在某些 channel branch 场景中完成任务但忘记显式回复用户                                                                             
+                                                                                       
+  Reply contract 的作用就是兜底：即使 agent 没有主动调用 send_message，core 也会从 delta                                               
+  流里恢复内容，确保用户在聊天界面看到输出，而不是一片空白。                                                                           
+                                                                                                                                       
+  相关字段                                                                                                                             
+                                                                                       
+  ┌───────────────────────────────────┬──────────────────────────────────────────────────────┐
+  │               字段                │                         含义                         │
+  ├───────────────────────────────────┼──────────────────────────────────────────────────────┤                                         
+  │ message_kind = 'final'            │ agent 主动 send_message(kind="final") 发出的正式回复 │
+  ├───────────────────────────────────┼──────────────────────────────────────────────────────┤                                         
+  │ message_kind = 'progress'         │ agent 主动发出的进度消息                             │                                         
+  ├───────────────────────────────────┼──────────────────────────────────────────────────────┤
+  │ message_source = 'delta_fallback' │ core 从 delta 流兜底合成的消息                       │                                         
+  └───────────────────────────────────┴──────────────────────────────────────────────────────┘   
