@@ -316,7 +316,7 @@ server.tool(
     try {
       const { ok, data } = await apiFetch('/tasks/claim', {
         method: 'POST',
-        body: { channel, task_numbers },
+        body: { channel, task_numbers, conversationId },
       });
       if (!ok) return toText(`Error: ${errText(data, 'claim tasks failed')}`);
 
@@ -374,7 +374,7 @@ server.tool(
     try {
       const { ok, data } = await apiFetch('/tasks/update-status', {
         method: 'POST',
-        body: { channel, task_number, status },
+        body: { channel, task_number, status, conversationId },
       });
       if (!ok) return toText(`Error: ${errText(data, 'update status failed')}`);
       return toText(`#t${task_number} moved to ${status}.`);

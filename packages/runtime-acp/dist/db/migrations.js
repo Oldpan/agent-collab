@@ -1,4 +1,4 @@
-const LATEST_VERSION = 31;
+const LATEST_VERSION = 32;
 export function migrate(db) {
     db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -531,5 +531,24 @@ export function migrate(db) {
         ON target_participants(channel_id, thread_root_id, last_active_at DESC);
     `);
         db.exec(`UPDATE schema_version SET version = 31;`);
+    }
+    if (current < 32) {
+        const taskCols = db.prepare("PRAGMA table_info('tasks')").all();
+        if (!taskCols.some((c) => c.name === 'description')) {
+            db.exec(`ALTER TABLE tasks ADD COLUMN description TEXT;`);
+        }
+        db.exec(`
+      CREATE TABLE IF NOT EXISTS thread_task_bindings (
+        channel_id     TEXT NOT NULL,
+        thread_root_id TEXT NOT NULL,
+        task_id        TEXT NOT NULL UNIQUE,
+        bound_at       INTEGER NOT NULL,
+        PRIMARY KEY (channel_id, thread_root_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_thread_task_bindings_task
+        ON thread_task_bindings(task_id);
+    `);
+        db.exec(`UPDATE schema_version SET version = 32;`);
     }
 }

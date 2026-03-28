@@ -8,7 +8,8 @@ import {
   getAgentMessageCheckpoint,
   setAgentMessageCheckpoint,
 } from './messageCheckpoints.js';
-import { upsertTargetParticipant } from './targetParticipants.js';
+import { setTargetOwner, upsertTargetParticipant } from './targetParticipants.js';
+import { bindTaskToThread, getThreadBindingForTask } from './threadTaskBindings.js';
 
 type MessageRow = {
   messageId: string;
@@ -510,7 +511,7 @@ export function registerInternalAgentRoutes(
    */
   app.post<{
     Params: { agentId: string };
-    Body: { channel: string; task_numbers: number[] };
+    Body: { channel: string; task_numbers: number[]; conversationId?: string };
   }>('/api/internal/agent/:agentId/tasks/claim', async (req, reply) => {
     const { agentId } = req.params;
     const agent = conversationManager.getAgent(agentId);
@@ -519,7 +520,7 @@ export function registerInternalAgentRoutes(
       return { error: 'Agent not found' };
     }
 
-    const { channel, task_numbers } = req.body ?? {};
+    const { channel, task_numbers, conversationId } = req.body ?? {};
     if (!channel || !Array.isArray(task_numbers)) {
       reply.code(400);
       return { error: 'channel and task_numbers array are required' };
@@ -533,6 +534,7 @@ export function registerInternalAgentRoutes(
 
     const now = Date.now();
     const results: Array<{ taskNumber: number; success: boolean; reason?: string }> = [];
+    const threadBinding = resolveThreadBindingContext(db, conversationId, channelId);
 
     for (const taskNumber of task_numbers) {
       const row = db
@@ -559,11 +561,33 @@ export function registerInternalAgentRoutes(
         continue;
       }
 
+      if (threadBinding.threadRootId) {
+        const bindResult = bindTaskToThread(db, {
+          channelId,
+          threadRootId: threadBinding.threadRootId,
+          taskId: row.taskId,
+          boundAt: now,
+        });
+        if (!bindResult.ok) {
+          results.push({ taskNumber, success: false, reason: bindResult.reason });
+          continue;
+        }
+      }
+
       const newStatus = row.status === 'todo' ? 'in_progress' : row.status;
       db.prepare(
         `UPDATE tasks SET claimed_by_agent_id = ?, claimed_by_name = ?, status = ?, updated_at = ?
          WHERE task_id = ?`,
       ).run(agentId, agent.name, newStatus, now, row.taskId);
+
+      if (threadBinding.threadRootId) {
+        setTargetOwner(db, {
+          channelId,
+          threadRootId: threadBinding.threadRootId,
+          agentId,
+          lastActiveAt: now,
+        });
+      }
 
       results.push({ taskNumber, success: true });
     }
@@ -618,6 +642,16 @@ export function registerInternalAgentRoutes(
       `UPDATE tasks SET claimed_by_agent_id = NULL, claimed_by_name = NULL, updated_at = ?
        WHERE task_id = ?`,
     ).run(Date.now(), row.taskId);
+
+    const binding = getThreadBindingForTask(db, row.taskId);
+    if (binding) {
+      setTargetOwner(db, {
+        channelId: binding.channelId,
+        threadRootId: binding.threadRootId,
+        agentId: null,
+        lastActiveAt: Date.now(),
+      });
+    }
 
     return { ok: true };
   });
@@ -783,6 +817,28 @@ function normalizeTargetForConversation(db: Db, conversationId: string, target: 
   }
 
   return target;
+}
+
+function resolveThreadBindingContext(
+  db: Db,
+  conversationId: string | undefined,
+  channelId: string,
+): { threadRootId: string | null } {
+  if (!conversationId) return { threadRootId: null };
+  const row = db.prepare(
+    `SELECT channel_id as channelId, thread_kind as threadKind, thread_root_id as threadRootId
+     FROM conversations
+     WHERE id = ?`,
+  ).get(conversationId) as {
+    channelId: string;
+    threadKind: 'direct' | 'branch';
+    threadRootId: string | null;
+  } | undefined;
+
+  if (!row || row.channelId !== channelId || row.threadKind !== 'branch' || !row.threadRootId) {
+    return { threadRootId: null };
+  }
+  return { threadRootId: row.threadRootId };
 }
 
 /** Extracts the thread shortId from targets like "#general:a1b2c3d4". Returns null for non-thread targets. */

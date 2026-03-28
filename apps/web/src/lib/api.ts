@@ -84,6 +84,17 @@ export type ChannelMessage = {
   replyCount?: number;
 };
 
+export type ChannelTask = TaskInfo & {
+  linkedThreadId?: string;
+  linkedThreadShortId?: string;
+};
+
+export type ThreadCollaborationSummary = {
+  boundTask?: ChannelTask;
+  ownerName?: string;
+  participants?: string[];
+};
+
 export async function createChannel(req: {
   name: string;
   workspacePath?: string;
@@ -146,7 +157,7 @@ export async function clearChannelChat(channelId: string): Promise<{ ok: true; c
 export async function getChannelTasks(
   channelId: string,
   status?: TaskInfo["status"] | "all",
-): Promise<{ tasks: TaskInfo[] }> {
+): Promise<{ tasks: ChannelTask[] }> {
   const params = new URLSearchParams();
   if (status) params.set("status", status);
   const suffix = params.size > 0 ? `?${params.toString()}` : "";
@@ -159,7 +170,7 @@ export async function createChannelTask(
   channelId: string,
   title: string,
   description?: string,
-): Promise<TaskInfo> {
+): Promise<ChannelTask> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -173,7 +184,7 @@ export async function updateTaskStatus(
   channelId: string,
   taskNumber: number,
   status: TaskInfo["status"],
-): Promise<TaskInfo> {
+): Promise<ChannelTask> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks/${taskNumber}/status`, {
     method: "PATCH",
     headers: { "Content-Type": "application/json" },
@@ -236,6 +247,17 @@ export async function getThreadMessages(
     `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/messages?${params}`,
   );
   if (!res.ok) throw new Error(`Failed to get thread messages: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getThreadSummary(
+  channelId: string,
+  shortId: string,
+): Promise<ThreadCollaborationSummary> {
+  const res = await fetch(
+    `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/summary`,
+  );
+  if (!res.ok) throw new Error(`Failed to get thread summary: ${res.statusText}`);
   return res.json();
 }
 

@@ -1,5 +1,5 @@
 import { useState, useCallback, useRef, useLayoutEffect } from "react";
-import type { ChannelMessage } from "@/lib/api";
+import type { ChannelMessage, ThreadCollaborationSummary } from "@/lib/api";
 import * as api from "@/lib/api";
 
 function readUserName(): string {
@@ -20,19 +20,31 @@ export function useThreadStream(
   threadRootId: string | null,
 ): {
   messages: ChannelMessage[];
+  summary: ThreadCollaborationSummary | null;
   sendMessage: (content: string) => Promise<void>;
   loadMore: () => Promise<void>;
   hasMore: boolean;
 } {
   const [messages, setMessages] = useState<ChannelMessage[]>([]);
+  const [summary, setSummary] = useState<ThreadCollaborationSummary | null>(null);
   const [hasMore, setHasMore] = useState(true);
   const wsRef = useRef<WebSocket | null>(null);
 
   useLayoutEffect(() => {
     setMessages([]);
+    setSummary(null);
     setHasMore(true);
     if (!channelId || !threadRootId) return;
     let cancelled = false;
+
+    const loadSummary = () => {
+      void api
+        .getThreadSummary(channelId, threadRootId)
+        .then((data) => {
+          if (!cancelled) setSummary(data);
+        })
+        .catch(() => {});
+    };
 
     api
       .getThreadMessages(channelId, threadRootId, 100)
@@ -43,6 +55,7 @@ export function useThreadStream(
         }
       })
       .catch(() => {});
+    loadSummary();
 
     // Reuse the channel-level WS stream; filter by threadRootId
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -58,6 +71,7 @@ export function useThreadStream(
         if (event.type === "channel.message" && event.message?.threadRootId === threadRootId) {
           const msg = event.message;
           setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+          loadSummary();
         }
       } catch {
         // ignore
@@ -93,6 +107,7 @@ export function useThreadStream(
       if (!channelId || !threadRootId) return;
       const senderName = readUserName();
       const result = await api.sendChannelMessage(channelId, content, senderName, threadRootId);
+      void api.getThreadSummary(channelId, threadRootId).then(setSummary).catch(() => {});
       setMessages((prev) => {
         if (prev.some((m) => m.id === result.messageId)) return prev;
         return [
@@ -111,5 +126,5 @@ export function useThreadStream(
     [channelId, threadRootId],
   );
 
-  return { messages, sendMessage, loadMore, hasMore };
+  return { messages, summary, sendMessage, loadMore, hasMore };
 }

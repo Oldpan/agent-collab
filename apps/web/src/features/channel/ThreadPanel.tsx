@@ -3,7 +3,7 @@ import { cn } from "@/lib/utils";
 import { XIcon, SendIcon, MessageSquareIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentInfo } from "@agent-collab/protocol";
-import type { ChannelMessage } from "@/lib/api";
+import type { ChannelMessage, ThreadCollaborationSummary } from "@/lib/api";
 import { useThreadStream } from "@/hooks/useThreadStream";
 import { Streamdown } from "streamdown";
 import {
@@ -72,6 +72,62 @@ function ThreadMessage({ message }: { message: ChannelMessage }) {
               {escapeHtmlOutsideCodeBlocks(message.content)}
             </Streamdown>
           )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function ThreadSummaryCard({
+  summary,
+}: {
+  summary?: ThreadCollaborationSummary | null;
+}) {
+  const participants = summary?.participants ?? [];
+  const hasBoundTask = Boolean(summary?.boundTask);
+
+  return (
+    <div className="border-b-2 border-zinc-300 bg-[#fff7cc] px-4 py-3">
+      <div className="grid gap-2 md:grid-cols-3">
+        <div className="rounded-md border-2 border-zinc-900 bg-[#fffdf4] px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Bound task</div>
+          <div className="mt-1 text-sm font-medium text-zinc-900">
+            {hasBoundTask ? `#${summary?.boundTask?.taskNumber} ${summary?.boundTask?.title}` : "Not linked yet"}
+          </div>
+          <div className="mt-1 text-[11px] text-zinc-500">
+            {summary?.boundTask?.linkedThreadShortId
+              ? `Thread ${summary.boundTask.linkedThreadShortId}`
+              : "Thread-task binding will appear here once backend data is available."}
+          </div>
+        </div>
+
+        <div className="rounded-md border-2 border-zinc-900 bg-[#fffdf4] px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Owner</div>
+          <div className="mt-1 text-sm font-medium text-zinc-900">{summary?.ownerName ? `@${summary.ownerName}` : "Pending backend"}</div>
+          <div className="mt-1 text-[11px] text-zinc-500">
+            Once thread-task ownership lands, the execution owner will show here.
+          </div>
+        </div>
+
+        <div className="rounded-md border-2 border-zinc-900 bg-[#fffdf4] px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Participants</div>
+          {participants.length > 0 ? (
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {participants.map((name) => (
+                <span
+                  key={name}
+                  className="rounded-full border border-zinc-300 bg-white px-2 py-0.5 text-[11px] text-zinc-700"
+                >
+                  @{name}
+                </span>
+              ))}
+            </div>
+          ) : (
+            <div className="mt-1 text-sm font-medium text-zinc-900">No participant summary yet</div>
+          )}
+          <div className="mt-1 text-[11px] text-zinc-500">
+            Active participants for this thread will be listed here when the backend exposes them.
+          </div>
         </div>
       </div>
     </div>
@@ -208,9 +264,15 @@ type ThreadPanelProps = {
   onClose: () => void;
 };
 
-export function ThreadPanel({ channelId, channelName, rootMessage, channelMembers, onClose }: ThreadPanelProps) {
+export function ThreadPanel({
+  channelId,
+  channelName,
+  rootMessage,
+  channelMembers,
+  onClose,
+}: ThreadPanelProps) {
   const threadRootId = rootMessage.id.slice(0, 8);
-  const { messages, sendMessage, loadMore, hasMore } = useThreadStream(channelId, threadRootId);
+  const { messages, summary, sendMessage, loadMore, hasMore } = useThreadStream(channelId, threadRootId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isRootUser = rootMessage.senderType === "user";
 
@@ -265,6 +327,8 @@ export function ThreadPanel({ channelId, channelName, rootMessage, channelMember
           </div>
         )}
       </div>
+
+      <ThreadSummaryCard summary={summary} />
 
       {/* Thread replies */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto py-2">

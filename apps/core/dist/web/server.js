@@ -15,6 +15,7 @@ import { appendChannelResetMarkers } from './channelMemoryNotes.js';
 import { buildTargetActivationContext } from './activationContext.js';
 import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
 import { listTargetParticipants, upsertTargetParticipant } from './targetParticipants.js';
+import { getThreadCollaborationSummary } from './threadTaskBindings.js';
 export async function startServer(params) {
     const { port, host, conversationManager, db } = params;
     const config = conversationManager.getConfig();
@@ -547,6 +548,17 @@ export async function startServer(params) {
             })),
         };
     });
+    app.get('/api/channels/:id/threads/:shortId/summary', async (req, reply) => {
+        const channel = conversationManager.getChannel(req.params.id);
+        if (!channel) {
+            reply.code(404);
+            return { error: 'Channel not found' };
+        }
+        return getThreadCollaborationSummary(db, {
+            channelId: req.params.id,
+            threadRootId: req.params.shortId,
+        });
+    });
     // Post a user message to a channel (or thread when replyTo is set)
     app.post('/api/channels/:id/messages', async (req, reply) => {
         const channel = conversationManager.getChannel(req.params.id);
@@ -629,6 +641,7 @@ export async function startServer(params) {
                     rootMessage: activationContext.rootMessage,
                     unreadCount: activationContext.unreadCount,
                     participants: activationContext.participants,
+                    boundTask: activationContext.boundTask,
                     openTasks: activationContext.openTasks,
                 }) || undefined,
             }).then(() => {
@@ -637,6 +650,10 @@ export async function startServer(params) {
         };
         // Thread replies wake current thread participants; fall back to the root owner if needed.
         if (threadRootId) {
+            const summary = getThreadCollaborationSummary(db, {
+                channelId: req.params.id,
+                threadRootId,
+            });
             const participants = listTargetParticipants(db, {
                 channelId: req.params.id,
                 threadRootId,
@@ -645,7 +662,10 @@ export async function startServer(params) {
            FROM channel_messages
            WHERE channel_id = ? AND substr(message_id, 1, 8) = ?
            LIMIT 1`).get(req.params.id, threadRootId);
-            if (participants.length === 0 && rootMsg?.senderType === 'agent') {
+            if (summary.ownerAgentId) {
+                notifyAgent(summary.ownerAgentId, 'thread_reply', 'owner');
+            }
+            if (participants.length === 0 && !summary.ownerAgentId && rootMsg?.senderType === 'agent') {
                 notifyAgent(rootMsg.senderId, 'thread_reply', 'owner');
             }
             else {
@@ -746,16 +766,24 @@ export async function startServer(params) {
             return { error: 'Channel not found' };
         }
         const rows = req.query.status && req.query.status !== 'all'
-            ? db.prepare(`SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
+            ? db.prepare(`SELECT t.task_id as taskId, t.channel_id as channelId, t.task_number as taskNumber,
                     title, description, status,
                     claimed_by_agent_id as assigneeId, claimed_by_name as assigneeName,
-                    created_at as createdAt, updated_at as updatedAt
-             FROM tasks WHERE channel_id = ? AND status = ? ORDER BY task_number ASC`).all(req.params.id, req.query.status)
-            : db.prepare(`SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
+                    created_at as createdAt, updated_at as updatedAt,
+                    b.thread_root_id as linkedThreadId,
+                    b.thread_root_id as linkedThreadShortId
+             FROM tasks t
+             LEFT JOIN thread_task_bindings b ON b.task_id = t.task_id
+             WHERE t.channel_id = ? AND t.status = ? ORDER BY t.task_number ASC`).all(req.params.id, req.query.status)
+            : db.prepare(`SELECT t.task_id as taskId, t.channel_id as channelId, t.task_number as taskNumber,
                     title, description, status,
                     claimed_by_agent_id as assigneeId, claimed_by_name as assigneeName,
-                    created_at as createdAt, updated_at as updatedAt
-             FROM tasks WHERE channel_id = ? ORDER BY task_number ASC`).all(req.params.id);
+                    created_at as createdAt, updated_at as updatedAt,
+                    b.thread_root_id as linkedThreadId,
+                    b.thread_root_id as linkedThreadShortId
+             FROM tasks t
+             LEFT JOIN thread_task_bindings b ON b.task_id = t.task_id
+             WHERE t.channel_id = ? ORDER BY t.task_number ASC`).all(req.params.id);
         return { tasks: rows };
     });
     // POST /api/channels/:id/tasks

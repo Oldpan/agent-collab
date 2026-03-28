@@ -1,5 +1,6 @@
 import { getAgentMessageCheckpoint } from './messageCheckpoints.js';
 import { listTargetParticipants } from './targetParticipants.js';
+import { getBoundTaskForThread } from './threadTaskBindings.js';
 export function buildTargetActivationContext(db, params) {
     const recentLimit = Math.max(1, params.recentLimit ?? 8);
     const normalizedThreadRootId = params.threadRootId ?? null;
@@ -33,6 +34,18 @@ export function buildTargetActivationContext(db, params) {
         channelId: params.channelId,
         threadRootId: normalizedThreadRootId,
     });
+    const boundTaskRow = getBoundTaskForThread(db, {
+        channelId: params.channelId,
+        threadRootId: normalizedThreadRootId,
+    });
+    const boundTask = boundTaskRow
+        ? {
+            taskNumber: boundTaskRow.taskNumber,
+            title: boundTaskRow.title,
+            status: boundTaskRow.status,
+            claimedByName: boundTaskRow.assigneeName,
+        }
+        : undefined;
     const openTasks = db.prepare(`SELECT task_number as taskNumber,
             title,
             status,
@@ -53,7 +66,8 @@ export function buildTargetActivationContext(db, params) {
         recentMessages,
         unreadCount: unreadRow.count,
         participants,
-        openTasks,
+        ...(boundTask ? { boundTask } : {}),
+        openTasks: boundTask ? [] : openTasks,
         ...(rootMessage ? { rootMessage } : {}),
     };
 }

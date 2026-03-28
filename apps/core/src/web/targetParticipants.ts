@@ -76,6 +76,33 @@ export function listTargetParticipants(
   ).all(params.channelId, normalizeThreadRootId(params.threadRootId)) as TargetParticipant[];
 }
 
+export function setTargetOwner(
+  db: Db,
+  params: {
+    channelId: string;
+    threadRootId?: string | null;
+    agentId?: string | null;
+    lastActiveAt?: number;
+  },
+): void {
+  const threadRootId = normalizeThreadRootId(params.threadRootId);
+  db.prepare(
+    `UPDATE target_participants
+     SET role = 'participant'
+     WHERE channel_id = ? AND thread_root_id = ?`,
+  ).run(params.channelId, threadRootId);
+
+  if (params.agentId) {
+    upsertTargetParticipant(db, {
+      agentId: params.agentId,
+      channelId: params.channelId,
+      threadRootId,
+      role: 'owner',
+      lastActiveAt: params.lastActiveAt,
+    });
+  }
+}
+
 export function deleteTargetParticipantsForAgent(db: Db, agentId: string): void {
   db.prepare('DELETE FROM target_participants WHERE agent_id = ?').run(agentId);
 }

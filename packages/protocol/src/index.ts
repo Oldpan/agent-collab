@@ -535,6 +535,8 @@ export type TaskInfo = {
   status: 'todo' | 'in_progress' | 'in_review' | 'done';
   assigneeId?: string | null;
   assigneeName?: string | null;
+  linkedThreadId?: string | null;
+  linkedThreadShortId?: string | null;
   createdAt: number;
   updatedAt: number;
 };

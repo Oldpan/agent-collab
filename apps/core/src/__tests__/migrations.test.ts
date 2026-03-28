@@ -24,7 +24,7 @@ describe('migrations', () => {
   it('schema_version 应至少包含最新迁移所需版本', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBeGreaterThanOrEqual(31);
+    expect(row.version).toBeGreaterThanOrEqual(32);
     db.close();
   });
 
@@ -98,6 +98,7 @@ describe('migrations', () => {
       .prepare("SELECT name FROM sqlite_master WHERE type='table'")
       .all() as Array<{ name: string }>;
     expect(tables.map((t) => t.name)).toContain('target_participants');
+    expect(tables.map((t) => t.name)).toContain('thread_task_bindings');
     db.close();
   });
 

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { checkpointThreadKey, getAgentMessageCheckpoint, setAgentMessageCheckpoint, } from './messageCheckpoints.js';
-import { upsertTargetParticipant } from './targetParticipants.js';
+import { setTargetOwner, upsertTargetParticipant } from './targetParticipants.js';
+import { bindTaskToThread, getThreadBindingForTask } from './threadTaskBindings.js';
 /**
  * Registers internal agent API routes — used by channel-bridge MCP server.
  *
@@ -367,7 +368,7 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
             reply.code(404);
             return { error: 'Agent not found' };
         }
-        const { channel, task_numbers } = req.body ?? {};
+        const { channel, task_numbers, conversationId } = req.body ?? {};
         if (!channel || !Array.isArray(task_numbers)) {
             reply.code(400);
             return { error: 'channel and task_numbers array are required' };
@@ -379,6 +380,7 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
         }
         const now = Date.now();
         const results = [];
+        const threadBinding = resolveThreadBindingContext(db, conversationId, channelId);
         for (const taskNumber of task_numbers) {
             const row = db
                 .prepare(`SELECT task_id as taskId, status, claimed_by_agent_id as claimedByAgentId
@@ -396,9 +398,29 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
                 results.push({ taskNumber, success: false, reason: 'Task is already done' });
                 continue;
             }
+            if (threadBinding.threadRootId) {
+                const bindResult = bindTaskToThread(db, {
+                    channelId,
+                    threadRootId: threadBinding.threadRootId,
+                    taskId: row.taskId,
+                    boundAt: now,
+                });
+                if (!bindResult.ok) {
+                    results.push({ taskNumber, success: false, reason: bindResult.reason });
+                    continue;
+                }
+            }
             const newStatus = row.status === 'todo' ? 'in_progress' : row.status;
             db.prepare(`UPDATE tasks SET claimed_by_agent_id = ?, claimed_by_name = ?, status = ?, updated_at = ?
          WHERE task_id = ?`).run(agentId, agent.name, newStatus, now, row.taskId);
+            if (threadBinding.threadRootId) {
+                setTargetOwner(db, {
+                    channelId,
+                    threadRootId: threadBinding.threadRootId,
+                    agentId,
+                    lastActiveAt: now,
+                });
+            }
             results.push({ taskNumber, success: true });
         }
         return { results };
@@ -438,6 +460,15 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
         }
         db.prepare(`UPDATE tasks SET claimed_by_agent_id = NULL, claimed_by_name = NULL, updated_at = ?
        WHERE task_id = ?`).run(Date.now(), row.taskId);
+        const binding = getThreadBindingForTask(db, row.taskId);
+        if (binding) {
+            setTargetOwner(db, {
+                channelId: binding.channelId,
+                threadRootId: binding.threadRootId,
+                agentId: null,
+                lastActiveAt: Date.now(),
+            });
+        }
         return { ok: true };
     });
     /**
@@ -555,6 +586,17 @@ function normalizeTargetForConversation(db, conversationId, target) {
         }
     }
     return target;
+}
+function resolveThreadBindingContext(db, conversationId, channelId) {
+    if (!conversationId)
+        return { threadRootId: null };
+    const row = db.prepare(`SELECT channel_id as channelId, thread_kind as threadKind, thread_root_id as threadRootId
+     FROM conversations
+     WHERE id = ?`).get(conversationId);
+    if (!row || row.channelId !== channelId || row.threadKind !== 'branch' || !row.threadRootId) {
+        return { threadRootId: null };
+    }
+    return { threadRootId: row.threadRootId };
 }
 /** Extracts the thread shortId from targets like "#general:a1b2c3d4". Returns null for non-thread targets. */
 function resolveThreadRootId(target) {

@@ -46,6 +46,10 @@ export function buildChannelActivationContextText(params) {
             return `@${participant.name} (${role})`;
         }).join('\n')}`);
     }
+    if (params.boundTask) {
+        const assignee = params.boundTask.claimedByName ? ` @${params.boundTask.claimedByName}` : ' unassigned';
+        parts.push(`[Bound task for this thread]\n#${params.boundTask.taskNumber} [${params.boundTask.status}]${assignee} — ${params.boundTask.title}\nIf you are not the owner/assignee, default to coordination and discussion unless you explicitly claim or are asked to take over.`);
+    }
     if (params.openTasks && params.openTasks.length > 0) {
         parts.push(`[Task board summary]\n${params.openTasks.map((task) => {
             const assignee = task.claimedByName ? ` @${task.claimedByName}` : ' unassigned';

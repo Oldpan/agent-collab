@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { TaskInfo } from "@agent-collab/protocol";
 import { Button } from "@/components/ui/button";
-import { createChannelTask, getChannelTasks, updateTaskStatus } from "@/lib/api";
+import { createChannelTask, getChannelTasks, updateTaskStatus, type ChannelTask } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type TasksTabProps = {
@@ -42,7 +42,7 @@ function statusClassName(status: TaskInfo["status"]): string {
 }
 
 export function TasksTab({ channelId }: TasksTabProps) {
-  const [tasks, setTasks] = useState<TaskInfo[]>([]);
+  const [tasks, setTasks] = useState<ChannelTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
@@ -68,7 +68,7 @@ export function TasksTab({ channelId }: TasksTabProps) {
   }, [loadTasks]);
 
   const grouped = useMemo(() => {
-    const buckets: Record<TaskInfo["status"], TaskInfo[]> = {
+    const buckets: Record<TaskInfo["status"], ChannelTask[]> = {
       todo: [],
       in_progress: [],
       in_review: [],
@@ -77,6 +77,17 @@ export function TasksTab({ channelId }: TasksTabProps) {
     for (const task of tasks) buckets[task.status].push(task);
     return buckets;
   }, [tasks]);
+
+  const counts = useMemo(() => {
+    const done = grouped.done.length;
+    return {
+      total: tasks.length,
+      open: tasks.length - done,
+      inProgress: grouped.in_progress.length,
+      inReview: grouped.in_review.length,
+      done,
+    };
+  }, [grouped, tasks.length]);
 
   const handleCreate = useCallback(async () => {
     const trimmed = title.trim();
@@ -111,6 +122,21 @@ export function TasksTab({ channelId }: TasksTabProps) {
   return (
     <div className="flex h-full flex-col">
       <div className="border-b-2 border-black bg-[#fff6b8] px-4 py-3">
+        <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px] text-zinc-700">
+          <span className="rounded-full border border-zinc-900 bg-white px-2 py-0.5 font-semibold">
+            {counts.open} open
+          </span>
+          <span className="rounded-full border border-zinc-900/70 bg-[#d8efff] px-2 py-0.5">
+            {counts.inProgress} in progress
+          </span>
+          <span className="rounded-full border border-zinc-900/70 bg-[#ffe8c7] px-2 py-0.5">
+            {counts.inReview} in review
+          </span>
+          <span className="rounded-full border border-zinc-900/70 bg-[#d8f8c8] px-2 py-0.5">
+            {counts.done} done
+          </span>
+          <span className="text-zinc-500">{counts.total} total</span>
+        </div>
         <div className="flex gap-2">
           <input
             value={title}
@@ -214,6 +240,16 @@ export function TasksTab({ channelId }: TasksTabProps) {
                                   @{task.assigneeName}
                                 </div>
                               )}
+                              <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+                                <span className="rounded-full border border-dashed border-zinc-300 bg-[#fffdf4] px-2 py-0.5">
+                                  {task.linkedThreadShortId ? `Thread ${task.linkedThreadShortId}` : "No linked thread yet"}
+                                </span>
+                                {!task.assigneeName && (
+                                  <span className="rounded-full border border-dashed border-zinc-300 bg-[#fffdf4] px-2 py-0.5">
+                                    Unassigned
+                                  </span>
+                                )}
+                              </div>
                             </div>
                             <button
                               type="button"

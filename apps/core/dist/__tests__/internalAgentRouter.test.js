@@ -397,4 +397,86 @@ describe('internalAgentRouter', () => {
         const body = await res.json();
         expect(body.error).toContain('not a member');
     });
+    it('thread 中 claim task 时应自动绑定 thread 并同步 owner', async () => {
+        const now = Date.now();
+        const agent = manager.createAgent({
+            name: 'TaskOwnerBob',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/task-owner-bob',
+            channelId: 'default',
+        });
+        manager.joinChannel(agent.agentId, 'default');
+        const conv = manager.openAgentChannelThread(agent.agentId, 'default', 'bind1234');
+        if (!conv)
+            throw new Error('missing thread conversation');
+        db.prepare(`INSERT INTO tasks(task_id, channel_id, task_number, title, status, created_at, updated_at)
+       VALUES(?, 'default', 7, 'Bind me', 'todo', ?, ?)`).run('task-bind-7', now, now);
+        const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                channel: '#default',
+                task_numbers: [7],
+                conversationId: conv.id,
+            }),
+        });
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body.results).toEqual([{ taskNumber: 7, success: true }]);
+        const binding = db.prepare(`SELECT channel_id as channelId, thread_root_id as threadRootId, task_id as taskId
+       FROM thread_task_bindings
+       WHERE channel_id = 'default' AND thread_root_id = 'bind1234'`).get();
+        expect(binding).toEqual({ channelId: 'default', threadRootId: 'bind1234', taskId: 'task-bind-7' });
+        const task = db.prepare(`SELECT claimed_by_agent_id as claimedByAgentId, claimed_by_name as claimedByName, status
+       FROM tasks WHERE task_id = 'task-bind-7'`).get();
+        expect(task).toEqual({
+            claimedByAgentId: agent.agentId,
+            claimedByName: 'TaskOwnerBob',
+            status: 'in_progress',
+        });
+        const participant = db.prepare(`SELECT role FROM target_participants
+       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'bind1234'`).get(agent.agentId);
+        expect(participant?.role).toBe('owner');
+    });
+    it('同一 thread 绑定第二个 task 时应拒绝，不隐式覆盖', async () => {
+        const now = Date.now();
+        const agent = manager.createAgent({
+            name: 'TaskConflictBob',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/task-conflict-bob',
+            channelId: 'default',
+        });
+        manager.joinChannel(agent.agentId, 'default');
+        const conv = manager.openAgentChannelThread(agent.agentId, 'default', 'conf1234');
+        if (!conv)
+            throw new Error('missing thread conversation');
+        db.prepare(`INSERT INTO tasks(task_id, channel_id, task_number, title, status, created_at, updated_at)
+       VALUES
+       ('task-conflict-1', 'default', 11, 'First', 'todo', ?, ?),
+       ('task-conflict-2', 'default', 12, 'Second', 'todo', ?, ?)`).run(now, now, now, now);
+        let res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                channel: '#default',
+                task_numbers: [11],
+                conversationId: conv.id,
+            }),
+        });
+        expect(res.status).toBe(200);
+        res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                channel: '#default',
+                task_numbers: [12],
+                conversationId: conv.id,
+            }),
+        });
+        expect(res.status).toBe(200);
+        const body = await res.json();
+        expect(body.results).toEqual([{ taskNumber: 12, success: false, reason: 'Thread is already bound to #t11' }]);
+    });
 });

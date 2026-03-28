@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-03-29 (thread-task binding + thread collaboration summary)
+
+- 新增 `thread_task_bindings`，schema 升到 `v32`；一个 thread 现在最多绑定一个 task，后续 thread 协作可以围绕真实 task 收敛。
+- agent 在 thread conversation 中调用 `claim_tasks` 时，会自动尝试把该 task 绑定到当前 thread；同一 thread 再绑定第二个 task 会被拒绝，不再隐式覆盖。
+- 绑定成功后，thread 的协作 owner 会同步到该 task assignee；`unclaim_task` 会把该 thread 的 owner 清空回 participant-only 状态。
+- channel/thread fresh activation context 现在支持注入 `bound task` 摘要；system prompt 也同步要求非 owner agent 默认以协调/讨论为主，不要直接抢执行。
+- 新增 `GET /api/channels/:id/threads/:shortId/summary`，返回 `boundTask / owner / participants`；频道任务列表也会带 `linkedThreadId / linkedThreadShortId`。
+- Thread 面板现在会实时拉取 summary，显示真实的 bound task、owner 和 participants；Tasks 面板里的 linked-thread 占位也能接真实数据。
+
 ## 2026-03-29 (target-first channel collaboration v1)
 
 - Channel 新增 `collaboration_mode`（默认 `mention_only`，可选 `subscribed_agents`），为主频道协同触发提供明确模式开关。

@@ -253,7 +253,7 @@ server.tool('claim_tasks', 'Claim one or more tasks by their number. Returns whi
     try {
         const { ok, data } = await apiFetch('/tasks/claim', {
             method: 'POST',
-            body: { channel, task_numbers },
+            body: { channel, task_numbers, conversationId },
         });
         if (!ok)
             return toText(`Error: ${errText(data, 'claim tasks failed')}`);
@@ -299,7 +299,7 @@ server.tool('update_task_status', 'Update a task\'s progress status. Valid trans
     try {
         const { ok, data } = await apiFetch('/tasks/update-status', {
             method: 'POST',
-            body: { channel, task_number, status },
+            body: { channel, task_number, status, conversationId },
         });
         if (!ok)
             return toText(`Error: ${errText(data, 'update status failed')}`);

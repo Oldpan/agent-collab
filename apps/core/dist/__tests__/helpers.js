@@ -51,6 +51,15 @@ export function createTestDb() {
       PRIMARY KEY (agent_id, channel_id, thread_root_id)
     );
   `);
+    db.exec(`
+    CREATE TABLE IF NOT EXISTS thread_task_bindings (
+      channel_id     TEXT NOT NULL,
+      thread_root_id TEXT NOT NULL,
+      task_id        TEXT NOT NULL UNIQUE,
+      bound_at       INTEGER NOT NULL,
+      PRIMARY KEY (channel_id, thread_root_id)
+    );
+  `);
     const channelMessageCols = db.prepare("PRAGMA table_info('channel_messages')").all();
     if (!channelMessageCols.some((col) => col.name === 'run_id')) {
         db.exec(`ALTER TABLE channel_messages ADD COLUMN run_id TEXT;`);

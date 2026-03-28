@@ -1,6 +1,7 @@
 import type { Db } from '@agent-collab/runtime-acp';
 import { getAgentMessageCheckpoint } from './messageCheckpoints.js';
 import { listTargetParticipants, type TargetParticipant } from './targetParticipants.js';
+import { getBoundTaskForThread } from './threadTaskBindings.js';
 
 export type ActivationContextMessage = {
   messageId: string;
@@ -16,6 +17,7 @@ export type TargetActivationContext = {
   recentMessages: ActivationContextMessage[];
   unreadCount: number;
   participants: TargetParticipant[];
+  boundTask?: { taskNumber: number; title: string; status: string; claimedByName: string | null };
   openTasks: Array<{ taskNumber: number; title: string; status: string; claimedByName: string | null }>;
   rootMessage?: ActivationContextMessage;
 };
@@ -76,6 +78,20 @@ export function buildTargetActivationContext(
     threadRootId: normalizedThreadRootId,
   });
 
+  const boundTaskRow = getBoundTaskForThread(db, {
+    channelId: params.channelId,
+    threadRootId: normalizedThreadRootId,
+  });
+
+  const boundTask = boundTaskRow
+    ? {
+        taskNumber: boundTaskRow.taskNumber,
+        title: boundTaskRow.title,
+        status: boundTaskRow.status,
+        claimedByName: boundTaskRow.assigneeName,
+      }
+    : undefined;
+
   const openTasks = db.prepare(
     `SELECT task_number as taskNumber,
             title,
@@ -104,7 +120,8 @@ export function buildTargetActivationContext(
     recentMessages,
     unreadCount: unreadRow.count,
     participants,
-    openTasks,
+    ...(boundTask ? { boundTask } : {}),
+    openTasks: boundTask ? [] : openTasks,
     ...(rootMessage ? { rootMessage } : {}),
   };
 }
