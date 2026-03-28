@@ -43,6 +43,9 @@ export function createTestDb(): Db {
   if (!channelMessageCols.some((col) => col.name === 'message_kind')) {
     db.exec(`ALTER TABLE channel_messages ADD COLUMN message_kind TEXT;`);
   }
+  if (!channelMessageCols.some((col) => col.name === 'message_source')) {
+    db.exec(`ALTER TABLE channel_messages ADD COLUMN message_source TEXT;`);
+  }
   return db;
 }
 

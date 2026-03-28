@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
 import type { NodeToCore, ServerEvent, ConversationStatus } from '@agent-collab/protocol';
 import { log, finishRun } from '@agent-collab/runtime-acp';
@@ -24,7 +25,6 @@ const REPLAY_EVENT_TYPES = new Set([
 ]);
 
 type EventBroadcaster = (conversationId: string, event: ServerEvent) => void;
-type PendingRepair = { sourceRunId: string; repairRunId?: string };
 
 function requiresMcpReplyContract(db: Db, conversationId: string): boolean {
   const row = db
@@ -45,6 +45,27 @@ function hasRunReplyMessage(db: Db, conversationId: string, runId: string): bool
   return (row?.count ?? 0) > 0;
 }
 
+type RunAgentMessageRow = {
+  content: string;
+  created_at: number;
+  channel_id: string;
+  seq: number;
+};
+
+type RunDeltaEventRow = {
+  createdAt: number;
+  seq: number;
+  text: string;
+};
+
+type FallbackMessageContext = {
+  agentId: string;
+  agentName: string;
+  channelId: string;
+  target: string;
+  threadRootId: string | null;
+};
+
 function hasRunFinalReplyMessage(db: Db, runId: string): boolean {
   const row = db
     .prepare(
@@ -62,14 +83,15 @@ function isCancelStopReason(stopReason?: string): boolean {
   return Boolean(stopReason?.includes('cancel'));
 }
 
-type ReplyOutputAnalysis = {
-  hasSubstantiveOutput: boolean;
-  duplicatesLastReply: boolean;
-  textAfterReply: string;
-};
-
-function normalizeReplyText(text: string): string {
+function normalizeComparisonText(text: string): string {
   return text.replace(/\s+/g, ' ').trim();
+}
+
+function stripLegacyStatusText(text: string): string {
+  return text
+    .split('\n')
+    .filter((line) => !/^\s*(?:-\s*)?\[(?:plan|task)\]\b/i.test(line))
+    .join('\n');
 }
 
 function stripInternalReminderTail(text: string): string {
@@ -78,122 +100,210 @@ function stripInternalReminderTail(text: string): string {
     .trim();
 }
 
-function analyzeOutputAfterLastReply(db: Db, runId: string): ReplyOutputAnalysis {
-  const replyRows = db
-    .prepare(
-      `SELECT content, created_at, message_kind
-       FROM channel_messages
-       WHERE run_id = ?
-         AND sender_type = 'agent'`,
-  ).all(runId) as Array<{ content: string; created_at: number; message_kind: string | null }>;
-  if (replyRows.length === 0) {
-    return { hasSubstantiveOutput: false, duplicatesLastReply: false, textAfterReply: '' };
-  }
-
-  const lastReply = replyRows.reduce((latest, row) => (row.created_at > latest.created_at ? row : latest));
-  return analyzeOutputAfterTimestamp(db, runId, lastReply.created_at, lastReply.content ?? '', lastReply.message_kind);
+function cleanFallbackText(text: string): string {
+  return stripInternalReminderTail(stripLegacyStatusText(text)).trim();
 }
 
-function analyzeOutputAfterLastFinal(db: Db, runId: string): ReplyOutputAnalysis {
-  const finalRows = db.prepare(
-    `SELECT content, created_at, message_kind
+function hasSubstantiveFallbackText(text: string): boolean {
+  return text.replace(/\s+/g, '').length >= 16;
+}
+
+function listRunAgentMessages(db: Db, runId: string): RunAgentMessageRow[] {
+  return db.prepare(
+    `SELECT content, created_at, channel_id, seq
      FROM channel_messages
      WHERE run_id = ?
        AND sender_type = 'agent'
-       AND message_kind = 'final'
-     ORDER BY created_at DESC
-     LIMIT 1`,
-  ).all(runId) as Array<{ content: string; created_at: number; message_kind: string | null }>;
-  const lastFinal = finalRows[0];
-  if (!lastFinal) {
-    return { hasSubstantiveOutput: false, duplicatesLastReply: false, textAfterReply: '' };
-  }
-  return analyzeOutputAfterTimestamp(db, runId, lastFinal.created_at, lastFinal.content ?? '', lastFinal.message_kind);
+     ORDER BY created_at ASC, seq ASC`,
+  ).all(runId) as RunAgentMessageRow[];
 }
 
-function analyzeOutputAfterTimestamp(
-  db: Db,
-  runId: string,
-  createdAfter: number,
-  replyContent: string,
-  replyKind: string | null,
-): ReplyOutputAnalysis {
+function listRunDeltaEvents(db: Db, runId: string): RunDeltaEventRow[] {
   const rows = db
     .prepare(
       `SELECT payload_json as payloadJson
+              ,created_at as createdAt
+              ,seq
        FROM events
        WHERE run_id = ?
          AND method = 'node/event'
-         AND created_at > ?
        ORDER BY seq ASC`,
-    ).all(runId, createdAfter) as Array<{ payloadJson: string }>;
+    ).all(runId) as Array<{ payloadJson: string; createdAt: number; seq: number }>;
 
-  let textAfterReply = '';
+  const deltas: RunDeltaEventRow[] = [];
   for (const row of rows) {
     try {
       const payload = JSON.parse(row.payloadJson) as { type?: string; text?: string };
       if (payload.type === 'content.delta' && typeof payload.text === 'string') {
-        textAfterReply += payload.text;
+        deltas.push({
+          createdAt: row.createdAt,
+          seq: row.seq,
+          text: payload.text,
+        });
       }
     } catch {
       // Ignore malformed historic payloads
     }
   }
+  return deltas;
+}
 
-  const normalizedOutput = stripInternalReminderTail(normalizeReplyText(textAfterReply));
-  if (normalizedOutput.length < 32) {
-    return { hasSubstantiveOutput: false, duplicatesLastReply: false, textAfterReply: normalizedOutput };
+function collectFallbackSegments(db: Db, runId: string): string[] {
+  const replyRows = listRunAgentMessages(db, runId);
+  const deltaRows = listRunDeltaEvents(db, runId);
+  if (deltaRows.length === 0) return [];
+
+  const timeline = [
+    ...replyRows.map((row, index) => ({ type: 'message' as const, createdAt: row.created_at, order: index })),
+    ...deltaRows.map((row, index) => ({ type: 'delta' as const, createdAt: row.createdAt, order: index, text: row.text, seq: row.seq })),
+  ].sort((a, b) => {
+    if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+    if (a.type !== b.type) return a.type === 'delta' ? -1 : 1;
+    return a.order - b.order;
+  });
+
+  let buffer = '';
+  const rawSegments: string[] = [];
+  const flushBuffer = () => {
+    if (!buffer) return;
+    rawSegments.push(buffer);
+    buffer = '';
+  };
+
+  for (const item of timeline) {
+    if (item.type === 'delta') {
+      buffer += item.text;
+      continue;
+    }
+    flushBuffer();
   }
+  flushBuffer();
 
-  const normalizedLastReply = normalizeReplyText(replyContent);
-  const duplicatesLastReply =
-    !!normalizedLastReply &&
-    (normalizedOutput === normalizedLastReply ||
-      normalizedOutput.includes(normalizedLastReply) ||
-      normalizedLastReply.includes(normalizedOutput));
+  const existingNormalized = new Set(
+    replyRows.map((row) => normalizeComparisonText(cleanFallbackText(row.content))).filter(Boolean),
+  );
+  const emittedNormalized = new Set<string>();
+
+  return rawSegments
+    .map((segment) => cleanFallbackText(segment))
+    .filter((segment) => hasSubstantiveFallbackText(segment))
+    .filter((segment) => {
+      const normalized = normalizeComparisonText(segment);
+      if (!normalized) return false;
+      if (existingNormalized.has(normalized) || emittedNormalized.has(normalized)) return false;
+      emittedNormalized.add(normalized);
+      return true;
+    });
+}
+
+function getFallbackMessageContext(
+  db: Db,
+  conversationId: string,
+  humanUserName: string,
+): FallbackMessageContext | null {
+  const row = db.prepare(
+    `SELECT c.id as conversationId,
+            c.agent_id as agentId,
+            c.channel_id as channelId,
+            c.thread_kind as threadKind,
+            c.is_primary_thread as isPrimaryThread,
+            c.thread_root_id as threadRootId,
+            ch.name as channelName,
+            a.name as agentName
+     FROM conversations c
+     JOIN agents a ON a.agent_id = c.agent_id
+     LEFT JOIN channels ch ON ch.channel_id = c.channel_id
+     WHERE c.id = ?`,
+  ).get(conversationId) as {
+    conversationId: string;
+    agentId: string | null;
+    agentName: string;
+    channelId: string;
+    threadKind: 'direct' | 'branch';
+    isPrimaryThread: number;
+    threadRootId: string | null;
+    channelName: string | null;
+  } | undefined;
+  if (!row?.agentId) return null;
+
+  const target = row.threadKind === 'direct'
+    ? (row.isPrimaryThread
+      ? `dm:@${humanUserName}`
+      : `dm:@${humanUserName}:${row.conversationId.slice(0, 8)}`)
+    : `${`#${row.channelName ?? row.channelId}`}${row.threadRootId ? `:${row.threadRootId}` : ''}`;
 
   return {
-    hasSubstantiveOutput: true,
-    duplicatesLastReply,
-    textAfterReply: normalizedOutput,
+    agentId: row.agentId,
+    agentName: row.agentName,
+    channelId: row.channelId,
+    target,
+    threadRootId: row.threadRootId ?? null,
   };
 }
 
-function getReplyContractError(
-  msg: { stopReason?: string; error?: string },
-  db: Db,
-  conversationId: string,
-  runId: string,
-): string | null {
-  if (msg.error) return null;
-  if (isCancelStopReason(msg.stopReason)) return null;
-  if (!requiresMcpReplyContract(db, conversationId)) return null;
-  if (!hasRunReplyMessage(db, conversationId, runId)) {
-    return 'Agent did not reply via send_message';
-  }
-  if (hasRunFinalReplyMessage(db, runId)) {
-    return null;
-  }
-  const outputAnalysis = analyzeOutputAfterLastReply(db, runId);
-  if (outputAnalysis.hasSubstantiveOutput && !(outputAnalysis.duplicatesLastReply && !hasRunFinalReplyMessage(db, runId))) {
-    return 'Agent did not send a final reply via send_message';
-  }
-  return null;
+function nextChannelMessageSeq(db: Db, channelId: string): number {
+  const row = db.prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?')
+    .get(channelId) as { maxSeq: number | null };
+  return (row.maxSeq ?? 0) + 1;
 }
 
-function shouldRepairTrailingDeltaAfterFinal(
-  msg: { stopReason?: string; error?: string },
+function persistDeltaFallbackMessages(params: {
   db: Db,
   conversationId: string,
   runId: string,
-): boolean {
-  if (msg.error) return false;
-  if (isCancelStopReason(msg.stopReason)) return false;
-  if (!requiresMcpReplyContract(db, conversationId)) return false;
-  if (!hasRunFinalReplyMessage(db, runId)) return false;
+  broadcast: EventBroadcaster;
+  manager: ConversationManager;
+}): number {
+  if (!requiresMcpReplyContract(params.db, params.conversationId)) return 0;
 
-  const outputAnalysis = analyzeOutputAfterLastFinal(db, runId);
-  return outputAnalysis.hasSubstantiveOutput && !outputAnalysis.duplicatesLastReply;
+  const context = getFallbackMessageContext(
+    params.db,
+    params.conversationId,
+    params.manager.getConfig().humanUserName,
+  );
+  if (!context) return 0;
+
+  const segments = collectFallbackSegments(params.db, params.runId);
+  if (segments.length === 0) return 0;
+
+  let createdAt = Date.now();
+  let emittedCount = 0;
+  for (const content of segments) {
+    const seq = nextChannelMessageSeq(params.db, context.channelId);
+    const messageId = randomUUID();
+    params.db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind, message_source)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      messageId,
+      context.channelId,
+      context.agentId,
+      context.agentName,
+      context.target,
+      content,
+      seq,
+      createdAt,
+      params.runId,
+      context.threadRootId,
+      null,
+      'delta_fallback',
+    );
+    params.broadcast(params.conversationId, {
+      type: 'channel.message',
+      message: {
+        id: messageId,
+        senderName: context.agentName,
+        senderType: 'agent',
+        content,
+        createdAt: new Date(createdAt).toISOString(),
+        seq,
+        ...(context.threadRootId ? { threadRootId: context.threadRootId } : {}),
+      },
+    });
+    createdAt += 1;
+    emittedCount += 1;
+  }
+  return emittedCount;
 }
 
 function getRunEndError(
@@ -210,87 +320,7 @@ function getRunEndError(
     }
     return 'Run cancelled before completion';
   }
-  return getReplyContractError(msg, db, conversationId, runId);
-}
-
-function collectRunOutputText(db: Db, runId: string, createdAfter?: number): string {
-  const rows = db.prepare(
-    `SELECT payload_json as payloadJson
-     FROM events
-     WHERE run_id = ?
-       AND method = 'node/event'
-       AND (? IS NULL OR created_at > ?)
-     ORDER BY seq ASC`,
-  ).all(runId, createdAfter ?? null, createdAfter ?? null) as Array<{ payloadJson: string }>;
-
-  let text = '';
-  for (const row of rows) {
-    try {
-      const payload = JSON.parse(row.payloadJson) as { type?: string; text?: string };
-      if (payload.type === 'content.delta' && typeof payload.text === 'string') {
-        text += payload.text;
-      }
-    } catch {
-      // Ignore malformed historic payloads
-    }
-  }
-  return stripInternalReminderTail(normalizeReplyText(text));
-}
-
-function buildReplyRepairPrompt(
-  db: Db,
-  runId: string,
-  replyContractError: string,
-): string | null {
-  const replyRows = db.prepare(
-    `SELECT content, created_at
-     FROM channel_messages
-     WHERE run_id = ?
-       AND sender_type = 'agent'
-     ORDER BY created_at DESC`,
-  ).all(runId) as Array<{ content: string; created_at: number }>;
-
-  const lastReply = replyRows[0];
-  const draftText = lastReply
-    ? collectRunOutputText(db, runId, lastReply.created_at)
-    : collectRunOutputText(db, runId);
-  if (!draftText) return null;
-
-  return [
-    '[System: Repair the previous run\'s reply contract violation.]',
-    `The previous run ended with: ${replyContractError}`,
-    'Send exactly one final user-visible reply for the current conversation via mcp__chat__send_message(content="...", kind="final").',
-    'Do not do any new work. Do not call check_messages. Do not send progress updates. Do not mention this repair step.',
-    '',
-    '[Draft reply to send]',
-    draftText,
-  ].join('\n');
-}
-
-function buildTrailingFinalRepairPrompt(db: Db, runId: string): string | null {
-  const finalRow = db.prepare(
-    `SELECT content, created_at
-     FROM channel_messages
-     WHERE run_id = ?
-       AND sender_type = 'agent'
-       AND message_kind = 'final'
-     ORDER BY created_at DESC
-     LIMIT 1`,
-  ).get(runId) as { content: string; created_at: number } | undefined;
-  if (!finalRow) return null;
-
-  const trailingOutput = collectRunOutputText(db, runId, finalRow.created_at);
-  if (!trailingOutput || trailingOutput.length < 32) return null;
-
-  return [
-    '[System: Repair the previous run\'s final reply with the additional trailing output.]',
-    'The previous run already sent a final reply, but then continued outputting more user-visible text.',
-    'Send exactly one updated final user-visible reply for the current conversation via mcp__chat__send_message(content="...", kind="final").',
-    'Use only the trailing output below as the content to send. Do not do any new work. Do not call check_messages. Do not send progress updates. Do not mention this repair step.',
-    '',
-    '[Trailing output to send]',
-    trailingOutput,
-  ].join('\n');
+  return null;
 }
 
 function updateConversationStatus(
@@ -354,7 +384,6 @@ export function handleNodeWebSocket(
   let nodeId: string | null = null;
   // Sequence counter per runId for node/event persistence
   const runSeq = new Map<string, number>();
-  const pendingRepairs = new Map<string, PendingRepair>();
 
   socket.on('message', (raw) => {
     let msg: NodeToCore;
@@ -454,123 +483,22 @@ export function handleNodeWebSocket(
           void manager.onConversationSettled(msg.conversationId);
           break;
         }
-        const replyContractError = getReplyContractError(msg, db, msg.conversationId, msg.runId);
         const runEndError = getRunEndError(msg, db, msg.conversationId, msg.runId);
-        const trailingFinalNeedsRepair = shouldRepairTrailingDeltaAfterFinal(msg, db, msg.conversationId, msg.runId);
-        const pendingRepair = pendingRepairs.get(msg.conversationId);
-        const isRepairRun = Boolean(pendingRepair && pendingRepair.sourceRunId !== msg.runId);
-
-        if (!msg.error && !isCancelStopReason(msg.stopReason) && replyContractError && !isRepairRun) {
-          const repairPrompt = buildReplyRepairPrompt(db, msg.runId, replyContractError);
-          if (repairPrompt) {
-            log.info('[node-ws] scheduling reply-contract repair run', {
+        if (!msg.error && !isCancelStopReason(msg.stopReason)) {
+          const fallbackCount = persistDeltaFallbackMessages({
+            db,
+            conversationId: msg.conversationId,
+            runId: msg.runId,
+            broadcast,
+            manager,
+          });
+          if (fallbackCount > 0) {
+            log.info('[node-ws] emitted delta fallback messages', {
               conversationId: msg.conversationId,
-              sourceRunId: msg.runId,
-              replyContractError,
+              runId: msg.runId,
+              count: fallbackCount,
             });
-            const endedAt = Date.now();
-            finishRun(db, { runId: msg.runId, stopReason: msg.stopReason ?? 'end_turn' });
-            broadcast(msg.conversationId, {
-              type: 'turn.end',
-              turnId: msg.runId,
-              stopReason: msg.stopReason ?? 'end_turn',
-              endedAt,
-            });
-            updateConversationStatus(db, broadcast, msg.conversationId, 'recovering');
-            pendingRepairs.set(msg.conversationId, { sourceRunId: msg.runId });
-            void manager.submitPrompt(msg.conversationId, repairPrompt, { recordAsUserMessage: false })
-              .then((result) => {
-                const state = pendingRepairs.get(msg.conversationId);
-                if (!state || state.sourceRunId !== msg.runId) return;
-                if (result.runId) {
-                  log.info('[node-ws] reply-contract repair dispatched', {
-                    conversationId: msg.conversationId,
-                    sourceRunId: msg.runId,
-                    repairRunId: result.runId,
-                    queued: result.queued,
-                  });
-                  pendingRepairs.set(msg.conversationId, { ...state, repairRunId: result.runId });
-                }
-                if (result.queued) {
-                  updateConversationStatus(db, broadcast, msg.conversationId, 'queued');
-                }
-              })
-              .catch((error: any) => {
-                const state = pendingRepairs.get(msg.conversationId);
-                if (!state || state.sourceRunId !== msg.runId) return;
-                log.warn('[node-ws] reply-contract repair failed to dispatch', {
-                  conversationId: msg.conversationId,
-                  sourceRunId: msg.runId,
-                  error: String(error?.message ?? error),
-                });
-                pendingRepairs.delete(msg.conversationId);
-                updateConversationStatus(db, broadcast, msg.conversationId, 'failed');
-                broadcast(msg.conversationId, {
-                  type: 'error',
-                  message: String(error?.message ?? replyContractError),
-                });
-                void manager.onConversationSettled(msg.conversationId);
-              });
-            break;
           }
-        }
-
-        if (!msg.error && !isCancelStopReason(msg.stopReason) && !replyContractError && trailingFinalNeedsRepair && !isRepairRun) {
-          const repairPrompt = buildTrailingFinalRepairPrompt(db, msg.runId);
-          if (repairPrompt) {
-            log.info('[node-ws] scheduling trailing-final repair run', {
-              conversationId: msg.conversationId,
-              sourceRunId: msg.runId,
-            });
-            const endedAt = Date.now();
-            finishRun(db, { runId: msg.runId, stopReason: msg.stopReason ?? 'end_turn' });
-            broadcast(msg.conversationId, {
-              type: 'turn.end',
-              turnId: msg.runId,
-              stopReason: msg.stopReason ?? 'end_turn',
-              endedAt,
-            });
-            updateConversationStatus(db, broadcast, msg.conversationId, 'recovering');
-            pendingRepairs.set(msg.conversationId, { sourceRunId: msg.runId });
-            void manager.submitPrompt(msg.conversationId, repairPrompt, { recordAsUserMessage: false })
-              .then((result) => {
-                const state = pendingRepairs.get(msg.conversationId);
-                if (!state || state.sourceRunId !== msg.runId) return;
-                if (result.runId) {
-                  log.info('[node-ws] trailing-final repair dispatched', {
-                    conversationId: msg.conversationId,
-                    sourceRunId: msg.runId,
-                    repairRunId: result.runId,
-                    queued: result.queued,
-                  });
-                  pendingRepairs.set(msg.conversationId, { ...state, repairRunId: result.runId });
-                }
-                if (result.queued) {
-                  updateConversationStatus(db, broadcast, msg.conversationId, 'queued');
-                }
-              })
-              .catch((error: any) => {
-                const state = pendingRepairs.get(msg.conversationId);
-                if (!state || state.sourceRunId !== msg.runId) return;
-                log.warn('[node-ws] trailing-final repair failed to dispatch', {
-                  conversationId: msg.conversationId,
-                  sourceRunId: msg.runId,
-                  error: String(error?.message ?? error),
-                });
-                pendingRepairs.delete(msg.conversationId);
-                updateConversationStatus(db, broadcast, msg.conversationId, 'failed');
-                broadcast(msg.conversationId, {
-                  type: 'error',
-                  message: String(error?.message ?? 'Agent final reply was stale and repair dispatch failed'),
-                });
-                void manager.onConversationSettled(msg.conversationId);
-              });
-            break;
-          }
-        }
-
-        if (pendingRepair && (!pendingRepair.repairRunId || pendingRepair.repairRunId === msg.runId || isRepairRun)) {
-          pendingRepairs.delete(msg.conversationId);
         }
 
         finishConversationRun({

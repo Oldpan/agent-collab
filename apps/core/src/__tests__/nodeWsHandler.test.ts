@@ -136,7 +136,7 @@ describe('nodeWsHandler', () => {
     });
   });
 
-  it('私聊 run 未通过 send_message 回复时应触发静默 repair，并在 repair 成功后正常收口', async () => {
+  it('私聊 run 未通过 send_message 回复时应落 delta_fallback 消息并正常收口', () => {
     const agent = manager.createAgent({
       name: 'Bob',
       agentType: 'claude_acp',
@@ -183,53 +183,22 @@ describe('nodeWsHandler', () => {
       conversationId: conv.id,
       stopReason: 'end_turn',
     }));
-    await expect.poll(() => dispatches.length, { timeout: 5000 }).toBeGreaterThan(0);
-
     const originalRun = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
       .get('run-1') as { error: string | null; stopReason: string | null };
     expect(originalRun.error).toBeNull();
     expect(originalRun.stopReason).toBe('end_turn');
-    expect(events).toContainEqual({
-      type: 'conversation.status',
-      conversationId: conv.id,
-      status: 'recovering',
-    });
-    const repairDispatch = dispatches[0];
-    if (!repairDispatch || repairDispatch.type !== 'run.dispatch') throw new Error('missing repair dispatch');
-    expect(repairDispatch.prompt).toContain('[Reply contract]');
-    expect(repairDispatch.prompt).toContain('[System: Repair the previous run\'s reply contract violation.]');
-    expect(repairDispatch.prompt).toContain('mcp__chat__send_message(content="...", kind="final")');
-    expect(repairDispatch.prompt).toContain('这是上一轮已经写好的结论');
-
-    db.prepare(
-      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
-       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      'msg-repair-1',
-      `dm:${agent.agentId}`,
-      agent.agentId,
-      agent.name,
-      `dm:@${agent.name}`,
-      '这是上一轮已经写好的结论，请把它发送给当前会话用户。',
-      1,
-      Date.now(),
-      repairDispatch.runId,
-      'final',
-    );
-
-    socket.emit('message', JSON.stringify({
-      type: 'run.end',
-      runId: repairDispatch.runId,
-      conversationId: conv.id,
-      stopReason: 'end_turn',
-    }));
-
-    const repairRun = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
-      .get(repairDispatch.runId) as { error: string | null; stopReason: string | null };
-    expect(repairRun.error).toBeNull();
-    expect(repairRun.stopReason).toBe('end_turn');
+    const fallbackRow = db.prepare(
+      `SELECT content, message_source as messageSource
+       FROM channel_messages
+       WHERE run_id = ?
+       ORDER BY created_at DESC, seq DESC
+       LIMIT 1`,
+    ).get('run-1') as { content: string; messageSource: string | null };
+    expect(fallbackRow.content).toBe('这是上一轮已经写好的结论，请把它发送给当前会话用户。');
+    expect(fallbackRow.messageSource).toBe('delta_fallback');
     expect(events.some((event) => event.type === 'error')).toBe(false);
     expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
+    expect(dispatches).toHaveLength(0);
   });
 
   it('私聊 run 已绑定 send_message 时应允许正常完成', () => {
@@ -279,7 +248,7 @@ describe('nodeWsHandler', () => {
     expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
   });
 
-  it('已发送 final 后若继续输出实质性 delta 且没有更新的 final，应触发 trailing-final repair', async () => {
+  it('已发送 final 后若继续输出实质性 delta，应追加 delta_fallback 消息', () => {
     const agent = manager.createAgent({
       name: 'TrailingFinalBob',
       agentType: 'claude_acp',
@@ -343,52 +312,21 @@ describe('nodeWsHandler', () => {
       conversationId: conv.id,
       stopReason: 'end_turn',
     }));
-    await expect.poll(() => dispatches.length, { timeout: 5000 }).toBeGreaterThan(0);
-
     const originalRun = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
       .get('run-trailing-final-1') as { error: string | null; stopReason: string | null };
     expect(originalRun.error).toBeNull();
     expect(originalRun.stopReason).toBe('end_turn');
-    expect(events).toContainEqual({
-      type: 'conversation.status',
-      conversationId: conv.id,
-      status: 'recovering',
-    });
-
-    const repairDispatch = dispatches[0];
-    if (!repairDispatch || repairDispatch.type !== 'run.dispatch') throw new Error('missing repair dispatch');
-    expect(repairDispatch.prompt).toContain('[System: Repair the previous run\'s final reply with the additional trailing output.]');
-    expect(repairDispatch.prompt).toContain('mcp__chat__send_message(content="...", kind="final")');
-    expect(repairDispatch.prompt).toContain('1. base - 基础环境');
-
-    db.prepare(
-      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
-       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      'msg-trailing-final-repair-1',
-      `dm:${agent.agentId}`,
-      agent.agentId,
-      agent.name,
-      'dm:@oldpan',
-      '1. base - 基础环境\n2. develop - 开发环境\n3. vllm - 推理环境',
-      2,
-      Date.now(),
-      repairDispatch.runId,
-      'final',
-    );
-
-    socket.emit('message', JSON.stringify({
-      type: 'run.end',
-      runId: repairDispatch.runId,
-      conversationId: conv.id,
-      stopReason: 'end_turn',
-    }));
-
-    const repairRun = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
-      .get(repairDispatch.runId) as { error: string | null; stopReason: string | null };
-    expect(repairRun.error).toBeNull();
-    expect(repairRun.stopReason).toBe('end_turn');
+    const fallbackRow = db.prepare(
+      `SELECT content, message_source as messageSource
+       FROM channel_messages
+       WHERE run_id = ? AND message_source = 'delta_fallback'
+       ORDER BY created_at DESC, seq DESC
+       LIMIT 1`,
+    ).get('run-trailing-final-1') as { content: string; messageSource: string | null } | undefined;
+    expect(fallbackRow?.content).toBe('1. base - 基础环境\n2. develop - 开发环境\n3. vllm - 推理环境');
+    expect(fallbackRow?.messageSource).toBe('delta_fallback');
     expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
+    expect(dispatches).toHaveLength(0);
   });
 
   it('已发送 final 后收到 cancel stopReason 时应按成功收口，不触发 repair', () => {
@@ -515,7 +453,7 @@ describe('nodeWsHandler', () => {
     expect(dispatches).toHaveLength(0);
   });
 
-  it('仅发送 progress 消息且后续仍有大量输出时应先 repair，repair 失败后再按失败收口', async () => {
+  it('仅发送 progress 消息且后续仍有大量输出时应追加 delta_fallback 消息并正常收口', () => {
     const agent = manager.createAgent({
       name: 'Charlie',
       agentType: 'claude_acp',
@@ -568,30 +506,25 @@ describe('nodeWsHandler', () => {
       conversationId: conv.id,
       stopReason: 'end_turn',
     }));
-    await expect.poll(() => dispatches.length, { timeout: 5000 }).toBeGreaterThan(0);
-
     const originalRun = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
       .get('run-3') as { error: string | null; stopReason: string | null };
     expect(originalRun.error).toBeNull();
     expect(originalRun.stopReason).toBe('end_turn');
-    const repairDispatch = dispatches[0];
-    if (!repairDispatch || repairDispatch.type !== 'run.dispatch') throw new Error('missing repair dispatch');
-    expect(repairDispatch.prompt).toContain('Agent did not send a final reply via send_message');
-
-    socket.emit('message', JSON.stringify({
-      type: 'run.end',
-      runId: repairDispatch.runId,
-      conversationId: conv.id,
-      stopReason: 'end_turn',
-    }));
-
-    const runRow = db.prepare('SELECT error FROM runs WHERE run_id = ?')
-      .get(repairDispatch.runId) as { error: string | null };
-    expect(runRow.error).toBe('Agent did not reply via send_message');
-    expect(events).toContainEqual({
-      type: 'error',
-      message: 'Agent did not reply via send_message',
+    const rows = db.prepare(
+      `SELECT content, message_kind as messageKind, message_source as messageSource
+       FROM channel_messages
+       WHERE run_id = ?
+       ORDER BY created_at ASC, seq ASC`,
+    ).all('run-3') as Array<{ content: string; messageKind: string | null; messageSource: string | null }>;
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ content: 'I am checking now.', messageKind: 'progress', messageSource: null });
+    expect(rows[1]).toMatchObject({
+      content: 'The environment does not have torch installed. You can install it with pip install torch in the develop environment.',
+      messageKind: null,
+      messageSource: 'delta_fallback',
     });
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(dispatches).toHaveLength(0);
   });
 
   it('旧式未标注 kind 的单条回复若与后续输出只是重复，不应误判缺少 final reply', () => {
@@ -651,12 +584,16 @@ describe('nodeWsHandler', () => {
 
     const runRow = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
       .get('run-legacy-1') as { error: string | null; stopReason: string | null };
+    const rows = db.prepare(
+      `SELECT COUNT(*) as count FROM channel_messages WHERE run_id = ?`,
+    ).get('run-legacy-1') as { count: number };
     expect(runRow.error).toBeNull();
     expect(runRow.stopReason).toBe('end_turn');
+    expect(rows.count).toBe(1);
     expect(events.some((event) => event.type === 'error')).toBe(false);
   });
 
-  it('channel branch run 未通过 send_message 回复时应触发静默 repair', async () => {
+  it('channel branch run 未通过 send_message 回复时应追加频道 delta_fallback 消息', () => {
     const agent = manager.createAgent({
       name: 'ChannelBob',
       agentType: 'claude_acp',
@@ -704,43 +641,26 @@ describe('nodeWsHandler', () => {
       stopReason: 'end_turn',
     }));
 
-    await expect.poll(() => dispatches.length, { timeout: 5000 }).toBeGreaterThan(0);
-
-    const repairDispatch = dispatches[0];
-    if (!repairDispatch || repairDispatch.type !== 'run.dispatch') throw new Error('missing repair dispatch');
-    expect(repairDispatch.prompt).toContain('[System: Repair the previous run\'s reply contract violation.]');
-    expect(repairDispatch.prompt).toContain('mcp__chat__send_message(content="...", kind="final")');
-    expect(repairDispatch.prompt).toContain('这是频道中的最终回答');
-
-    db.prepare(
-      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
-       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(
-      'msg-channel-repair-1',
-      'default',
-      agent.agentId,
-      agent.name,
-      '#default',
-      '这是频道中的最终回答，请把它发回 #default。',
-      1,
-      Date.now(),
-      repairDispatch.runId,
-      null,
-      'final',
-    );
-
-    socket.emit('message', JSON.stringify({
-      type: 'run.end',
-      runId: repairDispatch.runId,
-      conversationId: conv.id,
-      stopReason: 'end_turn',
-    }));
-
-    const repairRun = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
-      .get(repairDispatch.runId) as { error: string | null; stopReason: string | null };
-    expect(repairRun.error).toBeNull();
-    expect(repairRun.stopReason).toBe('end_turn');
+    const fallbackRow = db.prepare(
+      `SELECT channel_id as channelId, target, content, message_source as messageSource
+       FROM channel_messages
+       WHERE run_id = ? AND message_source = 'delta_fallback'
+       ORDER BY created_at DESC, seq DESC
+       LIMIT 1`,
+    ).get('run-channel-repair-1') as {
+      channelId: string;
+      target: string;
+      content: string;
+      messageSource: string | null;
+    } | undefined;
+    expect(fallbackRow).toMatchObject({
+      channelId: 'default',
+      target: '#default',
+      content: '这是频道中的最终回答，请把它发回 #default。',
+      messageSource: 'delta_fallback',
+    });
     expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
+    expect(dispatches).toHaveLength(0);
   });
 
   it('run.event 中的 recovering 状态应更新会话状态', () => {

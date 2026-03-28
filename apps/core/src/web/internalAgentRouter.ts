@@ -132,9 +132,22 @@ export function registerInternalAgentRoutes(
     }
 
     db.prepare(
-      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
-       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)`,
-    ).run(messageId, channelId, agentId, agent.name, resolvedTarget, normalizedContent, seq, now, runId, threadRootId, kind ?? null);
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind, message_source)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      messageId,
+      channelId,
+      agentId,
+      agent.name,
+      resolvedTarget,
+      normalizedContent,
+      seq,
+      now,
+      runId,
+      threadRootId,
+      kind ?? null,
+      'agent_send',
+    );
 
     const channelMessageEvent: ServerEvent = {
       type: 'channel.message',

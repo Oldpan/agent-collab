@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 27;
+const LATEST_VERSION = 28;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -557,5 +557,13 @@ export function migrate(db: Db): void {
       db.exec(`ALTER TABLE channel_messages ADD COLUMN message_kind TEXT;`);
     }
     db.exec(`UPDATE schema_version SET version = 27;`);
+  }
+
+  if (current < 28) {
+    const channelMessageCols = db.prepare("PRAGMA table_info('channel_messages')").all() as Array<{ name: string }>;
+    if (!channelMessageCols.some((c) => c.name === 'message_source')) {
+      db.exec(`ALTER TABLE channel_messages ADD COLUMN message_source TEXT;`);
+    }
+    db.exec(`UPDATE schema_version SET version = 28;`);
   }
 }

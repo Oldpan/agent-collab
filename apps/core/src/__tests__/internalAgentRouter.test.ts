@@ -87,11 +87,12 @@ describe('internalAgentRouter', () => {
     expect(body.kind).toBe('final');
 
     const row = db.prepare(
-      'SELECT run_id as runId, channel_id as channelId, message_kind as messageKind FROM channel_messages WHERE sender_id = ? ORDER BY created_at DESC LIMIT 1',
-    ).get(agent.agentId) as { runId: string | null; channelId: string; messageKind: string | null };
+      'SELECT run_id as runId, channel_id as channelId, message_kind as messageKind, message_source as messageSource FROM channel_messages WHERE sender_id = ? ORDER BY created_at DESC LIMIT 1',
+    ).get(agent.agentId) as { runId: string | null; channelId: string; messageKind: string | null; messageSource: string | null };
     expect(row.runId).toBe('run-router-1');
     expect(row.channelId).toBe(`dm:${agent.agentId}`);
     expect(row.messageKind).toBe('final');
+    expect(row.messageSource).toBe('agent_send');
     expect(dispatches).toHaveLength(0);
   });
 
