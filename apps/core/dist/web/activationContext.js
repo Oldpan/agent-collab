@@ -1,4 +1,5 @@
 import { getAgentMessageCheckpoint } from './messageCheckpoints.js';
+import { listTargetParticipants } from './targetParticipants.js';
 export function buildTargetActivationContext(db, params) {
     const recentLimit = Math.max(1, params.recentLimit ?? 8);
     const normalizedThreadRootId = params.threadRootId ?? null;
@@ -28,10 +29,31 @@ export function buildTargetActivationContext(db, params) {
        ORDER BY created_at ASC, seq ASC
        LIMIT 1`).get(params.channelId, normalizedThreadRootId)
         : undefined;
+    const participants = listTargetParticipants(db, {
+        channelId: params.channelId,
+        threadRootId: normalizedThreadRootId,
+    });
+    const openTasks = db.prepare(`SELECT task_number as taskNumber,
+            title,
+            status,
+            claimed_by_name as claimedByName
+     FROM tasks
+     WHERE channel_id = ? AND status != 'done'
+     ORDER BY
+       CASE status
+         WHEN 'in_progress' THEN 0
+         WHEN 'in_review' THEN 1
+         WHEN 'todo' THEN 2
+         ELSE 3
+       END ASC,
+       task_number ASC
+     LIMIT 5`).all(params.channelId);
     return {
         replyTarget: params.replyTarget,
         recentMessages,
         unreadCount: unreadRow.count,
+        participants,
+        openTasks,
         ...(rootMessage ? { rootMessage } : {}),
     };
 }

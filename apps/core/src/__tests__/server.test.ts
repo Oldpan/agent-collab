@@ -191,6 +191,7 @@ beforeAll(async () => {
         name: body.name,
         workspacePath: body.workspacePath,
         description: body.description,
+        collaborationMode: body.collaborationMode,
       });
       for (const agentId of body.agentIds ?? []) {
         if (manager.getAgent(agentId)) manager.joinChannel(agentId, channel.channelId);
@@ -672,7 +673,7 @@ describe('REST API', () => {
        LIMIT 1`,
     ).get(sessionRow.sessionKey) as { promptText: string } | undefined;
 
-    expect(runRow?.promptText).toContain(`[System: Your message in #default received a reply from User.]`);
+    expect(runRow?.promptText).toContain(`[System: Your collaborative thread in #default received a reply from User.]`);
     expect(runRow?.promptText).toContain(`target: #default:${rootMessageId.slice(0, 8)}`);
     expect(runRow?.promptText).toContain('我在 thread 里回复你');
     expect(runRow?.promptText).not.toContain('Call check_messages to read unread messages');

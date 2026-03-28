@@ -8,6 +8,7 @@ import {
   getAgentMessageCheckpoint,
   setAgentMessageCheckpoint,
 } from './messageCheckpoints.js';
+import { upsertTargetParticipant } from './targetParticipants.js';
 
 type MessageRow = {
   messageId: string;
@@ -134,6 +135,16 @@ export function registerInternalAgentRoutes(
       kind ?? null,
       'agent_send',
     );
+
+    if (!channelId.startsWith('dm:')) {
+      upsertTargetParticipant(db, {
+        agentId,
+        channelId,
+        threadRootId,
+        role: threadRootId ? 'participant' : 'participant',
+        lastActiveAt: now,
+      });
+    }
 
     const channelMessageEvent: ServerEvent = {
       type: 'channel.message',

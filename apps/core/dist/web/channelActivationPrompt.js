@@ -1,7 +1,9 @@
 export function buildChannelActivationPrompt(params) {
     const reasonText = params.reason === 'mention'
         ? `You were @mentioned in #${params.channelName} by ${params.senderName}.`
-        : `Your message in #${params.channelName} received a reply from ${params.senderName}.`;
+        : params.reason === 'thread_reply'
+            ? `Your collaborative thread in #${params.channelName} received a reply from ${params.senderName}.`
+            : `There is new channel activity in #${params.channelName} from ${params.senderName}.`;
     const replyTarget = params.replyTarget ?? params.target;
     const lines = [
         `[System: ${reasonText}]`,
@@ -37,6 +39,18 @@ export function buildChannelActivationContextText(params) {
     if ((params.unreadCount ?? 0) > 0) {
         const label = params.unreadCount === 1 ? '1 older unread message' : `${params.unreadCount} older unread messages`;
         parts.push(`[Unread summary]\n${label} exist on this exact target before the triggering message. Use read_history(channel="${params.target}") if you need them in full.`);
+    }
+    if (params.participants && params.participants.length > 0) {
+        parts.push(`[Active participants on this target]\n${params.participants.map((participant) => {
+            const role = participant.role === 'owner' ? 'owner' : 'participant';
+            return `@${participant.name} (${role})`;
+        }).join('\n')}`);
+    }
+    if (params.openTasks && params.openTasks.length > 0) {
+        parts.push(`[Task board summary]\n${params.openTasks.map((task) => {
+            const assignee = task.claimedByName ? ` @${task.claimedByName}` : ' unassigned';
+            return `#${task.taskNumber} [${task.status}]${assignee} — ${task.title}`;
+        }).join('\n')}`);
     }
     return parts.join('\n\n');
 }

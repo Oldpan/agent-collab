@@ -1,5 +1,6 @@
 import type { Db } from '@agent-collab/runtime-acp';
 import { getAgentMessageCheckpoint } from './messageCheckpoints.js';
+import { listTargetParticipants, type TargetParticipant } from './targetParticipants.js';
 
 export type ActivationContextMessage = {
   messageId: string;
@@ -14,6 +15,8 @@ export type TargetActivationContext = {
   replyTarget: string;
   recentMessages: ActivationContextMessage[];
   unreadCount: number;
+  participants: TargetParticipant[];
+  openTasks: Array<{ taskNumber: number; title: string; status: string; claimedByName: string | null }>;
   rootMessage?: ActivationContextMessage;
 };
 
@@ -68,10 +71,40 @@ export function buildTargetActivationContext(
     ).get(params.channelId, normalizedThreadRootId) as ActivationContextMessage | undefined
     : undefined;
 
+  const participants = listTargetParticipants(db, {
+    channelId: params.channelId,
+    threadRootId: normalizedThreadRootId,
+  });
+
+  const openTasks = db.prepare(
+    `SELECT task_number as taskNumber,
+            title,
+            status,
+            claimed_by_name as claimedByName
+     FROM tasks
+     WHERE channel_id = ? AND status != 'done'
+     ORDER BY
+       CASE status
+         WHEN 'in_progress' THEN 0
+         WHEN 'in_review' THEN 1
+         WHEN 'todo' THEN 2
+         ELSE 3
+       END ASC,
+       task_number ASC
+     LIMIT 5`,
+  ).all(params.channelId) as Array<{
+    taskNumber: number;
+    title: string;
+    status: string;
+    claimedByName: string | null;
+  }>;
+
   return {
     replyTarget: params.replyTarget,
     recentMessages,
     unreadCount: unreadRow.count,
+    participants,
+    openTasks,
     ...(rootMessage ? { rootMessage } : {}),
   };
 }

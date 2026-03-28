@@ -20,7 +20,7 @@ describe('migrations', () => {
     it('schema_version 应至少包含最新迁移所需版本', () => {
         const db = createTestDb();
         const row = db.prepare('SELECT version FROM schema_version').get();
-        expect(row.version).toBeGreaterThanOrEqual(28);
+        expect(row.version).toBeGreaterThanOrEqual(31);
         db.close();
     });
     it('nodes 表应包含 display_name, env_var_keys, provisioned_at 列', () => {
@@ -74,6 +74,15 @@ describe('migrations', () => {
         expect(tables.map((t) => t.name)).toContain('agent_channel_memberships');
         const channelCols = db.prepare("PRAGMA table_info('channels')").all();
         expect(channelCols.map((c) => c.name)).toContain('description');
+        expect(channelCols.map((c) => c.name)).toContain('collaboration_mode');
+        db.close();
+    });
+    it('target_participants 表应存在', () => {
+        const db = createTestDb();
+        const tables = db
+            .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+            .all();
+        expect(tables.map((t) => t.name)).toContain('target_participants');
         db.close();
     });
     it('sessions/bindings/runs/events 等表应存在', () => {

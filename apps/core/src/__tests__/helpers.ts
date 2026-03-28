@@ -39,6 +39,21 @@ export function createTestDb(): Db {
   if (!queueCols.some((col) => col.name === 'activation_context_text')) {
     db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN activation_context_text TEXT;`);
   }
+  const channelCols = db.prepare("PRAGMA table_info('channels')").all() as Array<{ name: string }>;
+  if (!channelCols.some((col) => col.name === 'collaboration_mode')) {
+    db.exec(`ALTER TABLE channels ADD COLUMN collaboration_mode TEXT NOT NULL DEFAULT 'mention_only';`);
+  }
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS target_participants (
+      agent_id       TEXT NOT NULL,
+      channel_id     TEXT NOT NULL,
+      thread_root_id TEXT NOT NULL DEFAULT '',
+      role           TEXT NOT NULL DEFAULT 'participant',
+      joined_at      INTEGER NOT NULL,
+      last_active_at INTEGER NOT NULL,
+      PRIMARY KEY (agent_id, channel_id, thread_root_id)
+    );
+  `);
   const channelMessageCols = db.prepare("PRAGMA table_info('channel_messages')").all() as Array<{ name: string }>;
   if (!channelMessageCols.some((col) => col.name === 'run_id')) {
     db.exec(`ALTER TABLE channel_messages ADD COLUMN run_id TEXT;`);

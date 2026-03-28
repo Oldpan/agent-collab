@@ -361,17 +361,17 @@ export function Sidebar({
           })}
           {/* Channels section */}
           <div className="mt-2 w-full">
-            <div className="flex items-center justify-between px-0.5 py-1">
-              <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">
+            <div className="flex items-center justify-between px-0.5 py-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-800">
                 Channels
               </span>
               <button
                 type="button"
-                className="rounded-sm p-0.5 hover:bg-[#ffe27a] cursor-pointer"
+                className="rounded-sm border-2 border-zinc-900 bg-[#fff9d8] p-1 text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff1a9] cursor-pointer transition-colors"
                 title="Create channel"
                 onClick={() => { setShowCreateChannel(true); }}
               >
-                <PlusIcon className="size-3 text-zinc-500" />
+                <PlusIcon className="size-3" />
               </button>
             </div>
 

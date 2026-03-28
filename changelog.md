@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-03-29 (target-first channel collaboration v1)
+
+- Channel 新增 `collaboration_mode`（默认 `mention_only`，可选 `subscribed_agents`），为主频道协同触发提供明确模式开关。
+- 新增 `target_participants` 持久化表，按 `channel + thread` 跟踪 owner/participant，thread reply 不再只依赖 root owner；当前 target 上已有参与 agent 时，会一起被唤醒协作。
+- Channel/thread 激活上下文升级为协作摘要：fresh ACP session 现在可拿到同 target recent messages、thread root、unread summary、active participants 和 task board summary。
+- Agent 在 channel/thread 上发送正式消息后会自动登记为该 target 的 participant，`clear channel chat` 和 agent 删除也会同步清理这层协作状态。
+- DM 逻辑保持不变；正式消息仍优先走 `send_message`，`delta_fallback` 继续只做 run 结束时的兜底。
+
 ## 2026-03-28 (queued activation context persistence)
 
 - 修复了 channel/thread 激活上下文在排队后丢失的问题：`conversation_prompt_queue` 现在会持久化 `activation_context_text`。

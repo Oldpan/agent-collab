@@ -84,7 +84,13 @@ export type ChannelMessage = {
   replyCount?: number;
 };
 
-export async function createChannel(req: { name: string; workspacePath?: string; description?: string; agentIds?: string[] }): Promise<ChannelInfo> {
+export async function createChannel(req: {
+  name: string;
+  workspacePath?: string;
+  description?: string;
+  collaborationMode?: 'mention_only' | 'subscribed_agents';
+  agentIds?: string[];
+}): Promise<ChannelInfo> {
   const res = await fetch(`${API_BASE}/channels`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -116,7 +122,10 @@ export async function getUnreadSummary(req: UnreadSummaryRequest): Promise<Unrea
   return res.json();
 }
 
-export async function updateChannel(channelId: string, req: { description?: string }): Promise<ChannelInfo> {
+export async function updateChannel(channelId: string, req: {
+  description?: string;
+  collaborationMode?: 'mention_only' | 'subscribed_agents';
+}): Promise<ChannelInfo> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },

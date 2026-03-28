@@ -1,6 +1,7 @@
 export type AgentType = 'claude_acp' | 'codex_acp';
 export type ConversationStatus = 'idle' | 'queued' | 'active' | 'recovering' | 'awaiting_approval' | 'failed';
 export type ThreadKind = 'direct' | 'branch';
+export type ChannelCollaborationMode = 'mention_only' | 'subscribed_agents';
 export type AgentPermissionKind = 'read' | 'edit' | 'delete' | 'move' | 'search' | 'execute' | 'think' | 'fetch' | 'switch_mode' | 'other';
 export type RuntimeDispatchMode = 'cold_start' | 'resume';
 export type RuntimeDriverDefinition = {
@@ -354,6 +355,7 @@ export type ChannelInfo = {
     name: string;
     workspacePath: string | null;
     description?: string;
+    collaborationMode?: ChannelCollaborationMode;
     createdAt: number;
     updatedAt: number;
 };
@@ -361,10 +363,12 @@ export type CreateChannelRequest = {
     name: string;
     workspacePath?: string;
     description?: string;
+    collaborationMode?: ChannelCollaborationMode;
     agentIds?: string[];
 };
 export type UpdateChannelRequest = {
     description?: string;
+    collaborationMode?: ChannelCollaborationMode;
 };
 export type TaskInfo = {
     taskId: string;

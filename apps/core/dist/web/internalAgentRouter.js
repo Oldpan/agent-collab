@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { checkpointThreadKey, getAgentMessageCheckpoint, setAgentMessageCheckpoint, } from './messageCheckpoints.js';
+import { upsertTargetParticipant } from './targetParticipants.js';
 /**
  * Registers internal agent API routes — used by channel-bridge MCP server.
  *
@@ -60,6 +61,15 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
         const threadRootId = resolveThreadRootId(resolvedTarget);
         db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind, message_source)
        VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?)`).run(messageId, channelId, agentId, agent.name, resolvedTarget, normalizedContent, seq, now, runId, threadRootId, kind ?? null, 'agent_send');
+        if (!channelId.startsWith('dm:')) {
+            upsertTargetParticipant(db, {
+                agentId,
+                channelId,
+                threadRootId,
+                role: threadRootId ? 'participant' : 'participant',
+                lastActiveAt: now,
+            });
+        }
         const channelMessageEvent = {
             type: 'channel.message',
             message: {

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { log, createSession, upsertBinding, } from '@agent-collab/runtime-acp';
 import { getRuntimeDriver } from '@agent-collab/protocol';
 import { ExecutionDispatcher } from '../execution/executionDispatcher.js';
+import { deleteTargetParticipantsForAgent, deleteTargetParticipantsForChannel } from './targetParticipants.js';
 function slugifyAgentName(name) {
     return name
         .toLowerCase()
@@ -155,6 +156,7 @@ export class ConversationManager {
         this.db.prepare(`DELETE FROM channel_messages WHERE channel_id = ?`).run(`dm:${agentId}`);
         this.db.prepare(`DELETE FROM agent_message_checkpoints WHERE agent_id = ?`).run(agentId);
         this.db.prepare(`DELETE FROM agent_channel_memberships WHERE agent_id = ?`).run(agentId);
+        deleteTargetParticipantsForAgent(this.db, agentId);
         // Finally delete the agent
         this.db.prepare(`DELETE FROM agents WHERE agent_id = ?`).run(agentId);
         return { deletedConversations: rows.length };
@@ -446,15 +448,17 @@ export class ConversationManager {
     createChannel(params) {
         const channelId = params.name === 'default' ? 'default' : randomUUID();
         const now = Date.now();
+        const collaborationMode = params.collaborationMode ?? 'mention_only';
         this.db
-            .prepare(`INSERT INTO channels(channel_id, name, workspace_path, description, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?)`)
-            .run(channelId, params.name, params.workspacePath ?? null, params.description ?? null, now, now);
+            .prepare(`INSERT INTO channels(channel_id, name, workspace_path, description, collaboration_mode, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?)`)
+            .run(channelId, params.name, params.workspacePath ?? null, params.description ?? null, collaborationMode, now, now);
         return {
             channelId,
             name: params.name,
             workspacePath: params.workspacePath ?? null,
             description: params.description,
+            collaborationMode,
             createdAt: now,
             updatedAt: now,
         };
@@ -464,8 +468,9 @@ export class ConversationManager {
         if (!existing)
             return null;
         const now = Date.now();
-        this.db.prepare(`UPDATE channels SET description = ?, updated_at = ? WHERE channel_id = ?`).run(req.description ?? existing.description ?? null, now, channelId);
-        return { ...existing, description: req.description ?? existing.description, updatedAt: now };
+        const collaborationMode = req.collaborationMode ?? existing.collaborationMode ?? 'mention_only';
+        this.db.prepare(`UPDATE channels SET description = ?, collaboration_mode = ?, updated_at = ? WHERE channel_id = ?`).run(req.description ?? existing.description ?? null, collaborationMode, now, channelId);
+        return { ...existing, description: req.description ?? existing.description, collaborationMode, updatedAt: now };
     }
     clearChannelChat(channelId) {
         const rows = this.db.prepare(`SELECT id, channel_id as channelId, agent_type as agentType, workspace_path as workspacePath,
@@ -476,6 +481,7 @@ export class ConversationManager {
         const now = Date.now();
         this.db.prepare(`DELETE FROM channel_messages WHERE channel_id = ?`).run(channelId);
         this.db.prepare(`DELETE FROM agent_message_checkpoints WHERE channel_id = ?`).run(channelId);
+        deleteTargetParticipantsForChannel(this.db, channelId);
         for (const row of rows) {
             const runIds = this.db.prepare(`SELECT run_id as runId FROM runs WHERE session_key = ?`).all(row.sessionKey);
             this.db.prepare('DELETE FROM conversation_prompt_queue WHERE conversation_id = ?').run(row.id);
@@ -503,14 +509,16 @@ export class ConversationManager {
     listChannels() {
         return this.db
             .prepare(`SELECT channel_id as channelId, name, workspace_path as workspacePath,
-                description, created_at as createdAt, updated_at as updatedAt
+                description, collaboration_mode as collaborationMode,
+                created_at as createdAt, updated_at as updatedAt
          FROM channels ORDER BY created_at ASC`)
             .all();
     }
     getChannel(channelId) {
         const row = this.db
             .prepare(`SELECT channel_id as channelId, name, workspace_path as workspacePath,
-                description, created_at as createdAt, updated_at as updatedAt
+                description, collaboration_mode as collaborationMode,
+                created_at as createdAt, updated_at as updatedAt
          FROM channels WHERE channel_id = ?`)
             .get(channelId);
         return row ?? null;

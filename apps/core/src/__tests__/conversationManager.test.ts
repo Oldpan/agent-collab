@@ -85,6 +85,30 @@ describe('ConversationManager', () => {
     });
   });
 
+  describe('channels', () => {
+    it('createChannel 应保存 collaborationMode，并默认 mention_only', () => {
+      const defaultChannel = manager.createChannel({ name: 'ops-default' });
+      const subscribedChannel = manager.createChannel({
+        name: 'ops-subscribed',
+        collaborationMode: 'subscribed_agents',
+      });
+
+      expect(defaultChannel.collaborationMode).toBe('mention_only');
+      expect(subscribedChannel.collaborationMode).toBe('subscribed_agents');
+      expect(manager.getChannel(subscribedChannel.channelId)?.collaborationMode).toBe('subscribed_agents');
+    });
+
+    it('updateChannel 应支持更新 collaborationMode', () => {
+      const channel = manager.createChannel({ name: 'ops-update' });
+      const updated = manager.updateChannel(channel.channelId, {
+        collaborationMode: 'subscribed_agents',
+      });
+
+      expect(updated?.collaborationMode).toBe('subscribed_agents');
+      expect(manager.getChannel(channel.channelId)?.collaborationMode).toBe('subscribed_agents');
+    });
+  });
+
   describe('listConversations', () => {
     it('空列表时返回空数组', () => {
       expect(manager.listConversations()).toEqual([]);
