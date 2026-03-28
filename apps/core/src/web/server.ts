@@ -16,6 +16,7 @@ import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/a
 import { findMentionedAgents } from './channelMentions.js';
 import { buildChannelActivationPrompt } from './channelActivationPrompt.js';
 import { appendChannelResetMarkers } from './channelMemoryNotes.js';
+import { buildTargetActivationContext } from './activationContext.js';
 import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
 
 export async function startServer(params: {
@@ -677,14 +678,25 @@ export async function startServer(params: {
         if (rootMsg?.sender_type === 'agent') {
           const conv = conversationManager.openAgentChannelThread(rootMsg.sender_id, req.params.id, threadRootId);
           if (conv) {
+            const activationContext = buildTargetActivationContext(db, {
+              agentId: rootMsg.sender_id,
+              channelId: req.params.id,
+              replyTarget: conv.replyTarget ?? `#${channel.name}:${threadRootId}`,
+              triggerSeq: seq,
+              threadRootId,
+            });
             conversationManager.submitPrompt(
               conv.id,
               buildChannelActivationPrompt({
                 channelName: channel.name,
                 target: `#${channel.name}:${threadRootId}`,
+                replyTarget: activationContext.replyTarget,
                 senderName,
                 content,
                 reason: 'thread_reply',
+                recentMessages: activationContext.recentMessages,
+                rootMessage: activationContext.rootMessage,
+                unreadCount: activationContext.unreadCount,
               }),
               { recordAsUserMessage: false },
             ).then(() => {
@@ -702,6 +714,13 @@ export async function startServer(params: {
           const conv = conversationManager.openAgentChannelThread(agent.agentId, req.params.id, threadRootId ?? null);
           if (conv) {
             const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
+            const activationContext = buildTargetActivationContext(db, {
+              agentId: agent.agentId,
+              channelId: req.params.id,
+              replyTarget: conv.replyTarget ?? historyTarget,
+              triggerSeq: seq,
+              threadRootId: threadRootId ?? null,
+            });
             broadcastToChannel(req.params.id, {
               type: 'channel.notice',
               notice: {
@@ -714,9 +733,13 @@ export async function startServer(params: {
               buildChannelActivationPrompt({
                 channelName: channel.name,
                 target: historyTarget,
+                replyTarget: activationContext.replyTarget,
                 senderName,
                 content,
                 reason: 'mention',
+                recentMessages: activationContext.recentMessages,
+                rootMessage: activationContext.rootMessage,
+                unreadCount: activationContext.unreadCount,
               }),
               { recordAsUserMessage: false },
             ).then(() => {

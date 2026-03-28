@@ -58,18 +58,6 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
         const seq = nextSeq(db, channelId);
         const runId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
         const threadRootId = resolveThreadRootId(resolvedTarget);
-        const priorFinals = runId ? listRunFinalMessages(db, runId) : [];
-        const hasPriorFinal = priorFinals.length > 0;
-        if (hasPriorFinal) {
-            const allowAdditionalFinal = kind === 'final' &&
-                priorFinals.every((row) => row.target === resolvedTarget);
-            if (!allowAdditionalFinal) {
-                reply.code(400);
-                return {
-                    error: 'run already sent a final reply; no further messages are allowed for this run',
-                };
-            }
-        }
         db.prepare(`INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind, message_source)
        VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?)`).run(messageId, channelId, agentId, agent.name, resolvedTarget, normalizedContent, seq, now, runId, threadRootId, kind ?? null, 'agent_send');
         const channelMessageEvent = {
@@ -520,7 +508,7 @@ function resolveChannelFromTarget(target, db) {
     return null;
 }
 function resolveDefaultReplyTarget(db, conversationId, humanUserName) {
-    const row = db.prepare(`SELECT c.id as conversationId, c.channel_id as channelId, c.thread_kind as threadKind,
+    const row = db.prepare(`SELECT c.id as conversationId, c.channel_id as channelId, c.reply_target as replyTarget, c.thread_kind as threadKind,
             c.is_primary_thread as isPrimaryThread, c.thread_root_id as threadRootId,
             ch.name as channelName
      FROM conversations c
@@ -528,6 +516,8 @@ function resolveDefaultReplyTarget(db, conversationId, humanUserName) {
      WHERE c.id = ?`).get(conversationId);
     if (!row)
         return null;
+    if (row.replyTarget?.trim())
+        return row.replyTarget;
     if (row.threadKind === 'direct') {
         return row.isPrimaryThread
             ? `dm:@${humanUserName}`
@@ -577,14 +567,6 @@ function findActiveConversationRunId(db, conversationId) {
        LIMIT 1`)
         .get(conversationId);
     return row?.runId ?? null;
-}
-function listRunFinalMessages(db, runId) {
-    return db.prepare(`SELECT target
-     FROM channel_messages
-     WHERE run_id = ?
-       AND sender_type = 'agent'
-       AND message_kind = 'final'
-     ORDER BY created_at ASC, seq ASC`).all(runId);
 }
 function nextTaskNumber(db, channelId) {
     const row = db

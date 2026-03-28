@@ -78,6 +78,7 @@ export class ConversationManager {
   }
 
   start(): void {
+    this.backfillConversationReplyTargets();
     log.info('ConversationManager ready');
   }
 
@@ -269,6 +270,13 @@ export class ConversationManager {
     const threadKind: ThreadKind = params.threadKind ?? 'direct';
     const isPrimaryThread = params.isPrimaryThread ?? false;
     const threadRootId = params.threadRootId ?? null;
+    const replyTarget = this.computeReplyTarget({
+      conversationId: id,
+      channelId,
+      threadKind,
+      isPrimaryThread,
+      threadRootId,
+    });
     const envVarsJson = (() => {
       const ev = params.envVars ?? agent?.envVars;
       return ev && Object.keys(ev).length > 0 ? JSON.stringify(ev) : null;
@@ -298,14 +306,15 @@ export class ConversationManager {
     // Create conversations row
     this.db
       .prepare(
-        `INSERT INTO conversations(id, channel_id, title, agent_type, workspace_path, session_key, status, thread_kind, is_primary_thread, thread_root_id, env_vars, node_id, agent_id, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO conversations(id, channel_id, reply_target, title, agent_type, workspace_path, session_key, status, thread_kind, is_primary_thread, thread_root_id, env_vars, node_id, agent_id, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, channelId, title, agentType, workspacePath, sessionKey, threadKind, isPrimaryThread ? 1 : 0, threadRootId, envVarsJson, nodeId, params.agentId ?? null, now, now);
+      .run(id, channelId, replyTarget, title, agentType, workspacePath, sessionKey, threadKind, isPrimaryThread ? 1 : 0, threadRootId, envVarsJson, nodeId, params.agentId ?? null, now, now);
 
     return {
       id,
       channelId,
+      replyTarget,
       title,
       agentType,
       threadKind,
@@ -326,6 +335,7 @@ export class ConversationManager {
 
     const existing = this.db.prepare(
       `SELECT id, channel_id as channelId, title, agent_type as agentType,
+              reply_target as replyTarget,
               thread_kind as threadKind, is_primary_thread as isPrimaryThread,
               thread_root_id as threadRootId,
               workspace_path as workspacePath, status, node_id as nodeId,
@@ -341,6 +351,7 @@ export class ConversationManager {
 
     const fallback = this.db.prepare(
       `SELECT id, channel_id as channelId, title, agent_type as agentType,
+              reply_target as replyTarget,
               thread_kind as threadKind, is_primary_thread as isPrimaryThread,
               thread_root_id as threadRootId,
               workspace_path as workspacePath, status, node_id as nodeId,
@@ -379,6 +390,7 @@ export class ConversationManager {
     const existing = (normalizedThreadRootId
       ? this.db.prepare(
         `SELECT id, channel_id as channelId, title, agent_type as agentType,
+                reply_target as replyTarget,
                 thread_kind as threadKind, is_primary_thread as isPrimaryThread,
                 thread_root_id as threadRootId,
                 workspace_path as workspacePath, status, node_id as nodeId,
@@ -390,6 +402,7 @@ export class ConversationManager {
       ).get(agentId, channelId, normalizedThreadRootId)
       : this.db.prepare(
         `SELECT id, channel_id as channelId, title, agent_type as agentType,
+                reply_target as replyTarget,
                 thread_kind as threadKind, is_primary_thread as isPrimaryThread,
                 thread_root_id as threadRootId,
                 workspace_path as workspacePath, status, node_id as nodeId,
@@ -417,7 +430,7 @@ export class ConversationManager {
   }
 
   listConversations(filter?: { channelId?: string; agentId?: string }): ConversationInfo[] {
-    const convSelect = `SELECT id, channel_id as channelId, title, agent_type as agentType,
+    const convSelect = `SELECT id, channel_id as channelId, reply_target as replyTarget, title, agent_type as agentType,
                 thread_kind as threadKind, is_primary_thread as isPrimaryThread,
                 thread_root_id as threadRootId,
                 workspace_path as workspacePath, status, node_id as nodeId,
@@ -448,7 +461,7 @@ export class ConversationManager {
   getConversation(id: string): ConversationInfo | null {
     const row = this.db
       .prepare(
-        `SELECT id, channel_id as channelId, title, agent_type as agentType,
+        `SELECT id, channel_id as channelId, reply_target as replyTarget, title, agent_type as agentType,
                 thread_kind as threadKind, is_primary_thread as isPrimaryThread,
                 thread_root_id as threadRootId,
                 workspace_path as workspacePath, status, node_id as nodeId,
@@ -750,6 +763,61 @@ export class ConversationManager {
     this.db
       .prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
       .run(status, Date.now(), conversationId);
+  }
+
+  private computeReplyTarget(params: {
+    conversationId: string;
+    channelId: string;
+    threadKind: ThreadKind;
+    isPrimaryThread: boolean;
+    threadRootId: string | null;
+  }): string {
+    if (params.threadKind === 'direct') {
+      return params.isPrimaryThread
+        ? `dm:@${this.config.humanUserName}`
+        : `dm:@${this.config.humanUserName}:${params.conversationId.slice(0, 8)}`;
+    }
+
+    const channel = this.getChannel(params.channelId);
+    const channelName = channel?.name ?? params.channelId;
+    const baseTarget = `#${channelName}`;
+    return params.threadRootId ? `${baseTarget}:${params.threadRootId}` : baseTarget;
+  }
+
+  private backfillConversationReplyTargets(): void {
+    const rows = this.db.prepare(
+      `SELECT id, channel_id as channelId, thread_kind as threadKind,
+              is_primary_thread as isPrimaryThread, thread_root_id as threadRootId
+       FROM conversations
+       WHERE reply_target IS NULL OR reply_target = ''`,
+    ).all() as Array<{
+      id: string;
+      channelId: string;
+      threadKind: ThreadKind;
+      isPrimaryThread: number;
+      threadRootId: string | null;
+    }>;
+
+    if (rows.length === 0) return;
+
+    const updateReplyTarget = this.db.prepare(
+      `UPDATE conversations
+       SET reply_target = ?
+       WHERE id = ?`,
+    );
+
+    for (const row of rows) {
+      updateReplyTarget.run(
+        this.computeReplyTarget({
+          conversationId: row.id,
+          channelId: row.channelId,
+          threadKind: row.threadKind,
+          isPrimaryThread: row.isPrimaryThread !== 0,
+          threadRootId: row.threadRootId ?? null,
+        }),
+        row.id,
+      );
+    }
   }
 
   // ─── Machine CRUD ───

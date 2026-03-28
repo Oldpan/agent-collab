@@ -15,7 +15,7 @@ const TURN_REPLY_CONTRACT = [
   'Reply only via mcp__chat__send_message(...). Do not output user-visible text directly.',
   'Use mcp__chat__send_message(..., kind="progress") only while work is still ongoing.',
   'Before this run ends, send one final user-visible message with mcp__chat__send_message(..., kind="final").',
-  'kind="final" ends this run. Do not send anything after it.',
+  'Use kind="final" only when your current answer is complete. The runtime decides when the run ends.',
 ].join('\n');
 
 export class ExecutionDispatcher {
@@ -44,7 +44,7 @@ export class ExecutionDispatcher {
     const row = this.db.prepare(
       `SELECT session_key as sessionKey, agent_type as agentType,
               workspace_path as workspacePath, env_vars as envVarsJson,
-              node_id as nodeId, agent_id as agentId
+              node_id as nodeId, agent_id as agentId, reply_target as replyTarget
        FROM conversations WHERE id = ?`
     ).get(conversationId) as {
       sessionKey: string;
@@ -53,6 +53,7 @@ export class ExecutionDispatcher {
       envVarsJson: string | null;
       nodeId: string | null;
       agentId: string | null;
+      replyTarget: string | null;
     } | undefined;
 
     if (!row) throw new Error(`Unknown conversation: ${conversationId}`);
@@ -100,17 +101,18 @@ export class ExecutionDispatcher {
           // Persist DM user messages to channel_messages so history/replay stay complete
           // even though the triggering message is also injected directly into this run prompt.
           const dmChannelId = `dm:${row.agentId}`;
+          const humanUserName = this.config.humanUserName;
+          const dmReplyTarget = row.replyTarget?.trim() || `dm:@${humanUserName}`;
           const msgSeq = (() => {
             const r = this.db
               .prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?')
               .get(dmChannelId) as { maxSeq: number | null };
             return (r.maxSeq ?? 0) + 1;
           })();
-          const humanUserName = this.config.humanUserName;
           this.db.prepare(
             `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
              VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?)`,
-          ).run(randomUUID(), dmChannelId, humanUserName, `dm:@${agent.name}`, promptText, msgSeq, Date.now());
+          ).run(randomUUID(), dmChannelId, humanUserName, dmReplyTarget, promptText, msgSeq, Date.now());
 
           // Checkpoint will be bumped after confirmed delivery to avoid silent message
           // loss if the node is offline or the send fails.
@@ -119,6 +121,7 @@ export class ExecutionDispatcher {
           promptText = buildDirectActivationPrompt({
             agentName: agent.name,
             senderName: humanUserName,
+            replyTarget: dmReplyTarget,
             content: promptText,
           });
         }

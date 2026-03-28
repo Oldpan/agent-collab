@@ -19,6 +19,7 @@ describe('ConversationManager', () => {
             const conv = manager.createConversation({ title: 'Test' });
             expect(conv.id).toBeTruthy();
             expect(conv.channelId).toBe('default');
+            expect(conv.replyTarget).toBe('dm:@oldpan:'.concat(conv.id.slice(0, 8)));
             expect(conv.title).toBe('Test');
             expect(conv.agentType).toBe('claude_acp'); // 默认
             expect(conv.status).toBe('idle');
@@ -42,6 +43,29 @@ describe('ConversationManager', () => {
             const conv = manager.createConversation({});
             expect(conv.agentType).toBe('claude_acp');
             expect(conv.title).toBe('');
+            expect(conv.replyTarget).toBe(`dm:@oldpan:${conv.id.slice(0, 8)}`);
+        });
+        it('agent 主私聊 thread 应绑定到稳定的 DM reply target', () => {
+            const agent = manager.createAgent({
+                name: 'Target Bob',
+                agentType: 'claude_acp',
+                nodeId: 'node-1',
+                workspacePath: '/tmp/target-bob',
+            });
+            const conv = manager.openAgentThread(agent.agentId);
+            expect(conv?.replyTarget).toBe('dm:@oldpan');
+        });
+        it('channel branch thread 应绑定到稳定的 channel/thread reply target', () => {
+            const agent = manager.createAgent({
+                name: 'Channel Bob',
+                agentType: 'claude_acp',
+                nodeId: 'node-1',
+                workspacePath: '/tmp/channel-target-bob',
+            });
+            const channelConv = manager.openAgentChannelThread(agent.agentId, 'default', null);
+            const threadConv = manager.openAgentChannelThread(agent.agentId, 'default', 'abcd1234');
+            expect(channelConv?.replyTarget).toBe('#default');
+            expect(threadConv?.replyTarget).toBe('#default:abcd1234');
         });
     });
     describe('listConversations', () => {

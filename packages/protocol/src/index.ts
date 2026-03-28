@@ -428,6 +428,7 @@ export type CoreToNode =
 export type ConversationInfo = {
   id: string;
   channelId: string;
+  replyTarget?: string | null;
   title: string;
   agentType: AgentType;
   threadKind: ThreadKind;

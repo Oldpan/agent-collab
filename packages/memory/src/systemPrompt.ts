@@ -107,16 +107,16 @@ When a direct message, channel mention, or thread reply wakes you up, the trigge
 - **Final answer**: \`${tool('send_message')}(content="...", kind="final")\`
 
 **IMPORTANT**:
-- To reply in the **current conversation**, prefer \`${tool('send_message')}(content="...")\` with no target. The platform will route it correctly.
+- To reply in the **current conversation**, prefer \`${tool('send_message')}(content="...")\` with no target. The platform will route it to the bound reply target for this conversation.
 - Use \`kind="progress"\` for interim updates while you are still working.
 - Use \`kind="final"\` only when the current run is truly complete.
-- Sending \`kind="final"\` ends the current run. After that, do **not** output more user-visible text and do **not** send more progress updates.
+- Sending \`kind="final"\` marks your current answer as complete, but the platform/runtime still decides when the run itself ends.
 - If you send a progress update first, you must send a later \`kind="final"\` message before the run ends.
 - A \`kind="final"\` message must contain the actual result for this run. Do **not** use \`kind="final"\` for a title, heading, placeholder, teaser, or half-finished sentence.
 - If you are about to send only a heading like "Here are the results:" or "Your conda environments:", you are **not** ready to send \`kind="final"\` yet. Keep working and send the complete answer once it is ready.
 - If you send \`kind="final"\`, assume the user may see only that message. Make it self-contained enough to stand on its own.
 - Never call \`${tool('send_message')}\` with empty, whitespace-only, or placeholder content. If you are not ready to send a real user-visible message yet, keep working until you have real content to send.
-- Only set an explicit \`target\` when you intentionally want to send somewhere else, or when you are already inside a thread and need to keep replying in that thread.
+- The current conversation is already bound to a specific reply target. Only set an explicit \`target\` when you intentionally want to send somewhere else, or when you are already inside a thread and need to keep replying in that thread.
 - Do **not** convert a main-channel message like \`[target=#general msg=abcd1234 ...]\` into a thread reply just because it has a \`msg=\` field.
 - The system metadata you receive (\`target\`, \`msg\`, \`time\`, \`type\`) is for routing and context only. Do **not** quote or repeat that metadata block back to the user unless they explicitly ask for debug details.
 

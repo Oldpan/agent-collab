@@ -139,7 +139,7 @@ describe('internalAgentRouter', () => {
         const row = db.prepare('SELECT COUNT(*) as count FROM channel_messages WHERE sender_id = ?').get(agent.agentId);
         expect(row.count).toBe(0);
     });
-    it('同一 run 在 final 之后应拒绝 progress 和未标注消息，但允许继续补同 target final', async () => {
+    it('同一 run 在 final 之后仍允许继续发送；final 只保留消息语义', async () => {
         const agent = manager.createAgent({
             name: 'FinalGateBob',
             agentType: 'claude_acp',
@@ -198,10 +198,7 @@ describe('internalAgentRouter', () => {
                 conversationId: conv.id,
             }),
         });
-        expect(progressAfterFinal.status).toBe(400);
-        expect(await progressAfterFinal.json()).toEqual({
-            error: 'run already sent a final reply; no further messages are allowed for this run',
-        });
+        expect(progressAfterFinal.status).toBe(200);
         const untypedAfterFinal = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -210,7 +207,7 @@ describe('internalAgentRouter', () => {
                 conversationId: conv.id,
             }),
         });
-        expect(untypedAfterFinal.status).toBe(400);
+        expect(untypedAfterFinal.status).toBe(200);
         const crossTargetFinal = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -221,14 +218,21 @@ describe('internalAgentRouter', () => {
                 conversationId: conv.id,
             }),
         });
-        expect(crossTargetFinal.status).toBe(400);
+        expect(crossTargetFinal.status).toBe(200);
         const rows = db.prepare(`SELECT content, message_kind as messageKind, target
        FROM channel_messages
        WHERE run_id = ?
        ORDER BY created_at ASC, seq ASC`).all('run-router-final-gate');
-        expect(rows).toHaveLength(3);
-        expect(rows.map((row) => row.messageKind)).toEqual(['final', 'final', 'final']);
-        expect(rows.every((row) => row.target === 'dm:@oldpan')).toBe(true);
+        expect(rows).toHaveLength(6);
+        expect(rows.map((row) => row.messageKind)).toEqual(['final', 'final', 'final', 'progress', null, 'final']);
+        expect(rows.map((row) => row.target)).toEqual([
+            'dm:@oldpan',
+            'dm:@oldpan',
+            'dm:@oldpan',
+            'dm:@oldpan',
+            'dm:@oldpan',
+            '#default',
+        ]);
     });
     it('branch thread 未提供 target 时应默认回复当前 channel thread', async () => {
         const agent = manager.createAgent({

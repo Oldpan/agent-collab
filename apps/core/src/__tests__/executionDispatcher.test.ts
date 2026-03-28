@@ -156,7 +156,7 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.systemPromptText).toContain('mcp__chat__check_messages');
     expect(dispatch.systemPromptText).toContain('Compaction safety');
     expect(dispatch.systemPromptText).toContain('prefer `mcp__chat__send_message(content="...")` with no target');
-    expect(dispatch.systemPromptText).toContain('Sending `kind="final"` ends the current run. After that');
+    expect(dispatch.systemPromptText).toContain('Sending `kind="final"` marks your current answer as complete');
     expect(dispatch.systemPromptText).toContain('Do **not** convert a main-channel message');
     expect(dispatch.systemPromptText).toContain('Do **not** quote or repeat that metadata block back to the user');
     expect(dispatch.systemPromptText).toContain('Maintain memory carefully');
@@ -168,7 +168,7 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.contextText).not.toContain('[System Prompt]');
     expect(dispatch.prompt).toContain('[Reply contract]');
     expect(dispatch.prompt).toContain('Use mcp__chat__send_message(..., kind="progress") only while work is still ongoing.');
-    expect(dispatch.prompt).toContain('kind="final" ends this run. Do not send anything after it.');
+    expect(dispatch.prompt).toContain('Use kind="final" only when your current answer is complete. The runtime decides when the run ends.');
     expect(dispatch.channelBridgeConfig).toMatchObject({
       agentId: agent.agentId,
       conversationId: conv.id,
@@ -213,11 +213,15 @@ describe('ExecutionDispatcher', () => {
     if (!dispatch || dispatch.type !== 'run.dispatch') throw new Error('missing dispatch');
     expect(dispatch.prompt).toContain('[Reply contract]');
     expect(dispatch.prompt).toContain('[Triggered message metadata]');
+    expect(dispatch.prompt).toContain('[Current conversation target]');
+    expect(dispatch.prompt).toContain('reply_target: dm:@oldpan');
     expect(dispatch.prompt).toContain('target: dm:@oldpan');
     expect(dispatch.prompt).toContain('recipient: @Direct Bob');
     expect(dispatch.prompt).toContain('[Triggered message body]');
     expect(dispatch.prompt).toContain('你好，帮我总结一下刚才的结论');
     expect(dispatch.prompt).toContain('Reply only via mcp__chat__send_message(...)');
+    expect(dispatch.prompt).not.toContain('[Recent messages on this exact target]');
+    expect(dispatch.prompt).not.toContain('[Unread summary]');
     expect(dispatch.prompt).not.toContain('Call check_messages to read them when you\'re ready');
 
     const dmChannelId = `dm:${agent.agentId}`;
