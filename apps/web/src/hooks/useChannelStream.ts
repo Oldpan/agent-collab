@@ -20,8 +20,11 @@ type UseChannelStreamOptions = {
   onSeenSeq?: (seq: number) => void;
 };
 
+export type ChannelNotice = { message: string; createdAt: string };
+
 export function useChannelStream(options: UseChannelStreamOptions): {
   messages: ChannelMessage[];
+  notices: ChannelNotice[];
   sendMessage: (content: string) => Promise<void>;
   loadMore: () => Promise<void>;
   hasMore: boolean;
@@ -29,6 +32,7 @@ export function useChannelStream(options: UseChannelStreamOptions): {
 } {
   const { channelId, onSeenSeq } = options;
   const [messages, setMessages] = useState<ChannelMessage[]>([]);
+  const [notices, setNotices] = useState<ChannelNotice[]>([]);
   const [hasMore, setHasMore] = useState(true);
   const [resetVersion, setResetVersion] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
@@ -40,6 +44,7 @@ export function useChannelStream(options: UseChannelStreamOptions): {
 
   useLayoutEffect(() => {
     setMessages([]);
+    setNotices([]);
     setHasMore(true);
     setResetVersion(0);
     if (!channelId) {
@@ -98,16 +103,7 @@ export function useChannelStream(options: UseChannelStreamOptions): {
           }
         } else if (event.type === "channel.notice" && event.notice) {
           const notice = event.notice;
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: `notice-${notice.createdAt}-${prev.length}`,
-              senderName: "System",
-              senderType: "system",
-              content: notice.message,
-              createdAt: notice.createdAt,
-            },
-          ]);
+          setNotices((prev) => [...prev, { message: notice.message, createdAt: notice.createdAt }]);
         } else if (event.type === "channel.history.reset") {
           setMessages([]);
           setHasMore(false);
@@ -168,5 +164,5 @@ export function useChannelStream(options: UseChannelStreamOptions): {
     [channelId],
   );
 
-  return { messages, sendMessage, loadMore, hasMore, resetVersion };
+  return { messages, notices, sendMessage, loadMore, hasMore, resetVersion };
 }

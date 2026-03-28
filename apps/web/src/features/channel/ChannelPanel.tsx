@@ -1,11 +1,11 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon, Settings2Icon, MessageSquareOffIcon } from "lucide-react";
+import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon, Settings2Icon, MessageSquareOffIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChannelInfo, AgentInfo } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
 import { clearChannelChat } from "@/lib/api";
-import { useChannelStream } from "@/hooks/useChannelStream";
+import { useChannelStream, type ChannelNotice } from "@/hooks/useChannelStream";
 import { ThreadPanel } from "./ThreadPanel";
 import { Streamdown } from "streamdown";
 import {
@@ -332,6 +332,51 @@ function ChannelComposer({
   );
 }
 
+function ChannelStatusBar({
+  notices,
+}: {
+  notices: ChannelNotice[];
+}) {
+  const [expanded, setExpanded] = useState(false);
+
+  const latest = notices[notices.length - 1];
+  if (!latest) return null;
+
+  return (
+    <div className="border-b border-zinc-200/80 bg-[#fffbe6] text-xs">
+      <button
+        type="button"
+        onClick={() => setExpanded((e) => !e)}
+        className="flex w-full items-center gap-2 px-4 py-1.5 text-left hover:bg-[#fff8cc] transition-colors"
+      >
+        <span className="size-1.5 shrink-0 rounded-full bg-amber-400" />
+        <span className="flex-1 truncate text-zinc-500">{latest.message}</span>
+        {notices.length > 1 && (
+          <span className="shrink-0 rounded-sm bg-amber-200/70 px-1.5 py-0.5 text-[10px] font-medium text-amber-700">
+            {notices.length}
+          </span>
+        )}
+        <ChevronDownIcon
+          className={cn(
+            "size-3 shrink-0 text-zinc-400 transition-transform",
+            expanded && "rotate-180",
+          )}
+        />
+      </button>
+      {expanded && (
+        <div className="border-t border-zinc-200/60 px-4 py-2 space-y-1.5">
+          {[...notices].reverse().map((n, i) => (
+            <div key={i} className="flex items-baseline gap-2 text-zinc-500">
+              <span className="shrink-0 text-[10px] text-zinc-400">{formatTime(n.createdAt)}</span>
+              <span>{n.message}</span>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function MembersTab({ members }: { members: AgentInfo[] }) {
   return (
     <div className="flex-1 overflow-y-auto p-4">
@@ -442,7 +487,7 @@ function SettingsTab({
 
 export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq }: ChannelPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "members" | "settings">("chat");
-  const { messages, sendMessage, loadMore, hasMore, resetVersion } = useChannelStream({
+  const { messages, notices, sendMessage, loadMore, hasMore, resetVersion } = useChannelStream({
     channelId: channel.channelId,
     onSeenSeq,
   });
@@ -577,6 +622,7 @@ export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq }: Chan
         <div className="flex flex-1 overflow-hidden">
           {/* Main channel messages */}
           <div className={cn("flex flex-col overflow-hidden", openThread ? "flex-1" : "w-full")}>
+            <ChannelStatusBar key={channel.channelId} notices={notices} />
             <div ref={scrollRef} className="flex-1 overflow-y-auto py-2">
               {messages.length === 0 ? (
                 <div className="flex h-full items-center justify-center">
