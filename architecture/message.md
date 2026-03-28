@@ -160,3 +160,22 @@
   Agent 通过 ACP 内的 mcp__chat__send_message 调用，这个 MCP 工具最终 HTTP POST 到 POST 
   /api/internal/agent/:agentId/send（internalAgentRouter.ts），core 再把消息写入 channel_messages 并通过 WS broadcastToChannel/broadcastToAgent 
   推送给前端。  
+
+
+
+
+
+
+                                                                                                                                                 
+  第1轮 (cold_start)：                                                                                                                         
+    ACP newSession({ systemPrompt }) ← systemPromptText 真正被用                       
+    content blocks: [contextText, prompt1]  ← MEMORY.md + 激活 prompt 进入 context                                                             
+                                                                                                                                               
+  第2轮 (resume, ACP session 还活着)：                                                                                                         
+    ACP session id 已存在 → systemPromptText 被忽略（session 已建好）                                                                          
+    isFreshSession = false → contextText 不注入                                                                                                
+    content blocks: [prompt2 only]  ← 只有当轮激活 prompt 进入 context                                                                         
+                                                                                                                                               
+  第3轮 (resume, ACP session 还活着)：                                                                                                         
+    content blocks: [prompt3 only]                                                                                                             
+    模型 context 里已有：system prompt + MEMORY.md + prompt1 + 回复1 + prompt2 + 回复2 

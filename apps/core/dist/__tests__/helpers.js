@@ -24,6 +24,7 @@ export function createTestDb() {
       conversation_id  TEXT NOT NULL,
       prompt_text      TEXT NOT NULL,
       record_as_user_message INTEGER NOT NULL DEFAULT 1,
+      activation_context_text TEXT,
       created_at       INTEGER NOT NULL,
       updated_at       INTEGER NOT NULL
     );
@@ -31,6 +32,9 @@ export function createTestDb() {
     const queueCols = db.prepare("PRAGMA table_info('conversation_prompt_queue')").all();
     if (!queueCols.some((col) => col.name === 'record_as_user_message')) {
         db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN record_as_user_message INTEGER NOT NULL DEFAULT 1;`);
+    }
+    if (!queueCols.some((col) => col.name === 'activation_context_text')) {
+        db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN activation_context_text TEXT;`);
     }
     const channelMessageCols = db.prepare("PRAGMA table_info('channel_messages')").all();
     if (!channelMessageCols.some((col) => col.name === 'run_id')) {

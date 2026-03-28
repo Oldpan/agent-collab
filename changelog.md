@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-03-28 (queued activation context persistence)
+
+- 修复了 channel/thread 激活上下文在排队后丢失的问题：`conversation_prompt_queue` 现在会持久化 `activation_context_text`。
+- 当同一 agent 正忙、mention 或 thread reply 被排队时，等到该 prompt 真正出队派发，thread root / recent messages / unread summary 仍能在 fresh ACP session 上下文里恢复。
+- DB schema 升到 v30，新增 `conversation_prompt_queue.activation_context_text` 列，并补了 queued path 的回归测试。
+
 ## 2026-03-27 (sidebar unread badges)
 
 - Sidebar 现在会在 agent 私聊入口和 channel 入口显示未读数字，并把已读锚点持久化到本地浏览器。

@@ -1,4 +1,4 @@
-const LATEST_VERSION = 29;
+const LATEST_VERSION = 30;
 export function migrate(db) {
     db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -503,5 +503,12 @@ export function migrate(db) {
         }
         db.exec(`CREATE INDEX IF NOT EXISTS idx_conversations_reply_target ON conversations(reply_target, updated_at DESC);`);
         db.exec(`UPDATE schema_version SET version = 29;`);
+    }
+    if (current < 30) {
+        const queueCols = db.prepare("PRAGMA table_info('conversation_prompt_queue')").all();
+        if (!queueCols.some((c) => c.name === 'activation_context_text')) {
+            db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN activation_context_text TEXT;`);
+        }
+        db.exec(`UPDATE schema_version SET version = 30;`);
     }
 }

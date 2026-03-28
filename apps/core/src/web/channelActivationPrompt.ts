@@ -7,6 +7,10 @@ type ChannelActivationPromptParams = {
   senderName: string;
   content: string;
   reason: 'mention' | 'thread_reply';
+};
+
+type ChannelActivationContextParams = {
+  target: string;
   recentMessages?: ActivationContextMessage[];
   rootMessage?: ActivationContextMessage;
   unreadCount?: number;
@@ -23,49 +27,47 @@ export function buildChannelActivationPrompt(params: ChannelActivationPromptPara
     'The triggering message is included below. Do not call check_messages just to retrieve this same message again.',
     `This execution is bound to reply_target="${replyTarget}". Prefer mcp__chat__send_message(content="...") with no target to reply there.`,
     `If you need more context, call read_history(channel="${params.target}") for this exact conversation target.`,
-    'Reply only via mcp__chat__send_message(...). Do not output text directly.',
-    'If you are doing channel work, ordinary progress updates can be plain channel replies. Only @mention the user when you are done, hit a major blocker, or need a decision.',
     '',
     '[Current conversation target]',
     `reply_target: ${replyTarget}`,
     '',
-  ];
-
-  if (params.rootMessage) {
-    lines.push(
-      '[Thread root message]',
-      formatPromptMessage(params.rootMessage),
-      '',
-    );
-  }
-
-  if (params.recentMessages && params.recentMessages.length > 0) {
-    lines.push(
-      '[Recent messages on this exact target]',
-      params.recentMessages.map((message) => formatPromptMessage(message)).join('\n\n'),
-      '',
-    );
-  }
-
-  if ((params.unreadCount ?? 0) > 0) {
-    const label = params.unreadCount === 1 ? '1 older unread message' : `${params.unreadCount} older unread messages`;
-    lines.push(
-      '[Unread summary]',
-      `${label} exist on this exact target before the triggering message. Use read_history(channel="${params.target}") if you need them in full.`,
-      '',
-    );
-  }
-
-  lines.push(
     '[Triggered message metadata]',
     `target: ${params.target}`,
     `sender: @${params.senderName}`,
     '',
     '[Triggered message body]',
     params.content,
-  );
+  ];
 
   return lines.join('\n');
+}
+
+/**
+ * Builds the activation context text (recent messages, thread root, unread summary) to be
+ * injected as part of contextText — only on fresh ACP sessions, not on every turn.
+ * Returns an empty string if there is nothing to include.
+ */
+export function buildChannelActivationContextText(params: ChannelActivationContextParams): string {
+  const parts: string[] = [];
+
+  if (params.rootMessage) {
+    parts.push(`[Thread root message]\n${formatPromptMessage(params.rootMessage)}`);
+  }
+
+  if (params.recentMessages && params.recentMessages.length > 0) {
+    parts.push(
+      `[Recent messages on this exact target]\n${params.recentMessages.map(formatPromptMessage).join('\n\n')}`,
+    );
+  }
+
+  if ((params.unreadCount ?? 0) > 0) {
+    const label = params.unreadCount === 1 ? '1 older unread message' : `${params.unreadCount} older unread messages`;
+    parts.push(
+      `[Unread summary]\n${label} exist on this exact target before the triggering message. Use read_history(channel="${params.target}") if you need them in full.`,
+    );
+  }
+
+  return parts.join('\n\n');
 }
 
 function formatPromptMessage(message: ActivationContextMessage): string {

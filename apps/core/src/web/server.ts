@@ -14,7 +14,7 @@ import { NodeRegistry } from '../services/nodeRegistry.js';
 import { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/agentWorkspaceService.js';
 import { findMentionedAgents } from './channelMentions.js';
-import { buildChannelActivationPrompt } from './channelActivationPrompt.js';
+import { buildChannelActivationPrompt, buildChannelActivationContextText } from './channelActivationPrompt.js';
 import { appendChannelResetMarkers } from './channelMemoryNotes.js';
 import { buildTargetActivationContext } from './activationContext.js';
 import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
@@ -685,20 +685,26 @@ export async function startServer(params: {
               triggerSeq: seq,
               threadRootId,
             });
+            const threadTarget = `#${channel.name}:${threadRootId}`;
             conversationManager.submitPrompt(
               conv.id,
               buildChannelActivationPrompt({
                 channelName: channel.name,
-                target: `#${channel.name}:${threadRootId}`,
+                target: threadTarget,
                 replyTarget: activationContext.replyTarget,
                 senderName,
                 content,
                 reason: 'thread_reply',
-                recentMessages: activationContext.recentMessages,
-                rootMessage: activationContext.rootMessage,
-                unreadCount: activationContext.unreadCount,
               }),
-              { recordAsUserMessage: false },
+              {
+                recordAsUserMessage: false,
+                activationContextText: buildChannelActivationContextText({
+                  target: threadTarget,
+                  recentMessages: activationContext.recentMessages,
+                  rootMessage: activationContext.rootMessage,
+                  unreadCount: activationContext.unreadCount,
+                }) || undefined,
+              },
             ).then(() => {
               bumpAgentMessageCheckpoint(db, rootMsg.sender_id, req.params.id, seq, threadRootId);
             }).catch(() => {});
@@ -737,11 +743,16 @@ export async function startServer(params: {
                 senderName,
                 content,
                 reason: 'mention',
-                recentMessages: activationContext.recentMessages,
-                rootMessage: activationContext.rootMessage,
-                unreadCount: activationContext.unreadCount,
               }),
-              { recordAsUserMessage: false },
+              {
+                recordAsUserMessage: false,
+                activationContextText: buildChannelActivationContextText({
+                  target: historyTarget,
+                  recentMessages: activationContext.recentMessages,
+                  rootMessage: activationContext.rootMessage,
+                  unreadCount: activationContext.unreadCount,
+                }) || undefined,
+              },
             ).then(() => {
               bumpAgentMessageCheckpoint(db, agent.agentId, req.params.id, seq, threadRootId ?? null);
             }).catch(() => {});

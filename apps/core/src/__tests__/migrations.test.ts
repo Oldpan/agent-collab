@@ -68,6 +68,7 @@ describe('migrations', () => {
 
     const queueCols = db.prepare("PRAGMA table_info('conversation_prompt_queue')").all() as Array<{ name: string }>;
     expect(queueCols.map((c) => c.name)).toContain('record_as_user_message');
+    expect(queueCols.map((c) => c.name)).toContain('activation_context_text');
     db.close();
   });
 

@@ -57,6 +57,7 @@ describe('migrations', () => {
         expect(tables.map((t) => t.name)).toContain('conversation_prompt_queue');
         const queueCols = db.prepare("PRAGMA table_info('conversation_prompt_queue')").all();
         expect(queueCols.map((c) => c.name)).toContain('record_as_user_message');
+        expect(queueCols.map((c) => c.name)).toContain('activation_context_text');
         db.close();
     });
     it('agents 表应包含 disabled_tool_kinds 列', () => {
