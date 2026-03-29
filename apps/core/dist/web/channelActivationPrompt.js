@@ -1,9 +1,11 @@
 export function buildChannelActivationPrompt(params) {
     const reasonText = params.reason === 'mention'
         ? `You were @mentioned in #${params.channelName} by ${params.senderName}.`
-        : params.reason === 'thread_reply'
-            ? `Your collaborative thread in #${params.channelName} received a reply from ${params.senderName}.`
-            : `There is new channel activity in #${params.channelName} from ${params.senderName}.`;
+        : params.reason === 'agent_mention'
+            ? `Another agent (@${params.senderName}) explicitly asked for your help in #${params.channelName}.`
+            : params.reason === 'thread_reply'
+                ? `Your collaborative thread in #${params.channelName} received a reply from ${params.senderName}.`
+                : `There is new channel activity in #${params.channelName} from ${params.senderName}.`;
     const replyTarget = params.replyTarget ?? params.target;
     const lines = [
         `[System: ${reasonText}]`,

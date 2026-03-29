@@ -298,7 +298,7 @@ export async function startServer(params) {
         const dmChannelId = `dm:${conv.agentId}`;
         const rows = db
             .prepare(`SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                  content, created_at as createdAt, seq
+                  content, created_at as createdAt, seq, message_source as messageSource
            FROM channel_messages
            WHERE channel_id = ?
            ORDER BY seq DESC LIMIT ?`)
@@ -310,6 +310,7 @@ export async function startServer(params) {
             content: r.content,
             createdAt: new Date(r.createdAt).toISOString(),
             seq: r.seq,
+            ...(r.messageSource ? { messageSource: r.messageSource } : {}),
         }));
         return { messages };
     });
@@ -511,7 +512,7 @@ export async function startServer(params) {
         const before = req.query.before != null ? Number(req.query.before) : null;
         const rows = (before != null
             ? db.prepare(`SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
-                    cm.content, cm.created_at as createdAt, cm.seq,
+                    cm.content, cm.created_at as createdAt, cm.seq, cm.message_source as messageSource,
                     COUNT(replies.message_id) as replyCount
              FROM channel_messages cm
              LEFT JOIN channel_messages replies
@@ -521,7 +522,7 @@ export async function startServer(params) {
              GROUP BY cm.message_id
              ORDER BY cm.seq DESC LIMIT ?`).all(req.params.id, before, limit)
             : db.prepare(`SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
-                    cm.content, cm.created_at as createdAt, cm.seq,
+                    cm.content, cm.created_at as createdAt, cm.seq, cm.message_source as messageSource,
                     COUNT(replies.message_id) as replyCount
              FROM channel_messages cm
              LEFT JOIN channel_messages replies
@@ -539,6 +540,7 @@ export async function startServer(params) {
                 createdAt: new Date(r.createdAt).toISOString(),
                 seq: r.seq,
                 replyCount: r.replyCount,
+                ...(r.messageSource ? { messageSource: r.messageSource } : {}),
             })),
         };
     });
@@ -553,12 +555,12 @@ export async function startServer(params) {
         const before = req.query.before != null ? Number(req.query.before) : null;
         const rows = (before != null
             ? db.prepare(`SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                    content, created_at as createdAt, seq
+                    content, created_at as createdAt, seq, message_source as messageSource
              FROM channel_messages
              WHERE channel_id = ? AND thread_root_id = ? AND seq < ?
              ORDER BY seq DESC LIMIT ?`).all(req.params.id, req.params.shortId, before, limit)
             : db.prepare(`SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                    content, created_at as createdAt, seq
+                    content, created_at as createdAt, seq, message_source as messageSource
              FROM channel_messages
              WHERE channel_id = ? AND thread_root_id = ?
              ORDER BY seq ASC LIMIT ?`).all(req.params.id, req.params.shortId, limit));
@@ -572,6 +574,7 @@ export async function startServer(params) {
                 createdAt: new Date(r.createdAt).toISOString(),
                 seq: r.seq,
                 threadRootId: req.params.shortId,
+                ...(r.messageSource ? { messageSource: r.messageSource } : {}),
             })),
         };
     });

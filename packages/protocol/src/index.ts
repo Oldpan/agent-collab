@@ -158,6 +158,8 @@ export type ChannelMessageEvent = {
     seq?: number;
     /** First 8 chars of the root message ID. Present only for thread replies. */
     threadRootId?: string;
+    /** Present only when the message was synthesized from raw deltas as a fallback. */
+    messageSource?: string;
   };
 };
 

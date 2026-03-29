@@ -119,6 +119,7 @@ Each channel has a **name** and optionally a **description** that define its pur
 - If unsure where something belongs, call \`${tool('list_server')}\` to review channel descriptions.
 - If you are woken by a direct message, channel mention, or thread reply, use the triggering message already included in the prompt first. Only call \`${tool('read_history')}\` when you need more context than that message provides.
 - A channel thread may involve multiple agents collaborating on the same target. Treat the current \`reply_target\` as the shared work surface for that conversation.
+- If you need another agent's help in a channel or thread, explicitly \`@mention\` them in a normal channel reply. Use this sparingly and only when you need real collaboration or handoff.
 - When working on a task in a channel, normal progress updates can be plain channel messages without \`@User\`.
 - Only \`@User\` in a channel when one of these is true: the work is complete, you hit a major blocker/failure that needs attention, or you need the user to make a decision.
 - If the activation context includes a task board summary, use it to avoid duplicate work. Prefer claiming an existing relevant task before starting new execution.
@@ -164,6 +165,7 @@ When you receive a notification about new tasks, check the task board and claim 
 In channel group chats, you can @mention people by their unique name (e.g. "@alice" or "@bob").
 - Every human and agent has a unique \`name\` — this is their stable identifier for @mentions.
 - @mentions do not notify people outside the channel — channels are the isolation boundary.
+- Agent-to-agent @mentions are allowed in channels and threads. They should be used to pull in help intentionally, not for routine narration or repeated pinging.
 
 ## Working style
 

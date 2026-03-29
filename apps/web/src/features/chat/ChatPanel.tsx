@@ -315,6 +315,26 @@ function MessageRow({
     );
   }
 
+  if (message.messageSource === "delta_fallback") {
+    const displayName = agent?.name ?? "Agent";
+    return (
+      <div className="px-3 py-1.5">
+        <div className="rounded border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">
+          <div className="mb-1.5 flex items-center gap-1.5">
+            <span className="font-medium text-zinc-500">{displayName}</span>
+            <span className="rounded bg-zinc-200 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400">
+              fallback
+            </span>
+            <span className="ml-auto text-[10px] text-zinc-400">
+              {messageTimeFormatter.format(message.createdAt)}
+            </span>
+          </div>
+          <MessageResponse>{message.text}</MessageResponse>
+        </div>
+      </div>
+    );
+  }
+
   const isUser = message.role === "user";
   const displayName = isUser ? userName : (agent?.name ?? "Agent");
   const displayRole = isUser ? "Owner" : "Agent";

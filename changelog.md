@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-03-29 (agent-to-agent channel mentions)
+
+- Channel/thread 中的正式 agent 消息现在支持显式 `@agent` 协作唤醒：被提及的 agent 会在同一个 target 上被拉起并加入该 target 的 participants。
+- 新增 `agent_mention_cooldowns`，schema 升到 `v34`；同一 `from_agent -> to_agent -> target` 在冷却窗口内不会被重复唤醒，避免两边来回 ping 形成回路。
+- 只认正式 `agent_send` 消息中的 `@mention`；`delta_fallback`、原始 `content.delta` 和工具确认文本都不会触发 agent 唤醒。
+- system prompt 同步补充了 channel/thread 中显式 `@` 其他 agent 请求协作的规则，与平台行为保持一致。
+
 ## 2026-03-29 (channel subscriptions + thread-task lifecycle completion)
 
 - 新增 `channel_subscriptions`，schema 升到 `v33`；`subscribed_agents` 模式现在只唤醒显式订阅该频道的 agent，不再在无 participant 时回退唤醒全频道 agent。

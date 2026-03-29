@@ -177,7 +177,7 @@ export function useConversationStream(
           // Channel-based message: agent responded via send_message MCP.
           // Do NOT finalize the run here — the agent may continue with tool calls
           // (e.g. memory writes) after send_message. Let turn.end handle finalization.
-          const { id, senderType, content, createdAt } = event.message;
+          const { id, senderType, content, createdAt, messageSource } = event.message;
           const role = senderType === "user" ? "user" : "assistant";
           setMessages((prev) => [
             ...prev,
@@ -187,6 +187,7 @@ export function useConversationStream(
               text: content,
               createdAt: new Date(createdAt).getTime(),
               isStreaming: false,
+              ...(messageSource ? { messageSource } : {}),
             },
           ]);
           if (typeof event.message.seq === "number" && canMarkSeen()) {
@@ -635,6 +636,7 @@ export function useConversationStream(
               text: m.content,
               createdAt: new Date(m.createdAt).getTime(),
               isStreaming: false,
+              ...(m.messageSource ? { messageSource: m.messageSource } : {}),
             })),
           );
         })

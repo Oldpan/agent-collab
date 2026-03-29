@@ -72,6 +72,16 @@ export function createTestDb(): Db {
       PRIMARY KEY (channel_id, agent_id)
     );
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS agent_mention_cooldowns (
+      channel_id        TEXT NOT NULL,
+      thread_root_id    TEXT NOT NULL,
+      from_agent_id     TEXT NOT NULL,
+      to_agent_id       TEXT NOT NULL,
+      last_notified_at  INTEGER NOT NULL,
+      PRIMARY KEY (channel_id, thread_root_id, from_agent_id, to_agent_id)
+    );
+  `);
   const channelMessageCols = db.prepare("PRAGMA table_info('channel_messages')").all() as Array<{ name: string }>;
   if (!channelMessageCols.some((col) => col.name === 'run_id')) {
     db.exec(`ALTER TABLE channel_messages ADD COLUMN run_id TEXT;`);
@@ -83,6 +93,7 @@ export function createTestDb(): Db {
   if (!channelMessageCols.some((col) => col.name === 'message_source')) {
     db.exec(`ALTER TABLE channel_messages ADD COLUMN message_source TEXT;`);
   }
+  db.exec(`UPDATE schema_version SET version = MAX(version, 34);`);
   return db;
 }
 

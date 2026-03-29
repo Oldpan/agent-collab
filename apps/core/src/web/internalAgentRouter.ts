@@ -4,12 +4,19 @@ import type { Db } from '@agent-collab/runtime-acp';
 import type { ServerEvent } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
 import {
+  bumpAgentMessageCheckpoint,
   checkpointThreadKey,
   getAgentMessageCheckpoint,
   setAgentMessageCheckpoint,
 } from './messageCheckpoints.js';
+import { buildTargetActivationContext } from './activationContext.js';
+import { recordAgentMentionNotification, shouldTriggerAgentMention } from './agentMentionCooldowns.js';
+import { buildChannelActivationContextText, buildChannelActivationPrompt } from './channelActivationPrompt.js';
+import { findMentionedAgents } from './channelMentions.js';
 import { setTargetOwner, upsertTargetParticipant } from './targetParticipants.js';
 import { bindTaskToThread, getThreadBindingForTask } from './threadTaskBindings.js';
+
+const AGENT_MENTION_COOLDOWN_MS = 60_000;
 
 type MessageRow = {
   messageId: string;
@@ -165,6 +172,88 @@ export function registerInternalAgentRoutes(
     // Public channels (not DMs) also broadcast to channel-level WS subscribers
     if (!channelId.startsWith('dm:')) {
       broadcastToChannel(channelId, channelMessageEvent);
+    }
+
+    if (!channelId.startsWith('dm:')) {
+      const channel = conversationManager.getChannel(channelId);
+      const mentionableAgents = conversationManager
+        .listAgents(channelId)
+        .filter((candidate) => candidate.agentId !== agentId);
+      const mentionedAgents = findMentionedAgents(normalizedContent, mentionableAgents);
+
+      for (const mentionedAgent of mentionedAgents) {
+        if (!shouldTriggerAgentMention(db, {
+          channelId,
+          threadRootId,
+          fromAgentId: agentId,
+          toAgentId: mentionedAgent.agentId,
+          now,
+          cooldownMs: AGENT_MENTION_COOLDOWN_MS,
+        })) {
+          continue;
+        }
+
+        const conv = conversationManager.openAgentChannelThread(mentionedAgent.agentId, channelId, threadRootId ?? null);
+        if (!conv || !channel) continue;
+
+        upsertTargetParticipant(db, {
+          agentId: mentionedAgent.agentId,
+          channelId,
+          threadRootId,
+          role: 'participant',
+          lastActiveAt: now,
+        });
+
+        const activationContext = buildTargetActivationContext(db, {
+          agentId: mentionedAgent.agentId,
+          channelId,
+          replyTarget: conv.replyTarget ?? resolvedTarget,
+          triggerSeq: seq,
+          threadRootId,
+        });
+
+        recordAgentMentionNotification(db, {
+          channelId,
+          threadRootId,
+          fromAgentId: agentId,
+          toAgentId: mentionedAgent.agentId,
+          notifiedAt: now,
+        });
+
+        broadcastToChannel(channelId, {
+          type: 'channel.notice',
+          notice: {
+            message: `@${mentionedAgent.name} was mentioned by @${agent.name} and notified.`,
+            createdAt: new Date(now).toISOString(),
+          },
+        });
+
+        conversationManager.submitPrompt(
+          conv.id,
+          buildChannelActivationPrompt({
+            channelName: channel.name,
+            target: resolvedTarget,
+            replyTarget: activationContext.replyTarget,
+            senderName: agent.name,
+            content: normalizedContent,
+            reason: 'agent_mention',
+          }),
+          {
+            recordAsUserMessage: false,
+            activationContextText: buildChannelActivationContextText({
+              target: resolvedTarget,
+              recentMessages: activationContext.recentMessages,
+              rootMessage: activationContext.rootMessage,
+              unreadCount: activationContext.unreadCount,
+              participants: activationContext.participants,
+              boundTask: activationContext.boundTask,
+              openTasks: activationContext.openTasks,
+            }) || undefined,
+          },
+        ).then(() => {
+          bumpAgentMessageCheckpoint(db, mentionedAgent.agentId, channelId, seq, threadRootId);
+        }).catch(() => {});
+      }
     }
 
     return { messageId, seq, runId, target: resolvedTarget, kind: kind ?? null };

@@ -337,7 +337,7 @@ export async function startServer(params: {
       const rows = db
         .prepare(
           `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                  content, created_at as createdAt, seq
+                  content, created_at as createdAt, seq, message_source as messageSource
            FROM channel_messages
            WHERE channel_id = ?
            ORDER BY seq DESC LIMIT ?`,
@@ -349,6 +349,7 @@ export async function startServer(params: {
         content: string;
         createdAt: number;
         seq: number;
+        messageSource: string | null;
       }>;
 
       const messages = rows.reverse().map((r) => ({
@@ -358,6 +359,7 @@ export async function startServer(params: {
         content: r.content,
         createdAt: new Date(r.createdAt).toISOString(),
         seq: r.seq,
+        ...(r.messageSource ? { messageSource: r.messageSource } : {}),
       }));
 
       return { messages };
@@ -592,7 +594,7 @@ export async function startServer(params: {
       const rows = (before != null
         ? db.prepare(
             `SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
-                    cm.content, cm.created_at as createdAt, cm.seq,
+                    cm.content, cm.created_at as createdAt, cm.seq, cm.message_source as messageSource,
                     COUNT(replies.message_id) as replyCount
              FROM channel_messages cm
              LEFT JOIN channel_messages replies
@@ -604,7 +606,7 @@ export async function startServer(params: {
           ).all(req.params.id, before, limit)
         : db.prepare(
             `SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
-                    cm.content, cm.created_at as createdAt, cm.seq,
+                    cm.content, cm.created_at as createdAt, cm.seq, cm.message_source as messageSource,
                     COUNT(replies.message_id) as replyCount
              FROM channel_messages cm
              LEFT JOIN channel_messages replies
@@ -614,7 +616,7 @@ export async function startServer(params: {
              GROUP BY cm.message_id
              ORDER BY cm.seq DESC LIMIT ?`,
           ).all(req.params.id, limit)
-      ) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; seq: number; replyCount: number }>;
+      ) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; seq: number; replyCount: number; messageSource: string | null }>;
       return {
         messages: rows.reverse().map((r) => ({
           id: r.id,
@@ -624,6 +626,7 @@ export async function startServer(params: {
           createdAt: new Date(r.createdAt).toISOString(),
           seq: r.seq,
           replyCount: r.replyCount,
+          ...(r.messageSource ? { messageSource: r.messageSource } : {}),
         })),
       };
     },
@@ -640,19 +643,19 @@ export async function startServer(params: {
       const rows = (before != null
         ? db.prepare(
             `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                    content, created_at as createdAt, seq
+                    content, created_at as createdAt, seq, message_source as messageSource
              FROM channel_messages
              WHERE channel_id = ? AND thread_root_id = ? AND seq < ?
              ORDER BY seq DESC LIMIT ?`,
           ).all(req.params.id, req.params.shortId, before, limit)
         : db.prepare(
             `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                    content, created_at as createdAt, seq
+                    content, created_at as createdAt, seq, message_source as messageSource
              FROM channel_messages
              WHERE channel_id = ? AND thread_root_id = ?
              ORDER BY seq ASC LIMIT ?`,
           ).all(req.params.id, req.params.shortId, limit)
-      ) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; seq: number }>;
+      ) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; seq: number; messageSource: string | null }>;
       const ordered = before != null ? rows.reverse() : rows;
       return {
         messages: ordered.map((r) => ({
@@ -663,6 +666,7 @@ export async function startServer(params: {
           createdAt: new Date(r.createdAt).toISOString(),
           seq: r.seq,
           threadRootId: req.params.shortId,
+          ...(r.messageSource ? { messageSource: r.messageSource } : {}),
         })),
       };
     },

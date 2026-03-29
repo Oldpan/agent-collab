@@ -82,6 +82,8 @@ export type ChannelMessage = {
   threadRootId?: string;
   /** Present only on top-level messages. Number of thread replies. */
   replyCount?: number;
+  /** Present only when the message was synthesized from raw deltas as a fallback. */
+  messageSource?: string;
 };
 
 export type ChannelTask = TaskInfo & {

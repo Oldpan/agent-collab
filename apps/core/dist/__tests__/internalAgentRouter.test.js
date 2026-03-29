@@ -338,6 +338,184 @@ describe('internalAgentRouter', () => {
         expect(row.target).toBe('#default');
         expect(row.threadRootId).toBeNull();
     });
+    it('agent 在主频道正式 @ 另一个 agent 时应触发该 agent 协作唤醒', async () => {
+        const tab = manager.createAgent({
+            name: 'MentionTab',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/mention-tab-router',
+            channelId: 'default',
+        });
+        const bob = manager.createAgent({
+            name: 'MentionBob',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/mention-bob-router',
+            channelId: 'default',
+        });
+        manager.joinChannel(tab.agentId, 'default');
+        manager.joinChannel(bob.agentId, 'default');
+        const conv = manager.openAgentChannelThread(tab.agentId, 'default', null);
+        if (!conv)
+            throw new Error('missing channel conversation');
+        const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+            .get(conv.id);
+        createRun(db, {
+            runId: 'run-router-agent-mention-root',
+            sessionKey: sessionRow.sessionKey,
+            promptText: 'mention root helper',
+        });
+        dispatches.length = 0;
+        const res = await fetch(`${baseUrl}/api/internal/agent/${tab.agentId}/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target: '#default',
+                content: 'Can you take a look, @MentionBob?',
+                kind: 'progress',
+                conversationId: conv.id,
+            }),
+        });
+        expect(res.status).toBe(200);
+        expect(dispatches.filter((msg) => msg.type === 'run.dispatch')).toHaveLength(1);
+        const bobConv = manager.openAgentChannelThread(bob.agentId, 'default', null);
+        if (!bobConv)
+            throw new Error('missing mentioned conversation');
+        const bobSession = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+            .get(bobConv.id);
+        const runRow = db.prepare('SELECT prompt_text as promptText FROM runs WHERE session_key = ? ORDER BY started_at DESC LIMIT 1').get(bobSession.sessionKey);
+        expect(runRow?.promptText).toContain('@MentionTab');
+        expect(runRow?.promptText).toContain('target: #default');
+        const participant = db.prepare(`SELECT role
+       FROM target_participants
+       WHERE agent_id = ? AND channel_id = ? AND thread_root_id = ''`).get(bob.agentId, 'default');
+        expect(participant?.role).toBe('participant');
+    });
+    it('agent 在线程正式 @ 另一个 agent 时应唤醒同一 thread 的 conversation', async () => {
+        const tab = manager.createAgent({
+            name: 'ThreadTab',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/thread-tab-router',
+            channelId: 'default',
+        });
+        const bob = manager.createAgent({
+            name: 'ThreadBob',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/thread-bob-router',
+            channelId: 'default',
+        });
+        manager.joinChannel(tab.agentId, 'default');
+        manager.joinChannel(bob.agentId, 'default');
+        const conv = manager.openAgentChannelThread(tab.agentId, 'default', 'thrd1234');
+        if (!conv)
+            throw new Error('missing thread conversation');
+        const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+            .get(conv.id);
+        createRun(db, {
+            runId: 'run-router-agent-mention-thread',
+            sessionKey: sessionRow.sessionKey,
+            promptText: 'mention thread helper',
+        });
+        dispatches.length = 0;
+        const res = await fetch(`${baseUrl}/api/internal/agent/${tab.agentId}/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target: '#default:thrd1234',
+                content: 'Need help in this thread, @ThreadBob.',
+                kind: 'final',
+                conversationId: conv.id,
+            }),
+        });
+        expect(res.status).toBe(200);
+        expect(dispatches.filter((msg) => msg.type === 'run.dispatch')).toHaveLength(1);
+        const bobConv = manager.openAgentChannelThread(bob.agentId, 'default', 'thrd1234');
+        if (!bobConv)
+            throw new Error('missing mentioned thread conversation');
+        expect(bobConv.threadRootId).toBe('thrd1234');
+        const bobSession = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+            .get(bobConv.id);
+        const runRow = db.prepare('SELECT prompt_text as promptText FROM runs WHERE session_key = ? ORDER BY started_at DESC LIMIT 1').get(bobSession.sessionKey);
+        expect(runRow?.promptText).toContain('#default:thrd1234');
+    });
+    it('agent mention 只对正式 channel/thread 消息生效，并受 cooldown 限制', async () => {
+        const tab = manager.createAgent({
+            name: 'CooldownTab',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/cooldown-tab-router',
+            channelId: 'default',
+        });
+        const bob = manager.createAgent({
+            name: 'CooldownBob',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/cooldown-bob-router',
+            channelId: 'default',
+        });
+        manager.joinChannel(tab.agentId, 'default');
+        manager.joinChannel(bob.agentId, 'default');
+        const dmConv = manager.openAgentThread(tab.agentId);
+        if (!dmConv)
+            throw new Error('missing dm conversation');
+        const dmSession = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+            .get(dmConv.id);
+        createRun(db, {
+            runId: 'run-router-agent-mention-dm',
+            sessionKey: dmSession.sessionKey,
+            promptText: 'dm mention helper',
+        });
+        dispatches.length = 0;
+        const dmRes = await fetch(`${baseUrl}/api/internal/agent/${tab.agentId}/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                content: 'Looping in @CooldownBob from DM',
+                conversationId: dmConv.id,
+            }),
+        });
+        expect(dmRes.status).toBe(200);
+        expect(dispatches.filter((msg) => msg.type === 'run.dispatch')).toHaveLength(0);
+        const rootConv = manager.openAgentChannelThread(tab.agentId, 'default', null);
+        if (!rootConv)
+            throw new Error('missing root conversation');
+        const rootSession = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+            .get(rootConv.id);
+        createRun(db, {
+            runId: 'run-router-agent-mention-cooldown',
+            sessionKey: rootSession.sessionKey,
+            promptText: 'cooldown mention helper',
+        });
+        const firstRes = await fetch(`${baseUrl}/api/internal/agent/${tab.agentId}/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target: '#default',
+                content: 'Please pair on this, @CooldownBob.',
+                kind: 'progress',
+                conversationId: rootConv.id,
+            }),
+        });
+        expect(firstRes.status).toBe(200);
+        const secondRes = await fetch(`${baseUrl}/api/internal/agent/${tab.agentId}/send`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                target: '#default',
+                content: 'Still need you, @CooldownBob.',
+                kind: 'progress',
+                conversationId: rootConv.id,
+            }),
+        });
+        expect(secondRes.status).toBe(200);
+        expect(dispatches.filter((msg) => msg.type === 'run.dispatch')).toHaveLength(1);
+        const cooldownRows = db.prepare(`SELECT COUNT(*) as count
+       FROM agent_mention_cooldowns
+       WHERE channel_id = ? AND thread_root_id = '' AND from_agent_id = ? AND to_agent_id = ?`).get('default', tab.agentId, bob.agentId);
+        expect(cooldownRows.count).toBe(1);
+    });
     it('check_messages 应按 thread_root_id 分别推进 checkpoint，不同 thread 不应互相消费', async () => {
         const channel = manager.createChannel({ name: 'thread-checkpoint-room' });
         const agent = manager.createAgent({

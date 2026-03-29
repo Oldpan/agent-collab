@@ -7,7 +7,7 @@ type ChannelActivationPromptParams = {
   replyTarget?: string;
   senderName: string;
   content: string;
-  reason: 'mention' | 'thread_reply' | 'channel_activity';
+  reason: 'mention' | 'agent_mention' | 'thread_reply' | 'channel_activity';
 };
 
 type ChannelActivationContextParams = {
@@ -23,6 +23,8 @@ type ChannelActivationContextParams = {
 export function buildChannelActivationPrompt(params: ChannelActivationPromptParams): string {
   const reasonText = params.reason === 'mention'
     ? `You were @mentioned in #${params.channelName} by ${params.senderName}.`
+    : params.reason === 'agent_mention'
+      ? `Another agent (@${params.senderName}) explicitly asked for your help in #${params.channelName}.`
     : params.reason === 'thread_reply'
       ? `Your collaborative thread in #${params.channelName} received a reply from ${params.senderName}.`
       : `There is new channel activity in #${params.channelName} from ${params.senderName}.`;

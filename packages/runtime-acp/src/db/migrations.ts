@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 33;
+const LATEST_VERSION = 34;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -645,5 +645,23 @@ export function migrate(db: Db): void {
     `);
 
     db.exec(`UPDATE schema_version SET version = 33;`);
+  }
+
+  if (current < 34) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_mention_cooldowns (
+        channel_id        TEXT NOT NULL,
+        thread_root_id    TEXT NOT NULL,
+        from_agent_id     TEXT NOT NULL,
+        to_agent_id       TEXT NOT NULL,
+        last_notified_at  INTEGER NOT NULL,
+        PRIMARY KEY (channel_id, thread_root_id, from_agent_id, to_agent_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_agent_mention_cooldowns_target
+        ON agent_mention_cooldowns(channel_id, thread_root_id, last_notified_at DESC);
+    `);
+
+    db.exec(`UPDATE schema_version SET version = 34;`);
   }
 }

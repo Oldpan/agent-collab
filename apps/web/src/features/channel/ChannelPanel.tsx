@@ -82,6 +82,30 @@ function MessageRow({
     );
   }
 
+  if (message.messageSource === "delta_fallback") {
+    return (
+      <div className="px-4 py-1.5">
+        <div className="rounded border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">
+          <div className="mb-1.5 flex items-center gap-1.5">
+            <span className="font-medium text-zinc-500">{message.senderName}</span>
+            <span className="rounded bg-zinc-200 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400">
+              fallback
+            </span>
+            <span className="ml-auto text-[10px] text-zinc-400">{formatTime(message.createdAt)}</span>
+          </div>
+          <Streamdown
+            className={cn("text-xs [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", streamdownRootClass)}
+            components={streamdownComponents}
+            rehypePlugins={safeRehypePlugins}
+            remarkPlugins={safeRemarkPlugins}
+          >
+            {escapeHtmlOutsideCodeBlocks(message.content)}
+          </Streamdown>
+        </div>
+      </div>
+    );
+  }
+
   const agent = agents.find((a) => a.name === message.senderName);
 
   return (

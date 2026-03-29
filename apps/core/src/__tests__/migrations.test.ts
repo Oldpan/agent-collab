@@ -24,7 +24,7 @@ describe('migrations', () => {
   it('schema_version 应至少包含最新迁移所需版本', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBeGreaterThanOrEqual(33);
+    expect(row.version).toBeGreaterThanOrEqual(34);
     db.close();
   });
 
@@ -100,6 +100,7 @@ describe('migrations', () => {
     expect(tables.map((t) => t.name)).toContain('target_participants');
     expect(tables.map((t) => t.name)).toContain('thread_task_bindings');
     expect(tables.map((t) => t.name)).toContain('channel_subscriptions');
+    expect(tables.map((t) => t.name)).toContain('agent_mention_cooldowns');
     db.close();
   });
 

@@ -199,6 +199,7 @@ function persistDeltaFallbackMessages(params) {
                 content,
                 createdAt: new Date(createdAt).toISOString(),
                 seq,
+                messageSource: 'delta_fallback',
                 ...(context.threadRootId ? { threadRootId: context.threadRootId } : {}),
             },
         });
