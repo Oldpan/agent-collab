@@ -2,6 +2,7 @@ import type { MemoryBackend } from './types.js';
 export declare function resolveMemoryBackend(agentType: string, workspacePath: string): MemoryBackend;
 export declare function buildAgentSessionSystemPromptText(params: {
     agentName: string;
+    agentBio?: string;
     agentDescription?: string;
     workspacePath: string;
     toolPrefix?: string;

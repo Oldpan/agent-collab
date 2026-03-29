@@ -1,4 +1,4 @@
-const LATEST_VERSION = 34;
+const LATEST_VERSION = 35;
 export function migrate(db) {
     db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -581,5 +581,12 @@ export function migrate(db) {
         ON agent_mention_cooldowns(channel_id, thread_root_id, last_notified_at DESC);
     `);
         db.exec(`UPDATE schema_version SET version = 34;`);
+    }
+    if (current < 35) {
+        const agentCols = db.prepare("PRAGMA table_info('agents')").all();
+        if (!agentCols.some((c) => c.name === 'description')) {
+            db.exec(`ALTER TABLE agents ADD COLUMN description TEXT;`);
+        }
+        db.exec(`UPDATE schema_version SET version = 35;`);
     }
 }

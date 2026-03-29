@@ -1,78 +1,10 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
-import { PlusIcon } from "lucide-react";
 import type { AgentType, CreateAgentRequest } from "@agent-collab/protocol";
 import { cn } from "@/lib/utils";
 import defaultSystemPrompt from "@/prompts/default-system-prompt.md?raw";
-
-// Simple env vars editor for the dialog
-function SimpleEnvVarsEditor({
-  value,
-  onChange,
-}: {
-  value: Record<string, string> | undefined;
-  onChange: (value: Record<string, string> | undefined) => void;
-}) {
-  const [newKey, setNewKey] = useState("");
-  const [newValue, setNewValue] = useState("");
-
-  const entries = Object.entries(value ?? {});
-
-  const addEntry = () => {
-    if (!newKey.trim()) return;
-    onChange({ ...value, [newKey.trim()]: newValue });
-    setNewKey("");
-    setNewValue("");
-  };
-
-  const removeEntry = (key: string) => {
-    const next = { ...value };
-    delete next[key];
-    onChange(Object.keys(next).length > 0 ? next : undefined);
-  };
-
-  return (
-    <div className="space-y-1">
-      {entries.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {entries.map(([k]) => (
-            <span
-              key={k}
-              className="inline-flex items-center gap-0.5 rounded-sm border border-zinc-900 bg-[#fff8d8] px-1.5 py-0.5 text-[10px] font-mono"
-            >
-              {k}
-              <button
-                onClick={() => removeEntry(k)}
-                className="ml-0.5 text-muted-foreground hover:text-foreground"
-              >
-                ×
-              </button>
-            </span>
-          ))}
-        </div>
-      )}
-      <div className="flex gap-1">
-        <input
-          className="flex-1 rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs font-mono"
-          placeholder="KEY"
-          value={newKey}
-          onChange={(e) => setNewKey(e.target.value.toUpperCase())}
-          onKeyDown={(e) => e.key === "Enter" && addEntry()}
-        />
-        <input
-          className="flex-1 rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs"
-          placeholder="value"
-          value={newValue}
-          onChange={(e) => setNewValue(e.target.value)}
-          onKeyDown={(e) => e.key === "Enter" && addEntry()}
-        />
-        <Button size="icon-xs" variant="outline" className="rounded-sm border-2 border-zinc-900 bg-white hover:bg-[#fff1a9]" onClick={addEntry}>
-          <PlusIcon className="size-3" />
-        </Button>
-      </div>
-    </div>
-  );
-}
+import { Textarea } from "@/components/ui/textarea";
+import { parseEnvVarsText } from "@/lib/env-vars";
 
 type Props = {
   onClose: () => void;
@@ -82,10 +14,13 @@ type Props = {
 
 export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
   const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
   const [agentType, setAgentType] = useState<AgentType>("claude_acp");
   const [systemPrompt, setSystemPrompt] = useState(defaultSystemPrompt);
-  const [envVars, setEnvVars] = useState<Record<string, string> | undefined>();
+  const [envVarsText, setEnvVarsText] = useState("");
   const [creating, setCreating] = useState(false);
+  const parsedEnvVars = useMemo(() => parseEnvVarsText(envVarsText), [envVarsText]);
+  const envVars = Object.keys(parsedEnvVars.envVars).length > 0 ? parsedEnvVars.envVars : undefined;
 
   const handleCreate = useCallback(async () => {
     if (!name.trim()) return;
@@ -93,6 +28,7 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
     try {
       onCreate({
         name: name.trim(),
+        description: description.trim() || undefined,
         agentType,
         systemPrompt: systemPrompt.trim() || undefined,
         envVars,
@@ -102,7 +38,7 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
     } finally {
       setCreating(false);
     }
-  }, [name, agentType, systemPrompt, envVars, machineNodeId, onCreate, onClose]);
+  }, [name, description, agentType, systemPrompt, envVars, machineNodeId, onCreate, onClose]);
 
   return (
     <div className="space-y-3">
@@ -118,6 +54,20 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
             if (e.key === "Enter") handleCreate();
             if (e.key === "Escape") onClose();
           }}
+        />
+      </div>
+
+      <div className="space-y-0.5">
+        <label className="text-[10px] text-zinc-500">
+          Description
+          <span className="ml-1 text-zinc-400">({description.length}/50)</span>
+        </label>
+        <input
+          className="w-full rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs placeholder:text-zinc-400"
+          placeholder="Short bio (optional)"
+          maxLength={50}
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
         />
       </div>
 
@@ -154,7 +104,59 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
 
       <div className="space-y-0.5">
         <label className="text-[10px] text-zinc-500">Environment Variables</label>
-        <SimpleEnvVarsEditor value={envVars} onChange={setEnvVars} />
+        <div className="space-y-2 rounded-sm border-2 border-zinc-900 bg-[#fff8d8] p-2">
+          <Textarea
+            className="min-h-[140px] resize-y border-2 border-zinc-900 bg-white px-2 py-1.5 text-[11px] font-mono leading-5"
+            placeholder={[
+              "Paste shell exports here",
+              "export https_proxy=http://127.0.0.1:7893",
+              "export ENABLE_TOOL_SEARCH=FALSE",
+              "export ANTHROPIC_MODEL=kimi-k2.5",
+            ].join("\n")}
+            value={envVarsText}
+            onChange={(event) => setEnvVarsText(event.target.value)}
+          />
+
+          <div className="flex items-center justify-between gap-2 text-[10px] text-zinc-500">
+            <span>Supports `export KEY=value` and `KEY=value` lines.</span>
+            <Button
+              type="button"
+              size="xs"
+              variant="outline"
+              className="rounded-sm border-2 border-zinc-900 bg-white hover:bg-[#fff1a9]"
+              onClick={() => setEnvVarsText("")}
+              disabled={!envVarsText.trim()}
+            >
+              Clear
+            </Button>
+          </div>
+
+          {parsedEnvVars.ignoredLines.length > 0 && (
+            <div className="rounded-sm border border-amber-300/60 bg-amber-50 px-2 py-1 text-[10px] text-amber-900">
+              Ignored {parsedEnvVars.ignoredLines.length} line(s) that are not valid env assignments.
+            </div>
+          )}
+
+          <div className="rounded-sm border-2 border-dashed border-zinc-900/40 bg-[#fffdf0] px-2 py-1.5">
+            <div className="mb-1 text-[10px] font-medium text-zinc-500">Parsed Variables</div>
+            {envVars ? (
+              <div className="max-h-28 space-y-1 overflow-auto">
+                {Object.entries(envVars).map(([key, envValue]) => (
+                  <div key={key} className="flex gap-2 text-[10px]">
+                    <span className="min-w-0 flex-none rounded-sm border border-zinc-900 bg-white px-1 font-mono text-foreground">
+                      {key}
+                    </span>
+                    <span className="min-w-0 truncate font-mono text-zinc-500" title={envValue}>
+                      {envValue}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="text-[10px] text-zinc-500">No variables parsed yet.</div>
+            )}
+          </div>
+        </div>
       </div>
 
       <Button

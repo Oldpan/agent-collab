@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 34;
+const LATEST_VERSION = 35;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -663,5 +663,13 @@ export function migrate(db: Db): void {
     `);
 
     db.exec(`UPDATE schema_version SET version = 34;`);
+  }
+
+  if (current < 35) {
+    const agentCols = db.prepare("PRAGMA table_info('agents')").all() as Array<{ name: string }>;
+    if (!agentCols.some((c) => c.name === 'description')) {
+      db.exec(`ALTER TABLE agents ADD COLUMN description TEXT;`);
+    }
+    db.exec(`UPDATE schema_version SET version = 35;`);
   }
 }

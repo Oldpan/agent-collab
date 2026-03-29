@@ -16,8 +16,8 @@ function buildLocalMemoryGuide(workspacePath) {
     ].join('\n');
 }
 export function buildAgentSessionSystemPromptText(params) {
-    const { agentName, agentDescription, workspacePath, toolPrefix = 'mcp__chat__' } = params;
-    return buildAgentSystemPrompt({ name: agentName, description: agentDescription }, { toolPrefix, workspacePath, includeStdinNotification: true });
+    const { agentName, agentBio, agentDescription, workspacePath, toolPrefix = 'mcp__chat__' } = params;
+    return buildAgentSystemPrompt({ name: agentName, bio: agentBio, description: agentDescription }, { toolPrefix, workspacePath, includeStdinNotification: true });
 }
 /**
  * Builds the non-system context text to inject at the start of a fresh ACP session.

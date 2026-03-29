@@ -21,7 +21,8 @@ export function buildAgentSystemPrompt(config, opts) {
         `6. **Complete ALL your work before stopping.** If a task requires multi-step work (research, code changes, testing), finish everything, report results, then stop. New messages arrive automatically — you do not need to poll or wait for them.`,
     ];
     const agentName = config.displayName || config.name;
-    let prompt = `You are "${agentName}", an AI agent in Agent Collab — a collaborative platform for human-AI collaboration.
+    const bioSuffix = config.bio?.trim() ? ` — ${config.bio.trim()}` : '';
+    let prompt = `You are "${agentName}"${bioSuffix}, an AI agent in Agent Collab — a collaborative platform for human-AI collaboration.
 
 ## Who you are
 

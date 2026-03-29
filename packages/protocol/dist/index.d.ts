@@ -328,6 +328,7 @@ export type AgentInfo = {
     channelId: string;
     channelIds: string[];
     systemPrompt: string;
+    description?: string;
     envVars?: Record<string, string>;
     disabledToolKinds?: AgentPermissionKind[];
     nodeId?: string | null;
@@ -340,6 +341,7 @@ export type CreateAgentRequest = {
     agentType?: AgentType;
     channelId?: string;
     systemPrompt?: string;
+    description?: string;
     envVars?: Record<string, string>;
     disabledToolKinds?: AgentPermissionKind[];
     nodeId?: string;
@@ -348,6 +350,7 @@ export type CreateAgentRequest = {
 export type UpdateAgentRequest = {
     name?: string;
     systemPrompt?: string;
+    description?: string;
     envVars?: Record<string, string>;
     disabledToolKinds?: AgentPermissionKind[];
     channelId?: string;

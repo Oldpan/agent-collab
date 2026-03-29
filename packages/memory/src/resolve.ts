@@ -21,14 +21,15 @@ function buildLocalMemoryGuide(workspacePath: string): string {
 
 export function buildAgentSessionSystemPromptText(params: {
   agentName: string;
+  agentBio?: string;
   agentDescription?: string;
   workspacePath: string;
   toolPrefix?: string;
 }): string {
-  const { agentName, agentDescription, workspacePath, toolPrefix = 'mcp__chat__' } = params;
+  const { agentName, agentBio, agentDescription, workspacePath, toolPrefix = 'mcp__chat__' } = params;
 
   return buildAgentSystemPrompt(
-    { name: agentName, description: agentDescription },
+    { name: agentName, bio: agentBio, description: agentDescription },
     { toolPrefix, workspacePath, includeStdinNotification: true },
   );
 }

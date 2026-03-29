@@ -1,6 +1,8 @@
 export type AgentSystemPromptConfig = {
   name: string;
   displayName?: string;
+  /** Short bio (≤50 chars) — embedded in the opening identity line. */
+  bio?: string;
   /** The agent's role description — shown as "Initial role" at the end of the prompt. */
   description?: string;
 };
@@ -43,8 +45,9 @@ export function buildAgentSystemPrompt(
   ];
 
   const agentName = config.displayName || config.name;
+  const bioSuffix = config.bio?.trim() ? ` — ${config.bio.trim()}` : '';
 
-  let prompt = `You are "${agentName}", an AI agent in Agent Collab — a collaborative platform for human-AI collaboration.
+  let prompt = `You are "${agentName}"${bioSuffix}, an AI agent in Agent Collab — a collaborative platform for human-AI collaboration.
 
 ## Who you are
 

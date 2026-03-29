@@ -10,7 +10,7 @@ import { useCallback, useEffect, useState } from "react";
 import type {
   AgentInfo, MachineInfo, ChannelInfo,
   CreateAgentRequest,
-  CreateMachineRequest, ConversationInfo,
+  CreateMachineRequest, ConversationInfo, ConversationStatus,
 } from "@agent-collab/protocol";
 import { MachineCreatePanel } from "./MachineCreatePanel";
 import { ChannelCreatePanel } from "./ChannelCreatePanel";
@@ -77,6 +77,41 @@ function StatusDot({ status }: { status: MachineInfo["status"] }) {
         "bg-muted-foreground/40": status === "offline",
       })}
       title={status}
+    />
+  );
+}
+
+function AgentStatusDot({
+  machineStatus,
+  conversationStatus,
+}: {
+  machineStatus: MachineInfo["status"] | null;
+  conversationStatus: ConversationStatus | null;
+}) {
+  let color: string;
+  let label: string;
+
+  if (!machineStatus || machineStatus === "offline") {
+    color = "bg-zinc-300";
+    label = "offline";
+  } else if (machineStatus === "pending") {
+    color = "bg-yellow-400";
+    label = "connecting";
+  } else if (conversationStatus === "active") {
+    color = "bg-orange-400";
+    label = "running";
+  } else if (conversationStatus === "queued") {
+    color = "bg-blue-400";
+    label = "queued";
+  } else {
+    color = "bg-green-500";
+    label = "online";
+  }
+
+  return (
+    <span
+      className={cn("inline-block size-1.5 rounded-full shrink-0", color)}
+      title={label}
     />
   );
 }
@@ -349,6 +384,8 @@ export function Sidebar({
                           isSelected={selectedAgentId === agent.agentId}
                           updatedAt={primaryConversation?.updatedAt ?? agent.updatedAt}
                           unreadCount={agentUnreadCounts[agent.agentId] ?? 0}
+                          machineStatus={machine.status}
+                          conversationStatus={primaryConversation?.status ?? null}
                           onOpen={() => onOpenAgentThread(agent.agentId)}
                           onDelete={() => handleOpenDeleteDialog(agent)}
                         />
@@ -382,13 +419,14 @@ export function Sidebar({
             )}
 
             {channels.map((channel) => (
-              <ChannelRow
-                key={channel.channelId}
-                channel={channel}
-                isSelected={selectedChannelId === channel.channelId}
-                unreadCount={channelUnreadCounts[channel.channelId] ?? 0}
-                onSelect={() => onSelectChannel(channel.channelId)}
-              />
+              <div key={channel.channelId} className="mb-1 w-2/5">
+                <ChannelRow
+                  channel={channel}
+                  isSelected={selectedChannelId === channel.channelId}
+                  unreadCount={channelUnreadCounts[channel.channelId] ?? 0}
+                  onSelect={() => onSelectChannel(channel.channelId)}
+                />
+              </div>
             ))}
           </div>
         </div>
@@ -434,6 +472,8 @@ type AgentRowProps = {
   isSelected: boolean;
   updatedAt: number;
   unreadCount: number;
+  machineStatus: MachineInfo["status"] | null;
+  conversationStatus: ConversationStatus | null;
   onOpen: () => void;
   onDelete: () => void;
 };
@@ -475,7 +515,7 @@ function ChannelRow({ channel, isSelected, unreadCount, onSelect }: ChannelRowPr
 
 // ─── AgentRow ───
 
-function AgentRow({ agent, isSelected, updatedAt, unreadCount, onOpen, onDelete }: AgentRowProps) {
+function AgentRow({ agent, isSelected, updatedAt, unreadCount, machineStatus, conversationStatus, onOpen, onDelete }: AgentRowProps) {
   return (
     <div className={cn(
       "group flex w-full items-center gap-1.5 rounded-md border-2 border-zinc-900 px-2 py-1.5 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]",
@@ -487,12 +527,16 @@ function AgentRow({ agent, isSelected, updatedAt, unreadCount, onOpen, onDelete 
         onClick={onOpen}
         title="Open private chat"
       >
+        <AgentStatusDot machineStatus={machineStatus} conversationStatus={conversationStatus} />
         <ChatAvatar role="assistant" agent={agent} size={24} className="shrink-0" />
         <div className="min-w-0 flex-1">
-          <div className="truncate text-xs font-medium">{agent.name}</div>
-          <div className="truncate text-[10px] text-zinc-500">
-            {formatRelativeTime(updatedAt)}
+          <div className="flex items-baseline gap-1.5">
+            <div className="min-w-0 truncate text-xs font-medium">{agent.name}</div>
+            <div className="shrink-0 text-[10px] text-zinc-400">{formatRelativeTime(updatedAt)}</div>
           </div>
+          {agent.description && (
+            <div className="truncate text-[10px] text-zinc-500">{agent.description}</div>
+          )}
         </div>
       </button>
       <div className="flex items-center gap-1 shrink-0">

@@ -50,6 +50,7 @@ type AgentRow = {
   agentType: AgentType;
   channelId: string;
   systemPrompt: string;
+  description: string | null;
   envVarsJson: string | null;
   disabledToolKindsJson: string | null;
   nodeId: string | null;
@@ -111,12 +112,14 @@ export class ConversationManager {
       ?? path.join(os.homedir(), '.agent-collab', 'agents', `${agentId}-${slugifyAgentName(params.name)}`);
     fs.mkdirSync(workspacePath, { recursive: true });
 
+    const description = params.description?.trim() || null;
+
     this.db.prepare(
-      `INSERT INTO agents(agent_id, name, agent_type, channel_id, system_prompt, memory, env_vars, disabled_tool_kinds, node_id, workspace_path, created_at, updated_at)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO agents(agent_id, name, agent_type, channel_id, system_prompt, description, memory, env_vars, disabled_tool_kinds, node_id, workspace_path, created_at, updated_at)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       agentId, params.name, agentType, channelId,
-      params.systemPrompt ?? '', '',
+      params.systemPrompt ?? '', description, '',
       envVarsJson, disabledToolKindsJson, params.nodeId ?? null, workspacePath,
       now, now,
     );
@@ -128,6 +131,7 @@ export class ConversationManager {
     return {
       agentId, name: params.name, agentType, channelId, channelIds: [channelId],
       systemPrompt: params.systemPrompt ?? '',
+      ...(description ? { description } : {}),
       envVars: params.envVars, disabledToolKinds: params.disabledToolKinds, nodeId: params.nodeId ?? null,
       workspacePath, createdAt: now, updatedAt: now,
     };
@@ -136,14 +140,16 @@ export class ConversationManager {
   listAgents(channelId?: string): AgentInfo[] {
     const sql = channelId
       ? `SELECT a.agent_id as agentId, a.name, a.agent_type as agentType, a.channel_id as channelId,
-                a.system_prompt as systemPrompt, a.env_vars as envVarsJson, a.disabled_tool_kinds as disabledToolKindsJson,
+                a.system_prompt as systemPrompt, a.description,
+                a.env_vars as envVarsJson, a.disabled_tool_kinds as disabledToolKindsJson,
                 a.node_id as nodeId, a.workspace_path as workspacePath,
                 a.created_at as createdAt, a.updated_at as updatedAt
          FROM agents a
          JOIN agent_channel_memberships m ON m.agent_id = a.agent_id
          WHERE m.channel_id = ? ORDER BY a.updated_at DESC`
       : `SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
-                system_prompt as systemPrompt, env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
+                system_prompt as systemPrompt, description,
+                env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
                 node_id as nodeId, workspace_path as workspacePath,
                 created_at as createdAt, updated_at as updatedAt
          FROM agents ORDER BY updated_at DESC`;
@@ -156,7 +162,8 @@ export class ConversationManager {
   getAgent(agentId: string): AgentInfo | null {
     const row = this.db.prepare(
       `SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
-              system_prompt as systemPrompt, env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
+              system_prompt as systemPrompt, description,
+              env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
               node_id as nodeId, workspace_path as workspacePath,
               created_at as createdAt, updated_at as updatedAt
        FROM agents WHERE agent_id = ?`
@@ -171,6 +178,7 @@ export class ConversationManager {
     const now = Date.now();
     const name = req.name ?? existing.name;
     const systemPrompt = req.systemPrompt ?? existing.systemPrompt;
+    const description = 'description' in req ? (req.description?.trim() || null) : (existing.description ?? null);
     const envVars = req.envVars ?? existing.envVars;
     const disabledToolKinds = req.disabledToolKinds ?? existing.disabledToolKinds;
     const channelId = req.channelId ?? existing.channelId;
@@ -183,9 +191,9 @@ export class ConversationManager {
 
     this.db.prepare(
       `UPDATE agents
-       SET name = ?, system_prompt = ?, env_vars = ?, disabled_tool_kinds = ?, channel_id = ?, updated_at = ?
+       SET name = ?, system_prompt = ?, description = ?, env_vars = ?, disabled_tool_kinds = ?, channel_id = ?, updated_at = ?
        WHERE agent_id = ?`
-    ).run(name, systemPrompt, envVarsJson, disabledToolKindsJson, channelId, now, agentId);
+    ).run(name, systemPrompt, description, envVarsJson, disabledToolKindsJson, channelId, now, agentId);
 
     // Migrate home channel membership if channelId changed
     if (req.channelId && req.channelId !== existing.channelId) {
@@ -946,6 +954,7 @@ export class ConversationManager {
       channelId: row.channelId,
       channelIds: memberships.map((m) => m.channelId),
       systemPrompt: row.systemPrompt,
+      ...(row.description ? { description: row.description } : {}),
       envVars: parseEnvVars(row.envVarsJson),
       disabledToolKinds: parseDisabledToolKinds(row.disabledToolKindsJson),
       nodeId: row.nodeId,

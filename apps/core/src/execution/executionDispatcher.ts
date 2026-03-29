@@ -82,6 +82,7 @@ export class ExecutionDispatcher {
         disabledToolKinds = agent.disabledToolKinds;
         systemPromptText = buildAgentSessionSystemPromptText({
           agentName: agent.name,
+          agentBio: agent.description || undefined,
           agentDescription: agent.systemPrompt || undefined,
           workspacePath: row.workspacePath ?? this.config.workspaceRoot,
         });

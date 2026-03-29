@@ -24,7 +24,7 @@ describe('migrations', () => {
   it('schema_version 应至少包含最新迁移所需版本', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBeGreaterThanOrEqual(34);
+    expect(row.version).toBeGreaterThanOrEqual(35);
     db.close();
   });
 

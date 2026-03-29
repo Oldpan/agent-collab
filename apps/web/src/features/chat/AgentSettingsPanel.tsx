@@ -3,7 +3,7 @@ import { Button } from "@/components/ui/button";
 import { RefreshCwIcon, MessageSquareOffIcon, Trash2Icon, SaveIcon } from "lucide-react";
 import type { AgentInfo, UpdateAgentRequest } from "@agent-collab/protocol";
 import { cn } from "@/lib/utils";
-import { AgentEnvVarsEditor } from "@/features/sidebar/AgentEnvVarsEditor";
+import { AgentEnvVarsKeyValueEditor } from "@/features/sidebar/AgentEnvVarsKeyValueEditor";
 import { AgentPermissionSettings } from "@/features/sidebar/AgentPermissionSettings";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useChannels } from "@/hooks/useChannels";
@@ -20,6 +20,7 @@ type Props = {
 
 export function AgentSettingsPanel({ agent, onUpdate, onRestart, onClearChat, onReset }: Props) {
   const [name, setName] = useState(agent.name);
+  const [description, setDescription] = useState(agent.description ?? "");
   const [joinedChannelIds, setJoinedChannelIds] = useState<Set<string>>(
     new Set(agent.channelIds && agent.channelIds.length > 0 ? agent.channelIds : [agent.channelId]),
   );
@@ -56,14 +57,14 @@ export function AgentSettingsPanel({ agent, onUpdate, onRestart, onClearChat, on
       const toJoin = [...joinedChannelIds].filter((id) => !prevIds.has(id));
       const toLeave = [...prevIds].filter((id) => !joinedChannelIds.has(id));
       await Promise.all([
-        onUpdate({ name, envVars, disabledToolKinds }),
+        onUpdate({ name, description: description.trim() || undefined, envVars, disabledToolKinds }),
         ...toJoin.map((id) => joinAgentChannel(agent.agentId, id)),
         ...toLeave.map((id) => leaveAgentChannel(agent.agentId, id)),
       ]);
     } finally {
       setSaving(false);
     }
-  }, [agent.agentId, agent.channelId, agent.channelIds, disabledToolKinds, envVars, joinedChannelIds, name, onUpdate]);
+  }, [agent.agentId, agent.channelId, agent.channelIds, description, disabledToolKinds, envVars, joinedChannelIds, name, onUpdate]);
 
   const toggleChannel = useCallback((id: string) => {
     setJoinedChannelIds((prev) => {
@@ -189,6 +190,21 @@ export function AgentSettingsPanel({ agent, onUpdate, onRestart, onClearChat, on
               />
             </div>
 
+            {/* Description */}
+            <div className="space-y-1">
+              <label className="flex items-center gap-1 text-xs text-zinc-600">
+                Description
+                <span className="text-zinc-400">({description.length}/50)</span>
+              </label>
+              <input
+                className="w-full rounded-sm border-2 border-zinc-900 bg-white px-2 py-1.5 text-sm placeholder:text-zinc-400"
+                placeholder="Short bio (optional)"
+                maxLength={50}
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+              />
+            </div>
+
             {/* Channel membership */}
             {channels.length > 0 && (
               <div className="space-y-1">
@@ -224,7 +240,7 @@ export function AgentSettingsPanel({ agent, onUpdate, onRestart, onClearChat, on
               </div>
             )}
 
-            <AgentEnvVarsEditor
+            <AgentEnvVarsKeyValueEditor
               editorKey={agent.agentId}
               value={envVars}
               onChange={setEnvVars}

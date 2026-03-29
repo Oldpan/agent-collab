@@ -1,6 +1,8 @@
 export type AgentSystemPromptConfig = {
     name: string;
     displayName?: string;
+    /** Short bio (≤50 chars) — embedded in the opening identity line. */
+    bio?: string;
     /** The agent's role description — shown as "Initial role" at the end of the prompt. */
     description?: string;
 };
