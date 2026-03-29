@@ -720,6 +720,16 @@ export function registerInternalAgentRoutes(
       row.taskId,
     );
 
+    const binding = getThreadBindingForTask(db, row.taskId);
+    if (binding) {
+      setTargetOwner(db, {
+        channelId: binding.channelId,
+        threadRootId: binding.threadRootId,
+        agentId: status === 'done' ? null : (row.claimedByAgentId ?? null),
+        lastActiveAt: Date.now(),
+      });
+    }
+
     return { ok: true, taskNumber: task_number, status };
   });
 }

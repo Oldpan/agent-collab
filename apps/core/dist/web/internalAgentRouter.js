@@ -514,6 +514,15 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
             return { error: 'You must be the task assignee to update its status' };
         }
         db.prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?`).run(status, Date.now(), row.taskId);
+        const binding = getThreadBindingForTask(db, row.taskId);
+        if (binding) {
+            setTargetOwner(db, {
+                channelId: binding.channelId,
+                threadRootId: binding.threadRootId,
+                agentId: status === 'done' ? null : (row.claimedByAgentId ?? null),
+                lastActiveAt: Date.now(),
+            });
+        }
         return { ok: true, taskNumber: task_number, status };
     });
 }

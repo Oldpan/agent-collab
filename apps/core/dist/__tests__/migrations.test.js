@@ -20,7 +20,7 @@ describe('migrations', () => {
     it('schema_version 应至少包含最新迁移所需版本', () => {
         const db = createTestDb();
         const row = db.prepare('SELECT version FROM schema_version').get();
-        expect(row.version).toBeGreaterThanOrEqual(32);
+        expect(row.version).toBeGreaterThanOrEqual(33);
         db.close();
     });
     it('nodes 表应包含 display_name, env_var_keys, provisioned_at 列', () => {
@@ -84,6 +84,7 @@ describe('migrations', () => {
             .all();
         expect(tables.map((t) => t.name)).toContain('target_participants');
         expect(tables.map((t) => t.name)).toContain('thread_task_bindings');
+        expect(tables.map((t) => t.name)).toContain('channel_subscriptions');
         db.close();
     });
     it('sessions/bindings/runs/events 等表应存在', () => {

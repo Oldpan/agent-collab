@@ -5,6 +5,7 @@ import path from 'node:path';
 import { log, createSession, upsertBinding, } from '@agent-collab/runtime-acp';
 import { getRuntimeDriver } from '@agent-collab/protocol';
 import { ExecutionDispatcher } from '../execution/executionDispatcher.js';
+import { deleteChannelSubscription, listChannelSubscriptions, upsertChannelSubscription, } from './channelSubscriptions.js';
 import { deleteTargetParticipantsForAgent, deleteTargetParticipantsForChannel } from './targetParticipants.js';
 function slugifyAgentName(name) {
     return name
@@ -439,11 +440,14 @@ export class ConversationManager {
     }
     // ─── Channel CRUD ───
     joinChannel(agentId, channelId) {
+        const now = Date.now();
         this.db.prepare(`INSERT OR IGNORE INTO agent_channel_memberships(agent_id, channel_id, is_home, joined_at)
-       VALUES(?, ?, 0, ?)`).run(agentId, channelId, Date.now());
+       VALUES(?, ?, 0, ?)`).run(agentId, channelId, now);
+        upsertChannelSubscription(this.db, { agentId, channelId, subscribedAt: now, lastActiveAt: now });
     }
     leaveChannel(agentId, channelId) {
         this.db.prepare(`DELETE FROM agent_channel_memberships WHERE agent_id = ? AND channel_id = ?`).run(agentId, channelId);
+        deleteChannelSubscription(this.db, channelId, agentId);
     }
     createChannel(params) {
         const channelId = params.name === 'default' ? 'default' : randomUUID();
@@ -459,6 +463,7 @@ export class ConversationManager {
             workspacePath: params.workspacePath ?? null,
             description: params.description,
             collaborationMode,
+            subscribedAgents: [],
             createdAt: now,
             updatedAt: now,
         };
@@ -470,7 +475,12 @@ export class ConversationManager {
         const now = Date.now();
         const collaborationMode = req.collaborationMode ?? existing.collaborationMode ?? 'mention_only';
         this.db.prepare(`UPDATE channels SET description = ?, collaboration_mode = ?, updated_at = ? WHERE channel_id = ?`).run(req.description ?? existing.description ?? null, collaborationMode, now, channelId);
-        return { ...existing, description: req.description ?? existing.description, collaborationMode, updatedAt: now };
+        return {
+            ...existing,
+            description: req.description ?? existing.description,
+            collaborationMode,
+            updatedAt: now,
+        };
     }
     clearChannelChat(channelId) {
         const rows = this.db.prepare(`SELECT id, channel_id as channelId, agent_type as agentType, workspace_path as workspacePath,
@@ -507,12 +517,19 @@ export class ConversationManager {
         return this.listConversations({ channelId }).filter((item) => item.threadKind === 'branch');
     }
     listChannels() {
-        return this.db
+        const rows = this.db
             .prepare(`SELECT channel_id as channelId, name, workspace_path as workspacePath,
                 description, collaboration_mode as collaborationMode,
                 created_at as createdAt, updated_at as updatedAt
          FROM channels ORDER BY created_at ASC`)
             .all();
+        return rows.map((row) => ({
+            ...row,
+            subscribedAgents: listChannelSubscriptions(this.db, row.channelId).map((item) => ({
+                agentId: item.agentId,
+                name: item.name,
+            })),
+        }));
     }
     getChannel(channelId) {
         const row = this.db
@@ -521,7 +538,15 @@ export class ConversationManager {
                 created_at as createdAt, updated_at as updatedAt
          FROM channels WHERE channel_id = ?`)
             .get(channelId);
-        return row ?? null;
+        if (!row)
+            return null;
+        return {
+            ...row,
+            subscribedAgents: listChannelSubscriptions(this.db, channelId).map((item) => ({
+                agentId: item.agentId,
+                name: item.name,
+            })),
+        };
     }
     async handleApproval(conversationId, requestId, decision) {
         return this.executionDispatcher.handleApproval(conversationId, requestId, decision);

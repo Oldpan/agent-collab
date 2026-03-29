@@ -47,7 +47,7 @@ export function App() {
 
   const { agents, createAgent, updateAgent, deleteAgent } = useAgents();
   const { machines, createMachine, deleteMachine } = useMachines();
-  const { channels, createChannel } = useChannels();
+  const { channels, createChannel, updateChannel: updateChannelInStore } = useChannels();
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
 
   const visibleConversations = useMemo(() => {
@@ -260,6 +260,7 @@ export function App() {
               channel={selectedChannel}
               agents={agents}
               onSeenSeq={handleChannelSeenSeq}
+              onChannelUpdated={updateChannelInStore}
               onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
             />
           ) : selectedConversation ? (

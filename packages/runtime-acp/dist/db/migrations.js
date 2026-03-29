@@ -1,4 +1,4 @@
-const LATEST_VERSION = 32;
+const LATEST_VERSION = 33;
 export function migrate(db) {
     db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -550,5 +550,20 @@ export function migrate(db) {
         ON thread_task_bindings(task_id);
     `);
         db.exec(`UPDATE schema_version SET version = 32;`);
+    }
+    if (current < 33) {
+        db.exec(`
+      CREATE TABLE IF NOT EXISTS channel_subscriptions (
+        channel_id      TEXT NOT NULL,
+        agent_id        TEXT NOT NULL,
+        subscribed_at   INTEGER NOT NULL,
+        last_active_at  INTEGER NOT NULL,
+        PRIMARY KEY (channel_id, agent_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_channel_subscriptions_channel
+        ON channel_subscriptions(channel_id, last_active_at DESC);
+    `);
+        db.exec(`UPDATE schema_version SET version = 33;`);
     }
 }

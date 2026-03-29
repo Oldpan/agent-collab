@@ -1,5 +1,15 @@
 # Changelog
 
+## 2026-03-29 (channel subscriptions + thread-task lifecycle completion)
+
+- 新增 `channel_subscriptions`，schema 升到 `v33`；`subscribed_agents` 模式现在只唤醒显式订阅该频道的 agent，不再在无 participant 时回退唤醒全频道 agent。
+- `joinChannel` / `leaveChannel` 会同步维护频道订阅；channel API 返回 `subscribedAgents`，前端设置页可以直接看到当前模式和订阅 agent。
+- thread-task 协议补齐了显式 bind / unbind 路由；task `done` 后会清空 thread owner，但保留绑定，让 thread 继续作为结果讨论面。
+- thread summary 与 task 列表前端去掉了旧占位文案，直接展示真实 `boundTask / owner / participants / linkedThread` 数据。
+- Channel Settings 现在支持对频道成员逐个 `subscribe / unsubscribe`；`subscribed_agents` 模式下可以直接管理被动唤醒对象。
+- ThreadPanel 和 TasksTab 都补上了显式 `bind / unbind task` 交互，围绕当前 thread 完成单 task 绑定。
+- 剩余 roadmap 已收敛到更深的 thread 协作协议、任务分配和频道描述编辑，不再包含这批基础交互缺口。
+
 ## 2026-03-29 (thread-task binding + thread collaboration summary)
 
 - 新增 `thread_task_bindings`，schema 升到 `v32`；一个 thread 现在最多绑定一个 task，后续 thread 协作可以围绕真实 task 收敛。

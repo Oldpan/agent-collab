@@ -107,6 +107,24 @@ describe('ConversationManager', () => {
       expect(updated?.collaborationMode).toBe('subscribed_agents');
       expect(manager.getChannel(channel.channelId)?.collaborationMode).toBe('subscribed_agents');
     });
+
+    it('joinChannel/leaveChannel 应同步维护 subscribedAgents', () => {
+      const channel = manager.createChannel({ name: 'ops-subscribers' });
+      const agent = manager.createAgent({
+        name: 'SubBob',
+        agentType: 'claude_acp',
+        nodeId: 'node-1',
+        workspacePath: '/tmp/sub-bob',
+      });
+
+      manager.joinChannel(agent.agentId, channel.channelId);
+      expect(manager.getChannel(channel.channelId)?.subscribedAgents).toEqual([
+        { agentId: agent.agentId, name: 'SubBob' },
+      ]);
+
+      manager.leaveChannel(agent.agentId, channel.channelId);
+      expect(manager.getChannel(channel.channelId)?.subscribedAgents).toEqual([]);
+    });
   });
 
   describe('listConversations', () => {

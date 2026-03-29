@@ -9,6 +9,7 @@ type ChannelsState = {
   setChannels: (channels: ChannelInfo[]) => void;
   setLoading: (loading: boolean) => void;
   addChannel: (channel: ChannelInfo) => void;
+  replaceChannel: (channel: ChannelInfo) => void;
 };
 
 const useChannelsStore = create<ChannelsState>((set) => ({
@@ -17,10 +18,13 @@ const useChannelsStore = create<ChannelsState>((set) => ({
   setChannels: (channels) => set({ channels }),
   setLoading: (loading) => set({ loading }),
   addChannel: (channel) => set((state) => ({ channels: [...state.channels, channel] })),
+  replaceChannel: (channel) => set((state) => ({
+    channels: state.channels.map((item) => (item.channelId === channel.channelId ? channel : item)),
+  })),
 }));
 
 export function useChannels() {
-  const { channels, loading, setChannels, setLoading, addChannel } = useChannelsStore();
+  const { channels, loading, setChannels, setLoading, addChannel, replaceChannel } = useChannelsStore();
 
   useEffect(() => {
     let cancelled = false;
@@ -39,5 +43,9 @@ export function useChannels() {
     return channel;
   }, [addChannel]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  return { channels, loading, createChannel };
+  const updateChannel = useCallback((channel: ChannelInfo) => {
+    replaceChannel(channel);
+  }, [replaceChannel]);
+
+  return { channels, loading, createChannel, updateChannel };
 }

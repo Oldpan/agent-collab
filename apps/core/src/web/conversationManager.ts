@@ -27,6 +27,11 @@ import { getRuntimeDriver } from '@agent-collab/protocol';
 import type { AppConfig } from '../config.js';
 import { ExecutionDispatcher } from '../execution/executionDispatcher.js';
 import type { NodeRegistry } from '../services/nodeRegistry.js';
+import {
+  deleteChannelSubscription,
+  listChannelSubscriptions,
+  upsertChannelSubscription,
+} from './channelSubscriptions.js';
 import { deleteTargetParticipantsForAgent, deleteTargetParticipantsForChannel } from './targetParticipants.js';
 
 function slugifyAgentName(name: string): string {
@@ -629,16 +634,19 @@ export class ConversationManager {
   // ─── Channel CRUD ───
 
   joinChannel(agentId: string, channelId: string): void {
+    const now = Date.now();
     this.db.prepare(
       `INSERT OR IGNORE INTO agent_channel_memberships(agent_id, channel_id, is_home, joined_at)
        VALUES(?, ?, 0, ?)`
-    ).run(agentId, channelId, Date.now());
+    ).run(agentId, channelId, now);
+    upsertChannelSubscription(this.db, { agentId, channelId, subscribedAt: now, lastActiveAt: now });
   }
 
   leaveChannel(agentId: string, channelId: string): void {
     this.db.prepare(
       `DELETE FROM agent_channel_memberships WHERE agent_id = ? AND channel_id = ?`
     ).run(agentId, channelId);
+    deleteChannelSubscription(this.db, channelId, agentId);
   }
 
   createChannel(params: {
@@ -662,6 +670,7 @@ export class ConversationManager {
       workspacePath: params.workspacePath ?? null,
       description: params.description,
       collaborationMode,
+      subscribedAgents: [],
       createdAt: now,
       updatedAt: now,
     };
@@ -675,7 +684,12 @@ export class ConversationManager {
     this.db.prepare(
       `UPDATE channels SET description = ?, collaboration_mode = ?, updated_at = ? WHERE channel_id = ?`
     ).run(req.description ?? existing.description ?? null, collaborationMode, now, channelId);
-    return { ...existing, description: req.description ?? existing.description, collaborationMode, updatedAt: now };
+    return {
+      ...existing,
+      description: req.description ?? existing.description,
+      collaborationMode,
+      updatedAt: now,
+    };
   }
 
   clearChannelChat(channelId: string): ConversationInfo[] {
@@ -737,14 +751,21 @@ export class ConversationManager {
   }
 
   listChannels(): ChannelInfo[] {
-    return this.db
+    const rows = this.db
       .prepare(
         `SELECT channel_id as channelId, name, workspace_path as workspacePath,
                 description, collaboration_mode as collaborationMode,
                 created_at as createdAt, updated_at as updatedAt
          FROM channels ORDER BY created_at ASC`,
       )
-      .all() as ChannelInfo[];
+      .all() as Array<Omit<ChannelInfo, 'subscribedAgents'>>;
+    return rows.map((row) => ({
+      ...row,
+      subscribedAgents: listChannelSubscriptions(this.db, row.channelId).map((item) => ({
+        agentId: item.agentId,
+        name: item.name,
+      })),
+    }));
   }
 
   getChannel(channelId: string): ChannelInfo | null {
@@ -755,8 +776,15 @@ export class ConversationManager {
                 created_at as createdAt, updated_at as updatedAt
          FROM channels WHERE channel_id = ?`,
       )
-      .get(channelId) as ChannelInfo | undefined;
-    return row ?? null;
+      .get(channelId) as Omit<ChannelInfo, 'subscribedAgents'> | undefined;
+    if (!row) return null;
+    return {
+      ...row,
+      subscribedAgents: listChannelSubscriptions(this.db, channelId).map((item) => ({
+        agentId: item.agentId,
+        name: item.name,
+      })),
+    };
   }
 
   async handleApproval(

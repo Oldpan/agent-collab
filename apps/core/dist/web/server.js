@@ -14,8 +14,9 @@ import { buildChannelActivationPrompt, buildChannelActivationContextText } from 
 import { appendChannelResetMarkers } from './channelMemoryNotes.js';
 import { buildTargetActivationContext } from './activationContext.js';
 import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
-import { listTargetParticipants, upsertTargetParticipant } from './targetParticipants.js';
-import { getThreadCollaborationSummary } from './threadTaskBindings.js';
+import { deleteChannelSubscription, listChannelSubscriptions, upsertChannelSubscription } from './channelSubscriptions.js';
+import { listTargetParticipants, setTargetOwner, upsertTargetParticipant } from './targetParticipants.js';
+import { bindTaskToThread, getBoundTaskForThread, getThreadCollaborationSummary, unbindTaskFromThread } from './threadTaskBindings.js';
 export async function startServer(params) {
     const { port, host, conversationManager, db } = params;
     const config = conversationManager.getConfig();
@@ -375,7 +376,7 @@ export async function startServer(params) {
                 }
             }
             reply.code(201);
-            return channel;
+            return conversationManager.getChannel(channel.channelId) ?? channel;
         }
         catch {
             reply.code(409);
@@ -390,6 +391,32 @@ export async function startServer(params) {
             return { error: 'Not found' };
         }
         return updated;
+    });
+    app.post('/api/channels/:id/subscriptions/:agentId', async (req, reply) => {
+        const channel = conversationManager.getChannel(req.params.id);
+        if (!channel) {
+            reply.code(404);
+            return { error: 'Channel not found' };
+        }
+        const agent = conversationManager.getAgent(req.params.agentId);
+        if (!agent) {
+            reply.code(404);
+            return { error: 'Agent not found' };
+        }
+        upsertChannelSubscription(db, {
+            channelId: req.params.id,
+            agentId: req.params.agentId,
+        });
+        return conversationManager.getChannel(req.params.id);
+    });
+    app.delete('/api/channels/:id/subscriptions/:agentId', async (req, reply) => {
+        const channel = conversationManager.getChannel(req.params.id);
+        if (!channel) {
+            reply.code(404);
+            return { error: 'Channel not found' };
+        }
+        deleteChannelSubscription(db, req.params.id, req.params.agentId);
+        return conversationManager.getChannel(req.params.id);
     });
     app.post('/api/channels/:id/clear-chat', async (req, reply) => {
         const channel = conversationManager.getChannel(req.params.id);
@@ -559,6 +586,81 @@ export async function startServer(params) {
             threadRootId: req.params.shortId,
         });
     });
+    app.post('/api/channels/:id/threads/:shortId/task', async (req, reply) => {
+        const channel = conversationManager.getChannel(req.params.id);
+        if (!channel) {
+            reply.code(404);
+            return { error: 'Channel not found' };
+        }
+        const taskNumber = req.body?.taskNumber;
+        if (taskNumber == null) {
+            reply.code(400);
+            return { error: 'taskNumber is required' };
+        }
+        const task = db.prepare(`SELECT task_id as taskId, claimed_by_agent_id as assigneeId
+         FROM tasks
+         WHERE channel_id = ? AND task_number = ?`).get(req.params.id, taskNumber);
+        if (!task) {
+            reply.code(404);
+            return { error: 'Task not found' };
+        }
+        const result = bindTaskToThread(db, {
+            channelId: req.params.id,
+            threadRootId: req.params.shortId,
+            taskId: task.taskId,
+        });
+        if (!result.ok) {
+            reply.code(409);
+            return { error: result.reason };
+        }
+        if (task.assigneeId) {
+            upsertTargetParticipant(db, {
+                agentId: task.assigneeId,
+                channelId: req.params.id,
+                threadRootId: req.params.shortId,
+                role: 'owner',
+            });
+        }
+        else {
+            setTargetOwner(db, {
+                channelId: req.params.id,
+                threadRootId: req.params.shortId,
+                agentId: null,
+            });
+        }
+        return getThreadCollaborationSummary(db, {
+            channelId: req.params.id,
+            threadRootId: req.params.shortId,
+        });
+    });
+    app.delete('/api/channels/:id/threads/:shortId/task', async (req, reply) => {
+        const channel = conversationManager.getChannel(req.params.id);
+        if (!channel) {
+            reply.code(404);
+            return { error: 'Channel not found' };
+        }
+        const boundTask = getBoundTaskForThread(db, {
+            channelId: req.params.id,
+            threadRootId: req.params.shortId,
+        });
+        if (!boundTask) {
+            reply.code(404);
+            return { error: 'Thread is not bound to a task' };
+        }
+        unbindTaskFromThread(db, {
+            channelId: req.params.id,
+            threadRootId: req.params.shortId,
+        });
+        setTargetOwner(db, {
+            channelId: req.params.id,
+            threadRootId: req.params.shortId,
+            agentId: null,
+        });
+        return getThreadCollaborationSummary(db, {
+            channelId: req.params.id,
+            threadRootId: req.params.shortId,
+        });
+    });
     // Post a user message to a channel (or thread when replyTo is set)
     app.post('/api/channels/:id/messages', async (req, reply) => {
         const channel = conversationManager.getChannel(req.params.id);
@@ -682,12 +784,13 @@ export async function startServer(params) {
                 channelId: req.params.id,
                 threadRootId: null,
             });
+            const subscribedAgents = listChannelSubscriptions(db, req.params.id);
             const agentsToWake = rootParticipants.length > 0
                 ? rootParticipants.map((participant) => ({
                     agentId: participant.agentId,
                     role: participant.role,
                 }))
-                : channelAgents.map((agent) => ({
+                : subscribedAgents.map((agent) => ({
                     agentId: agent.agentId,
                     role: 'participant',
                 }));

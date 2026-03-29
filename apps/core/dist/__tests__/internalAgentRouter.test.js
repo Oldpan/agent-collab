@@ -479,4 +479,40 @@ describe('internalAgentRouter', () => {
         const body = await res.json();
         expect(body.results).toEqual([{ taskNumber: 12, success: false, reason: 'Thread is already bound to #t11' }]);
     });
+    it('已绑定 thread 的 task 标记 done 后应清空 thread owner 但保留绑定', async () => {
+        const now = Date.now();
+        const agent = manager.createAgent({
+            name: 'TaskDoneBob',
+            agentType: 'claude_acp',
+            nodeId: 'node-1',
+            workspacePath: '/tmp/task-done-bob',
+            channelId: 'default',
+        });
+        manager.joinChannel(agent.agentId, 'default');
+        const conv = manager.openAgentChannelThread(agent.agentId, 'default', 'done1234');
+        if (!conv)
+            throw new Error('missing thread conversation');
+        db.prepare(`INSERT INTO tasks(task_id, channel_id, task_number, title, status, claimed_by_agent_id, claimed_by_name, created_at, updated_at)
+       VALUES('task-done-1', 'default', 21, 'Done me', 'in_review', ?, ?, ?, ?)`).run(agent.agentId, agent.name, now, now);
+        db.prepare(`INSERT INTO thread_task_bindings(channel_id, thread_root_id, task_id, bound_at)
+       VALUES('default', 'done1234', 'task-done-1', ?)`).run(now);
+        db.prepare(`INSERT INTO target_participants(agent_id, channel_id, thread_root_id, role, joined_at, last_active_at)
+       VALUES(?, 'default', 'done1234', 'owner', ?, ?)`).run(agent.agentId, now, now);
+        const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/update-status`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                channel: '#default',
+                task_number: 21,
+                status: 'done',
+            }),
+        });
+        expect(res.status).toBe(200);
+        const participant = db.prepare(`SELECT role FROM target_participants
+       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'done1234'`).get(agent.agentId);
+        expect(participant?.role).toBe('participant');
+        const binding = db.prepare(`SELECT task_id as taskId FROM thread_task_bindings
+       WHERE channel_id = 'default' AND thread_root_id = 'done1234'`).get();
+        expect(binding?.taskId).toBe('task-done-1');
+    });
 });

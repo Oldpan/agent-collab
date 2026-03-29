@@ -147,6 +147,12 @@
 - `list_server` / 多频道订阅虽然可用，但还没做完整的产品打磨
 - DM Thread UI 已按当前产品模型 defer
 
+### 5. Thread 协作协议还可继续深化
+
+- task `done` 后当前会清空 thread owner 但保留绑定；后续还需要验证这个默认是否最符合实际协作习惯
+- participant 目前还是“最近活跃 agent”的轻量模型，尚未区分执行参与者与旁观/讨论参与者
+- thread summary 已有真实数据，但还缺少更细的角色与状态说明，例如 owner 迁移原因、绑定历史
+
 ## 下一步建议
 
 ### P1

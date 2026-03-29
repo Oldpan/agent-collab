@@ -5,6 +5,8 @@ export type BoundThreadTask = {
   taskId: string;
   channelId: string;
   threadRootId: string;
+  linkedThreadId: string;
+  linkedThreadShortId: string;
   taskNumber: number;
   title: string;
   description?: string | null;
@@ -35,6 +37,8 @@ export function getBoundTaskForThread(
     `SELECT t.task_id as taskId,
             t.channel_id as channelId,
             b.thread_root_id as threadRootId,
+            b.thread_root_id as linkedThreadId,
+            b.thread_root_id as linkedThreadShortId,
             t.task_number as taskNumber,
             t.title as title,
             t.description as description,
@@ -102,6 +106,18 @@ export function bindTaskToThread(
   return { ok: true };
 }
 
+export function unbindTaskFromThread(
+  db: Db,
+  params: { channelId: string; threadRootId?: string | null },
+): void {
+  const threadRootId = normalizeThreadRootId(params.threadRootId);
+  if (!threadRootId) return;
+  db.prepare(
+    `DELETE FROM thread_task_bindings
+     WHERE channel_id = ? AND thread_root_id = ?`,
+  ).run(params.channelId, threadRootId);
+}
+
 export function getThreadCollaborationSummary(
   db: Db,
   params: { channelId: string; threadRootId?: string | null },
@@ -109,10 +125,13 @@ export function getThreadCollaborationSummary(
   const boundTask = getBoundTaskForThread(db, params);
   const participants = listTargetParticipants(db, params);
   const ownerParticipant = participants.find((participant) => participant.role === 'owner');
+  const taskOwner = boundTask && boundTask.status !== 'done' && boundTask.assigneeId
+    ? { ownerAgentId: boundTask.assigneeId, ownerName: boundTask.assigneeName }
+    : null;
   return {
     ...(boundTask ? { boundTask } : {}),
-    ownerAgentId: boundTask?.assigneeId ?? ownerParticipant?.agentId ?? null,
-    ownerName: boundTask?.assigneeName ?? ownerParticipant?.name ?? null,
+    ownerAgentId: taskOwner?.ownerAgentId ?? ownerParticipant?.agentId ?? null,
+    ownerName: taskOwner?.ownerName ?? ownerParticipant?.name ?? null,
     participants: participants.map((participant) => participant.name),
   };
 }

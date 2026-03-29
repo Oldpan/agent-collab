@@ -1,11 +1,19 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { TaskInfo } from "@agent-collab/protocol";
 import { Button } from "@/components/ui/button";
-import { createChannelTask, getChannelTasks, updateTaskStatus, type ChannelTask } from "@/lib/api";
+import {
+  bindThreadTask,
+  createChannelTask,
+  getChannelTasks,
+  unbindThreadTask,
+  updateTaskStatus,
+  type ChannelTask,
+} from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type TasksTabProps = {
   channelId: string;
+  activeThreadShortId?: string;
 };
 
 const TASK_ORDER: TaskInfo["status"][] = ["todo", "in_progress", "in_review", "done"];
@@ -41,13 +49,14 @@ function statusClassName(status: TaskInfo["status"]): string {
   }
 }
 
-export function TasksTab({ channelId }: TasksTabProps) {
+export function TasksTab({ channelId, activeThreadShortId }: TasksTabProps) {
   const [tasks, setTasks] = useState<ChannelTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [creating, setCreating] = useState(false);
   const [updatingTaskNumber, setUpdatingTaskNumber] = useState<number | null>(null);
+  const [bindingTaskNumber, setBindingTaskNumber] = useState<number | null>(null);
   const [showDone, setShowDone] = useState(false);
 
   const loadTasks = useCallback(async () => {
@@ -119,6 +128,34 @@ export function TasksTab({ channelId }: TasksTabProps) {
     }
   }, [channelId, updatingTaskNumber]);
 
+  const handleBind = useCallback(async (task: ChannelTask) => {
+    if (!activeThreadShortId || bindingTaskNumber === task.taskNumber) return;
+    setBindingTaskNumber(task.taskNumber);
+    setError(null);
+    try {
+      await bindThreadTask(channelId, activeThreadShortId, task.taskNumber);
+      await loadTasks();
+    } catch (err) {
+      setError(String((err as Error)?.message ?? err));
+    } finally {
+      setBindingTaskNumber(null);
+    }
+  }, [activeThreadShortId, bindingTaskNumber, channelId, loadTasks]);
+
+  const handleUnbind = useCallback(async (task: ChannelTask) => {
+    if (!task.linkedThreadShortId || bindingTaskNumber === task.taskNumber) return;
+    setBindingTaskNumber(task.taskNumber);
+    setError(null);
+    try {
+      await unbindThreadTask(channelId, task.linkedThreadShortId);
+      await loadTasks();
+    } catch (err) {
+      setError(String((err as Error)?.message ?? err));
+    } finally {
+      setBindingTaskNumber(null);
+    }
+  }, [bindingTaskNumber, channelId, loadTasks]);
+
   return (
     <div className="flex h-full flex-col">
       <div className="border-b-2 border-black bg-[#fff6b8] px-4 py-3">
@@ -165,6 +202,11 @@ export function TasksTab({ channelId }: TasksTabProps) {
             {error}
           </div>
         )}
+        <div className="mt-3 rounded-sm border border-zinc-900/10 bg-white/60 px-3 py-2 text-xs text-zinc-600">
+          {activeThreadShortId
+            ? <>Current thread: <span className="font-mono">{activeThreadShortId}</span>. You can bind eligible tasks to this thread below.</>
+            : "Open a thread from the chat tab to bind a task from the board."}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4">
@@ -242,7 +284,7 @@ export function TasksTab({ channelId }: TasksTabProps) {
                               )}
                               <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
                                 <span className="rounded-full border border-dashed border-zinc-300 bg-[#fffdf4] px-2 py-0.5">
-                                  {task.linkedThreadShortId ? `Thread ${task.linkedThreadShortId}` : "No linked thread yet"}
+                                  {task.linkedThreadShortId ? `Thread ${task.linkedThreadShortId}` : "No linked thread"}
                                 </span>
                                 {!task.assigneeName && (
                                   <span className="rounded-full border border-dashed border-zinc-300 bg-[#fffdf4] px-2 py-0.5">
@@ -251,19 +293,46 @@ export function TasksTab({ channelId }: TasksTabProps) {
                                 )}
                               </div>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => void handleAdvance(task)}
-                              disabled={task.status === "done" || updatingTaskNumber === task.taskNumber}
-                              className={cn(
-                                "shrink-0 rounded-full border border-zinc-900 px-2 py-0.5 text-[11px] font-medium transition-colors",
-                                statusClassName(task.status),
-                                task.status !== "done" && "hover:brightness-95",
-                                updatingTaskNumber === task.taskNumber && "opacity-60",
-                              )}
-                            >
-                              {updatingTaskNumber === task.taskNumber ? "Updating..." : formatStatus(task.status)}
-                            </button>
+                            <div className="flex shrink-0 flex-col items-end gap-2">
+                              <button
+                                type="button"
+                                onClick={() => void handleAdvance(task)}
+                                disabled={task.status === "done" || updatingTaskNumber === task.taskNumber}
+                                className={cn(
+                                  "rounded-full border border-zinc-900 px-2 py-0.5 text-[11px] font-medium transition-colors",
+                                  statusClassName(task.status),
+                                  task.status !== "done" && "hover:brightness-95",
+                                  updatingTaskNumber === task.taskNumber && "opacity-60",
+                                )}
+                              >
+                                {updatingTaskNumber === task.taskNumber ? "Updating..." : formatStatus(task.status)}
+                              </button>
+                              {activeThreadShortId ? (
+                                task.linkedThreadShortId === activeThreadShortId ? (
+                                  <Button
+                                    size="sm"
+                                    disabled={bindingTaskNumber === task.taskNumber}
+                                    onClick={() => void handleUnbind(task)}
+                                    className="h-8 rounded-sm border-2 border-zinc-900 bg-[#ffd8d8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#ffc6c6]"
+                                  >
+                                    {bindingTaskNumber === task.taskNumber ? "Saving..." : "Unbind"}
+                                  </Button>
+                                ) : task.linkedThreadShortId ? (
+                                  <div className="text-[11px] text-zinc-400">
+                                    Bound to {task.linkedThreadShortId}
+                                  </div>
+                                ) : (
+                                  <Button
+                                    size="sm"
+                                    disabled={task.status === "done" || bindingTaskNumber === task.taskNumber}
+                                    onClick={() => void handleBind(task)}
+                                    className="h-8 rounded-sm border-2 border-zinc-900 bg-[#d8f8c8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#c8efb8]"
+                                  >
+                                    {bindingTaskNumber === task.taskNumber ? "Saving..." : "Bind to current thread"}
+                                  </Button>
+                                )
+                              ) : null}
+                            </div>
                           </div>
                         </div>
                       ))}

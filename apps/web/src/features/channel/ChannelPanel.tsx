@@ -4,7 +4,7 @@ import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquare
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChannelInfo, AgentInfo } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
-import { clearChannelChat } from "@/lib/api";
+import { clearChannelChat, subscribeChannelAgent, unsubscribeChannelAgent } from "@/lib/api";
 import { useChannelStream, type ChannelNotice } from "@/hooks/useChannelStream";
 import { ThreadPanel } from "./ThreadPanel";
 import { Streamdown } from "streamdown";
@@ -24,6 +24,7 @@ type ChannelPanelProps = {
   agents: AgentInfo[];
   onOpenSidebar?: () => void;
   onSeenSeq?: (seq: number) => void;
+  onChannelUpdated?: (channel: ChannelInfo) => void;
 };
 
 const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -410,14 +411,25 @@ function MembersTab({ members }: { members: AgentInfo[] }) {
 
 function SettingsTab({
   channel,
+  members,
   onClearChat,
+  onChannelUpdated,
 }: {
   channel: ChannelInfo;
+  members: AgentInfo[];
   onClearChat: () => Promise<void>;
+  onChannelUpdated?: (channel: ChannelInfo) => void;
 }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [submittingAgentId, setSubmittingAgentId] = useState<string | null>(null);
+  const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
+
+  const subscribedAgentIds = useMemo(
+    () => new Set((channel.subscribedAgents ?? []).map((agent) => agent.agentId)),
+    [channel.subscribedAgents],
+  );
 
   const handleConfirm = useCallback(async () => {
     setClearing(true);
@@ -430,6 +442,21 @@ function SettingsTab({
     }
   }, [onClearChat]);
 
+  const handleSubscriptionToggle = useCallback(async (agentId: string, subscribe: boolean) => {
+    setSubmittingAgentId(agentId);
+    setSubscriptionError(null);
+    try {
+      const next = subscribe
+        ? await subscribeChannelAgent(channel.channelId, agentId)
+        : await unsubscribeChannelAgent(channel.channelId, agentId);
+      onChannelUpdated?.(next);
+    } catch (err) {
+      setSubscriptionError(String((err as Error)?.message ?? err));
+    } finally {
+      setSubmittingAgentId(null);
+    }
+  }, [channel.channelId, onChannelUpdated]);
+
   return (
     <>
       <div className="flex-1 overflow-y-auto p-4">
@@ -441,6 +468,81 @@ function SettingsTab({
               <div className="mt-1 text-xs text-zinc-600">{channel.description}</div>
             ) : (
               <div className="mt-1 text-xs text-zinc-500">No description</div>
+            )}
+            <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
+              <span className="rounded-full border border-zinc-900/70 bg-white px-2 py-0.5 text-zinc-700">
+                Mode: {channel.collaborationMode === "subscribed_agents" ? "subscribed agents" : "mention only"}
+              </span>
+              <span className="rounded-full border border-zinc-900/70 bg-white px-2 py-0.5 text-zinc-700">
+                {channel.subscribedAgents?.length ?? 0} subscribed
+              </span>
+            </div>
+            <div className="mt-3">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Subscribed agents</div>
+              {channel.subscribedAgents && channel.subscribedAgents.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {channel.subscribedAgents.map((agent) => (
+                    <span
+                      key={agent.agentId}
+                      className="rounded-full border border-zinc-300 bg-white px-2 py-0.5 text-[11px] text-zinc-700"
+                    >
+                      @{agent.name}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-2 text-xs text-zinc-500">No subscribed agents.</div>
+              )}
+            </div>
+            {channel.collaborationMode === "subscribed_agents" ? (
+              <div className="mt-4 border-t border-zinc-900/10 pt-3">
+                <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Manage subscriptions</div>
+                <div className="mt-2 space-y-2">
+                  {members.length > 0 ? (
+                    members.map((agent) => {
+                      const subscribed = subscribedAgentIds.has(agent.agentId);
+                      const pending = submittingAgentId === agent.agentId;
+                      return (
+                        <div
+                          key={agent.agentId}
+                          className="flex items-center justify-between gap-3 rounded-sm border border-zinc-900/10 bg-white/70 px-3 py-2"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-zinc-900">@{agent.name}</div>
+                            <div className="text-[11px] text-zinc-500">
+                              {subscribed ? "Subscribed to passive channel wakeups" : "Not subscribed"}
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            disabled={pending}
+                            onClick={() => void handleSubscriptionToggle(agent.agentId, !subscribed)}
+                            className={cn(
+                              "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+                              subscribed
+                                ? "bg-[#ffd8d8] text-zinc-950 hover:bg-[#ffc6c6]"
+                                : "bg-[#d8f8c8] text-zinc-950 hover:bg-[#c8efb8]",
+                            )}
+                          >
+                            {pending ? "Saving..." : subscribed ? "Unsubscribe" : "Subscribe"}
+                          </Button>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-xs text-zinc-500">No channel members available.</div>
+                  )}
+                </div>
+                {subscriptionError ? (
+                  <div className="mt-2 rounded-sm border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700">
+                    {subscriptionError}
+                  </div>
+                ) : null}
+              </div>
+            ) : (
+              <div className="mt-4 rounded-sm border border-zinc-900/10 bg-white/60 px-3 py-2 text-xs text-zinc-500">
+                Switch this channel to <span className="font-medium">subscribed agents</span> mode to manage passive wakeups here.
+              </div>
             )}
           </section>
 
@@ -485,7 +587,7 @@ function SettingsTab({
   );
 }
 
-export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq }: ChannelPanelProps) {
+export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq, onChannelUpdated }: ChannelPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "members" | "settings">("chat");
   const { messages, notices, sendMessage, loadMore, hasMore, resetVersion } = useChannelStream({
     channelId: channel.channelId,
@@ -613,11 +715,19 @@ export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq }: Chan
 
       {/* Content */}
       {activeTab === "tasks" ? (
-        <TasksTab channelId={channel.channelId} />
+        <TasksTab
+          channelId={channel.channelId}
+          activeThreadShortId={openThread ? openThread.id.slice(0, 8) : undefined}
+        />
       ) : activeTab === "members" ? (
         <MembersTab members={channelMembers} />
       ) : activeTab === "settings" ? (
-        <SettingsTab channel={channel} onClearChat={handleClearChat} />
+        <SettingsTab
+          channel={channel}
+          members={channelMembers}
+          onClearChat={handleClearChat}
+          onChannelUpdated={onChannelUpdated}
+        />
       ) : (
         <div className="flex flex-1 overflow-hidden">
           {/* Main channel messages */}

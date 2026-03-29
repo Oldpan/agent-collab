@@ -91,6 +91,7 @@ export type ChannelTask = TaskInfo & {
 
 export type ThreadCollaborationSummary = {
   boundTask?: ChannelTask;
+  ownerAgentId?: string | null;
   ownerName?: string;
   participants?: string[];
 };
@@ -143,6 +144,22 @@ export async function updateChannel(channelId: string, req: {
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error(`Failed to update channel: ${res.statusText}`);
+  return res.json();
+}
+
+export async function subscribeChannelAgent(channelId: string, agentId: string): Promise<ChannelInfo> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/subscriptions/${encodeURIComponent(agentId)}`, {
+    method: "POST",
+  });
+  if (!res.ok) throw new Error(`Failed to subscribe agent: ${res.statusText}`);
+  return res.json();
+}
+
+export async function unsubscribeChannelAgent(channelId: string, agentId: string): Promise<ChannelInfo> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/subscriptions/${encodeURIComponent(agentId)}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) throw new Error(`Failed to unsubscribe agent: ${res.statusText}`);
   return res.json();
 }
 
@@ -258,6 +275,41 @@ export async function getThreadSummary(
     `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/summary`,
   );
   if (!res.ok) throw new Error(`Failed to get thread summary: ${res.statusText}`);
+  return res.json();
+}
+
+export async function bindThreadTask(
+  channelId: string,
+  shortId: string,
+  taskNumber: number,
+): Promise<ThreadCollaborationSummary> {
+  const res = await fetch(
+    `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/task`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ taskNumber }),
+    },
+  );
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to bind task to thread: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function unbindThreadTask(
+  channelId: string,
+  shortId: string,
+): Promise<ThreadCollaborationSummary> {
+  const res = await fetch(
+    `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/task`,
+    { method: "DELETE" },
+  );
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to unbind task from thread: ${res.statusText}`);
+  }
   return res.json();
 }
 

@@ -509,6 +509,10 @@ export type ChannelInfo = {
   workspacePath: string | null;
   description?: string;
   collaborationMode?: ChannelCollaborationMode;
+  subscribedAgents?: Array<{
+    agentId: string;
+    name: string;
+  }>;
   createdAt: number;
   updatedAt: number;
 };

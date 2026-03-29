@@ -9,6 +9,8 @@ export function getBoundTaskForThread(db, params) {
     return db.prepare(`SELECT t.task_id as taskId,
             t.channel_id as channelId,
             b.thread_root_id as threadRootId,
+            b.thread_root_id as linkedThreadId,
+            b.thread_root_id as linkedThreadShortId,
             t.task_number as taskNumber,
             t.title as title,
             t.description as description,
@@ -54,14 +56,24 @@ export function bindTaskToThread(db, params) {
      VALUES(?, ?, ?, ?)`).run(params.channelId, threadRootId, params.taskId, params.boundAt ?? Date.now());
     return { ok: true };
 }
+export function unbindTaskFromThread(db, params) {
+    const threadRootId = normalizeThreadRootId(params.threadRootId);
+    if (!threadRootId)
+        return;
+    db.prepare(`DELETE FROM thread_task_bindings
+     WHERE channel_id = ? AND thread_root_id = ?`).run(params.channelId, threadRootId);
+}
 export function getThreadCollaborationSummary(db, params) {
     const boundTask = getBoundTaskForThread(db, params);
     const participants = listTargetParticipants(db, params);
     const ownerParticipant = participants.find((participant) => participant.role === 'owner');
+    const taskOwner = boundTask && boundTask.status !== 'done' && boundTask.assigneeId
+        ? { ownerAgentId: boundTask.assigneeId, ownerName: boundTask.assigneeName }
+        : null;
     return {
         ...(boundTask ? { boundTask } : {}),
-        ownerAgentId: boundTask?.assigneeId ?? ownerParticipant?.agentId ?? null,
-        ownerName: boundTask?.assigneeName ?? ownerParticipant?.name ?? null,
+        ownerAgentId: taskOwner?.ownerAgentId ?? ownerParticipant?.agentId ?? null,
+        ownerName: taskOwner?.ownerName ?? ownerParticipant?.name ?? null,
         participants: participants.map((participant) => participant.name),
     };
 }
