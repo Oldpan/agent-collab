@@ -4,7 +4,7 @@ import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquare
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChannelInfo, AgentInfo } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
-import { clearChannelChat, subscribeChannelAgent, unsubscribeChannelAgent } from "@/lib/api";
+import { clearChannelChat, subscribeChannelAgent, unsubscribeChannelAgent, updateChannel } from "@/lib/api";
 import { useChannelStream, type ChannelNotice } from "@/hooks/useChannelStream";
 import { ThreadPanel } from "./ThreadPanel";
 import { Streamdown } from "streamdown";
@@ -448,7 +448,9 @@ function SettingsTab({
   const [clearing, setClearing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [submittingAgentId, setSubmittingAgentId] = useState<string | null>(null);
+  const [updatingMode, setUpdatingMode] = useState(false);
   const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
+  const [modeError, setModeError] = useState<string | null>(null);
 
   const subscribedAgentIds = useMemo(
     () => new Set((channel.subscribedAgents ?? []).map((agent) => agent.agentId)),
@@ -481,6 +483,20 @@ function SettingsTab({
     }
   }, [channel.channelId, onChannelUpdated]);
 
+  const handleModeChange = useCallback(async (mode: ChannelInfo["collaborationMode"]) => {
+    if (mode === channel.collaborationMode) return;
+    setUpdatingMode(true);
+    setModeError(null);
+    try {
+      const next = await updateChannel(channel.channelId, { collaborationMode: mode });
+      onChannelUpdated?.(next);
+    } catch (err) {
+      setModeError(String((err as Error)?.message ?? err));
+    } finally {
+      setUpdatingMode(false);
+    }
+  }, [channel.channelId, channel.collaborationMode, onChannelUpdated]);
+
   return (
     <>
       <div className="flex-1 overflow-y-auto p-4">
@@ -500,6 +516,55 @@ function SettingsTab({
               <span className="rounded-full border border-zinc-900/70 bg-white px-2 py-0.5 text-zinc-700">
                 {channel.subscribedAgents?.length ?? 0} subscribed
               </span>
+            </div>
+            <div className="mt-4 border-t border-zinc-900/10 pt-3">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Collaboration mode</div>
+              <div className="mt-2 grid grid-cols-2 gap-2">
+                <Button
+                  type="button"
+                  disabled={updatingMode}
+                  onClick={() => void handleModeChange("mention_only")}
+                  className={cn(
+                    "h-auto min-h-16 flex-col items-start rounded-sm border-2 border-zinc-900 px-3 py-2 text-left shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+                    channel.collaborationMode === "mention_only"
+                      ? "bg-[#d8efff] text-zinc-950 hover:bg-[#c9e7ff]"
+                      : "bg-white text-zinc-700 hover:bg-zinc-50",
+                  )}
+                >
+                  <span className="text-xs font-semibold uppercase tracking-wide">Mention only</span>
+                  <span className="mt-1 text-[11px] font-normal leading-4">
+                    Only explicit @mentions and thread replies wake agents.
+                  </span>
+                </Button>
+                <Button
+                  type="button"
+                  disabled={updatingMode}
+                  onClick={() => void handleModeChange("subscribed_agents")}
+                  className={cn(
+                    "h-auto min-h-16 flex-col items-start rounded-sm border-2 border-zinc-900 px-3 py-2 text-left shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+                    channel.collaborationMode === "subscribed_agents"
+                      ? "bg-[#d8f8c8] text-zinc-950 hover:bg-[#c8efb8]"
+                      : "bg-white text-zinc-700 hover:bg-zinc-50",
+                  )}
+                >
+                  <span className="text-xs font-semibold uppercase tracking-wide">Subscribed agents</span>
+                  <span className="mt-1 text-[11px] font-normal leading-4">
+                    Top-level channel activity can wake subscribed agents even without @mentions.
+                  </span>
+                </Button>
+              </div>
+              <div className="mt-2 text-xs text-zinc-500">
+                {updatingMode
+                  ? "Saving collaboration mode..."
+                  : channel.collaborationMode === "subscribed_agents"
+                    ? "This channel can passively wake subscribed agents on non-thread top-level messages."
+                    : "This channel only wakes agents when they are explicitly mentioned or already involved in a thread."}
+              </div>
+              {modeError ? (
+                <div className="mt-2 rounded-sm border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700">
+                  {modeError}
+                </div>
+              ) : null}
             </div>
             <div className="mt-3">
               <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Subscribed agents</div>
@@ -623,6 +688,44 @@ export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq, onChan
     [agents, channel.channelId],
   );
   const [openThread, setOpenThread] = useState<ChannelMessage | null>(null);
+
+  // Thread panel resize state
+  const [threadPanelWidth, setThreadPanelWidth] = useState(320); // default 320px (w-80)
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartX = useRef(0);
+  const resizeStartWidth = useRef(0);
+
+  const MIN_THREAD_WIDTH = 280;
+  const MAX_THREAD_WIDTH = 600;
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    resizeStartX.current = e.clientX;
+    resizeStartWidth.current = threadPanelWidth;
+  }, [threadPanelWidth]);
+
+  useEffect(() => {
+    if (!isResizing) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      const delta = resizeStartX.current - e.clientX;
+      const newWidth = Math.max(MIN_THREAD_WIDTH, Math.min(MAX_THREAD_WIDTH, resizeStartWidth.current + delta));
+      setThreadPanelWidth(newWidth);
+    };
+
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+
+    document.addEventListener("mousemove", handleMouseMove);
+    document.addEventListener("mouseup", handleMouseUp);
+
+    return () => {
+      document.removeEventListener("mousemove", handleMouseMove);
+      document.removeEventListener("mouseup", handleMouseUp);
+    };
+  }, [isResizing]);
 
   // Auto-scroll main channel to bottom
   useEffect(() => {
@@ -797,14 +900,26 @@ export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq, onChan
 
           {/* Thread panel (slide-in from right) */}
           {openThread && (
-            <div className="w-80 shrink-0 overflow-hidden">
-              <ThreadPanel
-                channelId={channel.channelId}
-                channelName={channel.name}
-                rootMessage={openThread}
-                channelMembers={channelMembers}
-                onClose={() => setOpenThread(null)}
+            <div className="flex shrink-0 overflow-hidden">
+              {/* Resize handle */}
+              <div
+                className={cn(
+                  "w-1.5 cursor-col-resize bg-zinc-300 transition-colors hover:bg-zinc-400 active:bg-zinc-500",
+                  isResizing && "bg-zinc-500"
+                )}
+                onMouseDown={handleResizeStart}
+                title="Drag to resize"
               />
+              <div style={{ width: threadPanelWidth }}>
+                <ThreadPanel
+                  channelId={channel.channelId}
+                  channelName={channel.name}
+                  rootMessage={openThread}
+                  channelMembers={channelMembers}
+                  onClose={() => setOpenThread(null)}
+                  className="border-l-0"
+                />
+              </div>
             </div>
           )}
         </div>

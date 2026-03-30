@@ -326,6 +326,7 @@ type ThreadPanelProps = {
   rootMessage: ChannelMessage;
   channelMembers: AgentInfo[];
   onClose: () => void;
+  className?: string;
 };
 
 export function ThreadPanel({
@@ -334,6 +335,7 @@ export function ThreadPanel({
   rootMessage,
   channelMembers,
   onClose,
+  className,
 }: ThreadPanelProps) {
   const threadRootId = rootMessage.id.slice(0, 8);
   const { messages, summary, sendMessage, loadMore, hasMore } = useThreadStream(channelId, threadRootId);
@@ -398,7 +400,7 @@ export function ThreadPanel({
   }, [channelId, threadRootId]);
 
   return (
-    <div className="flex h-full flex-col border-l-2 border-zinc-900 bg-[#fefce8]">
+    <div className={cn("flex h-full flex-col border-l-2 border-zinc-900 bg-[#fefce8]", className)}>
       {/* Header */}
       <div className="flex items-center justify-between border-b-2 border-zinc-900 bg-[#fffdf5] px-4 py-3 shadow-[0_2px_0_0_rgba(0,0,0,0.08)]">
         <div className="flex items-center gap-2">
