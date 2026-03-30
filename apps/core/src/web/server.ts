@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import fastifyCors from '@fastify/cors';
 import fastifyWebSocket from '@fastify/websocket';
+import fastifyStatic from '@fastify/static';
 
 import type { Db } from '@agent-collab/runtime-acp';
 import { log, finishRun } from '@agent-collab/runtime-acp';
@@ -1407,6 +1411,20 @@ export async function startServer(params: {
   setInterval(() => {
     cleanupExpiredTokens(db);
   }, 60 * 60 * 1000); // Every hour
+
+  // Serve built web UI static files if dist exists
+  const __serverDir = path.dirname(fileURLToPath(import.meta.url));
+  const webDistPath = path.resolve(__serverDir, '../../../..', 'apps/web/dist');
+  if (fs.existsSync(webDistPath)) {
+    await app.register(fastifyStatic, { root: webDistPath, prefix: '/' });
+    // SPA fallback: serve index.html for GET requests to non-API routes
+    app.setNotFoundHandler(async (req, reply) => {
+      if (req.method === 'GET' && !req.url.startsWith('/api/') && req.url !== '/ws' && !req.url.startsWith('/node-ws')) {
+        return reply.sendFile('index.html');
+      }
+      reply.code(404).send({ error: 'Not found' });
+    });
+  }
 
   await app.listen({ port, host });
   log.info(`Web server listening on ${host}:${port}`);
