@@ -7,6 +7,7 @@ import { startServer } from './web/server.js';
 import { NodeRegistry } from './services/nodeRegistry.js';
 import { AgentWorkspaceBroker } from './services/agentWorkspaceBroker.js';
 import { reconcileNodeStateOnStartup } from './services/nodeStateReconciler.js';
+import { hasAdminUser, createInviteToken } from './services/auth.js';
 
 async function main(): Promise<void> {
   const gatewayHome = resolveGatewayHomeDir();
@@ -31,6 +32,19 @@ async function main(): Promise<void> {
   const db = openDb(config.dbPath);
   migrate(db);
   reconcileNodeStateOnStartup(db);
+
+  // On first startup with no admin user, generate an invite token and print it
+  if (!hasAdminUser(db)) {
+    const invite = createInviteToken(db);
+    const inviteUrl = `http://localhost:${config.webPort}/?invite=${invite.token}`;
+    log.info('');
+    log.info('═══════════════════════════════════════════════════');
+    log.info('  No admin account found. Complete initial setup:');
+    log.info(`  ${inviteUrl}`);
+    log.info(`  Token expires in 24 hours.`);
+    log.info('═══════════════════════════════════════════════════');
+    log.info('');
+  }
 
   const nodeRegistry = new NodeRegistry();
   const workspaceBroker = new AgentWorkspaceBroker({ nodeRegistry });

@@ -17,6 +17,7 @@ import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
 import { deleteChannelSubscription, listChannelSubscriptions, upsertChannelSubscription } from './channelSubscriptions.js';
 import { listTargetParticipants, setTargetOwner, upsertTargetParticipant } from './targetParticipants.js';
 import { bindTaskToThread, getBoundTaskForThread, getThreadCollaborationSummary, unbindTaskFromThread } from './threadTaskBindings.js';
+import { hasAdminUser, setupWithInvite, loginUser, logoutUser, validateSession, createInviteToken, listUsers, deleteUser, cleanupExpiredTokens, } from '../services/auth.js';
 export async function startServer(params) {
     const { port, host, conversationManager, db } = params;
     const config = conversationManager.getConfig();
@@ -671,7 +672,10 @@ export async function startServer(params) {
             reply.code(404);
             return { error: 'Channel not found' };
         }
-        const { content, senderName = config.humanUserName, replyTo } = req.body ?? {};
+        const authHeader = req.headers.authorization ?? '';
+        const chanToken = authHeader.replace(/^Bearer\s+/i, '');
+        const chanUser = chanToken ? validateSession(db, chanToken) : null;
+        const { content, senderName = chanUser?.username ?? config.humanUserName, replyTo } = req.body ?? {};
         if (!content) {
             reply.code(400);
             return { error: 'content is required' };
@@ -948,7 +952,11 @@ export async function startServer(params) {
     // Frontend WebSocket stream for a conversation
     app.get('/api/conversations/:id/stream', { websocket: true }, (socket, req) => {
         const conversationId = req.params.id;
-        handleWebSocket(socket, conversationId, conversationManager);
+        // Resolve sender name from auth token (falls back to config default)
+        const wsToken = req.query['token'] ?? '';
+        const wsUser = wsToken ? validateSession(db, wsToken) : null;
+        const senderName = wsUser?.username ?? config.humanUserName;
+        handleWebSocket(socket, conversationId, conversationManager, senderName);
     });
     // Channel WebSocket stream (real-time channel messages)
     app.get('/api/channels/:id/stream', { websocket: true }, (socket, req) => {
@@ -974,6 +982,214 @@ export async function startServer(params) {
     app.get('/api/nodes/connect', { websocket: true }, (socket) => {
         handleNodeWebSocket(socket, nodeRegistry, broadcast, db, conversationManager, workspaceBroker);
     });
+    // ─── Authentication routes ───
+    // Check if setup is complete (has admin user)
+    app.get('/api/auth/check-setup', async () => {
+        return { hasAdmin: hasAdminUser(db) };
+    });
+    // Initial setup with invite token
+    app.post('/api/auth/setup', async (req, reply) => {
+        const { token, username, password } = req.body ?? {};
+        if (!token || !username || !password) {
+            reply.code(400);
+            return { error: 'token, username, and password are required' };
+        }
+        // Username validation
+        if (username.length < 3 || username.length > 32) {
+            reply.code(400);
+            return { error: 'Username must be between 3 and 32 characters' };
+        }
+        if (!/^[a-zA-Z0-9_-]+$/.test(username)) {
+            reply.code(400);
+            return { error: 'Username can only contain letters, numbers, underscores, and hyphens' };
+        }
+        // Password validation
+        if (password.length < 6) {
+            reply.code(400);
+            return { error: 'Password must be at least 6 characters' };
+        }
+        const result = await setupWithInvite(db, token, username, password);
+        if (!result.success) {
+            reply.code(400);
+            return { error: result.error };
+        }
+        return {
+            user: result.user,
+            token: result.session?.token,
+        };
+    });
+    // Login
+    app.post('/api/auth/login', async (req, reply) => {
+        const { username, password } = req.body ?? {};
+        if (!username || !password) {
+            reply.code(400);
+            return { error: 'username and password are required' };
+        }
+        const result = await loginUser(db, username, password);
+        if (!result.success) {
+            reply.code(401);
+            return { error: result.error };
+        }
+        return {
+            user: result.user,
+            token: result.session?.token,
+        };
+    });
+    // Logout
+    app.post('/api/auth/logout', async (req, reply) => {
+        const authHeader = req.headers.authorization ?? '';
+        const token = authHeader.replace(/^Bearer\s+/i, '');
+        if (token) {
+            logoutUser(db, token);
+        }
+        return { ok: true };
+    });
+    // Get current user
+    app.get('/api/auth/me', async (req, reply) => {
+        const authHeader = req.headers.authorization ?? '';
+        const token = authHeader.replace(/^Bearer\s+/i, '');
+        if (!token) {
+            reply.code(401);
+            return { error: 'Not authenticated' };
+        }
+        const user = validateSession(db, token);
+        if (!user) {
+            reply.code(401);
+            return { error: 'Invalid or expired session' };
+        }
+        return { user };
+    });
+    // Admin: Create invite token
+    app.post('/api/admin/invite', async (req, reply) => {
+        const authHeader = req.headers.authorization ?? '';
+        const token = authHeader.replace(/^Bearer\s+/i, '');
+        if (!token) {
+            reply.code(401);
+            return { error: 'Not authenticated' };
+        }
+        const user = validateSession(db, token);
+        if (!user) {
+            reply.code(401);
+            return { error: 'Invalid or expired session' };
+        }
+        if (!user.isAdmin) {
+            reply.code(403);
+            return { error: 'Admin access required' };
+        }
+        const invite = createInviteToken(db);
+        // Build invite URL
+        const inviteUrl = `${req.protocol}://${req.hostname}:${port}/?invite=${invite.token}`;
+        return {
+            token: invite.token,
+            expiresAt: invite.expiresAt,
+            inviteUrl,
+        };
+    });
+    // List all users (any authenticated user)
+    app.get('/api/users', async (req, reply) => {
+        const authHeader = req.headers.authorization ?? '';
+        const token = authHeader.replace(/^Bearer\s+/i, '');
+        if (!token) {
+            reply.code(401);
+            return { error: 'Not authenticated' };
+        }
+        const user = validateSession(db, token);
+        if (!user) {
+            reply.code(401);
+            return { error: 'Invalid or expired session' };
+        }
+        return { users: listUsers(db) };
+    });
+    // Admin: List all users
+    app.get('/api/admin/users', async (req, reply) => {
+        const authHeader = req.headers.authorization ?? '';
+        const token = authHeader.replace(/^Bearer\s+/i, '');
+        if (!token) {
+            reply.code(401);
+            return { error: 'Not authenticated' };
+        }
+        const user = validateSession(db, token);
+        if (!user) {
+            reply.code(401);
+            return { error: 'Invalid or expired session' };
+        }
+        if (!user.isAdmin) {
+            reply.code(403);
+            return { error: 'Admin access required' };
+        }
+        return { users: listUsers(db) };
+    });
+    // Admin: Delete user
+    app.delete('/api/admin/users/:id', async (req, reply) => {
+        const authHeader = req.headers.authorization ?? '';
+        const token = authHeader.replace(/^Bearer\s+/i, '');
+        if (!token) {
+            reply.code(401);
+            return { error: 'Not authenticated' };
+        }
+        const user = validateSession(db, token);
+        if (!user) {
+            reply.code(401);
+            return { error: 'Invalid or expired session' };
+        }
+        if (!user.isAdmin) {
+            reply.code(403);
+            return { error: 'Admin access required' };
+        }
+        // Prevent deleting self
+        if (req.params.id === user.id) {
+            reply.code(400);
+            return { error: 'Cannot delete your own account' };
+        }
+        const deleted = deleteUser(db, req.params.id);
+        if (!deleted) {
+            reply.code(404);
+            return { error: 'User not found' };
+        }
+        return { ok: true };
+    });
+    // Change password (authenticated user)
+    app.post('/api/auth/change-password', async (req, reply) => {
+        const authHeader = req.headers.authorization ?? '';
+        const token = authHeader.replace(/^Bearer\s+/i, '');
+        if (!token) {
+            reply.code(401);
+            return { error: 'Not authenticated' };
+        }
+        const user = validateSession(db, token);
+        if (!user) {
+            reply.code(401);
+            return { error: 'Invalid or expired session' };
+        }
+        const { currentPassword, newPassword } = req.body ?? {};
+        if (!currentPassword || !newPassword) {
+            reply.code(400);
+            return { error: 'currentPassword and newPassword are required' };
+        }
+        if (newPassword.length < 6) {
+            reply.code(400);
+            return { error: 'Password must be at least 6 characters' };
+        }
+        // Verify current password
+        const userRow = db.prepare('SELECT password_hash FROM users WHERE id = ?').get(user.id);
+        if (!userRow) {
+            reply.code(404);
+            return { error: 'User not found' };
+        }
+        const { verifyPassword, hashPassword } = await import('../services/auth.js');
+        const valid = await verifyPassword(currentPassword, userRow.password_hash);
+        if (!valid) {
+            reply.code(400);
+            return { error: 'Current password is incorrect' };
+        }
+        const newHash = await hashPassword(newPassword);
+        db.prepare('UPDATE users SET password_hash = ?, updated_at = ? WHERE id = ?').run(newHash, Date.now(), user.id);
+        return { ok: true };
+    });
+    // Cleanup expired tokens periodically
+    setInterval(() => {
+        cleanupExpiredTokens(db);
+    }, 60 * 60 * 1000); // Every hour
     await app.listen({ port, host });
     log.info(`Web server listening on ${host}:${port}`);
 }

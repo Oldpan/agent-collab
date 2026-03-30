@@ -4,7 +4,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CreateDialog } from "@/components/ui/create-dialog";
 import { cn } from "@/lib/utils";
 import {
-  PlusIcon, TrashIcon, ChevronRightIcon, ChevronDownIcon, Rows3Icon, HashIcon,
+  PlusIcon, TrashIcon, ChevronRightIcon, ChevronDownIcon, Rows3Icon, HashIcon, LogOutIcon, LinkIcon, SettingsIcon, UserIcon, ShieldIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type {
@@ -12,10 +12,15 @@ import type {
   CreateAgentRequest,
   CreateMachineRequest, ConversationInfo, ConversationStatus,
 } from "@agent-collab/protocol";
+import type { User } from "@/lib/auth-api";
+import { useUsers } from "@/hooks/useUsers";
 import { MachineCreatePanel } from "./MachineCreatePanel";
 import { ChannelCreatePanel } from "./ChannelCreatePanel";
 import { AgentCreateDialog } from "./AgentCreateDialog";
 import { ChatAvatar } from "../chat/ChatAvatar";
+import { InviteGenerateDialog } from "../auth/InviteGenerateDialog";
+import { UserSettingsPanel } from "../auth/UserSettingsPanel";
+import { HumanProfilePanel } from "../auth/HumanProfilePanel";
 
 const EXPANDED_MACHINES_STORAGE_KEY = "agent-collab:expanded-machines";
 
@@ -47,6 +52,7 @@ type SidebarProps = {
   selectedId: string | null;
   selectedChannelId: string | null;
   selectedView: "chat" | "sessions";
+  currentUser?: User | null;
   onOpenSessions: () => void;
   onCreateMachine: (req: CreateMachineRequest) => Promise<MachineInfo>;
   onDeleteMachine: (id: string) => void;
@@ -55,6 +61,7 @@ type SidebarProps = {
   onOpenAgentThread: (agentId: string) => void;
   onSelectChannel: (channelId: string) => void;
   onCreateChannel: (req: { name: string; description?: string; agentIds?: string[]; workspacePath?: string }) => Promise<ChannelInfo>;
+  onLogout?: () => void;
 };
 
 function formatRelativeTime(ts: number): string {
@@ -119,11 +126,13 @@ function AgentStatusDot({
 export function Sidebar({
   machines, agents, conversations, channels, agentUnreadCounts, channelUnreadCounts, selectedId, selectedChannelId,
   selectedView,
+  currentUser,
   onCreateMachine, onDeleteMachine,
   onOpenSessions,
   onCreateAgent, onDeleteAgent,
   onOpenAgentThread,
   onSelectChannel, onCreateChannel,
+  onLogout,
 }: SidebarProps) {
   const [expandedMachines, setExpandedMachines] = useState<Set<string>>(
     () => readStoredSet(EXPANDED_MACHINES_STORAGE_KEY),
@@ -132,6 +141,10 @@ export function Sidebar({
   const [showCreateAgent, setShowCreateAgent] = useState(false);
   const [createAgentMachineId, setCreateAgentMachineId] = useState<string | null>(null);
   const [showCreateChannel, setShowCreateChannel] = useState(false);
+  const [showInviteDialog, setShowInviteDialog] = useState(false);
+  const [showUserSettings, setShowUserSettings] = useState(false);
+  const [profileUser, setProfileUser] = useState<User | null>(null);
+  const { users } = useUsers();
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [agentToDelete, setAgentToDelete] = useState<AgentInfo | null>(null);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -429,6 +442,46 @@ export function Sidebar({
               </div>
             ))}
           </div>
+
+          {/* Humans section */}
+          {users.length > 0 && (
+            <div className="mt-2 w-full">
+              <div className="px-0.5 py-2">
+                <span className="text-xs font-bold uppercase tracking-wider text-zinc-800">
+                  Humans
+                </span>
+              </div>
+              <div className="flex flex-col gap-0.5">
+                {users.map((u) => (
+                  <button
+                    key={u.id}
+                    type="button"
+                    onClick={() => setProfileUser(u)}
+                    className="group flex w-full items-center gap-2 rounded-sm px-1.5 py-1.5 text-left text-xs text-zinc-700 transition-colors hover:bg-[#fff1a9] cursor-pointer"
+                  >
+                    <div className={[
+                      'flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border',
+                      u.id === currentUser?.id
+                        ? 'border-zinc-700 bg-[#ffd54a] text-zinc-700'
+                        : 'border-zinc-400 bg-zinc-100 text-zinc-500',
+                    ].join(' ')}>
+                      {u.isAdmin
+                        ? <ShieldIcon className="size-2.5" />
+                        : <UserIcon className="size-2.5" />
+                      }
+                    </div>
+                    <span className="flex-1 truncate font-medium">{u.username}</span>
+                    {u.id === currentUser?.id && (
+                      <span className="shrink-0 text-[10px] text-zinc-400">you</span>
+                    )}
+                    {u.isAdmin && u.id !== currentUser?.id && (
+                      <span className="shrink-0 text-[10px] text-zinc-400">admin</span>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       </ScrollArea>
 
@@ -461,6 +514,75 @@ export function Sidebar({
         onConfirm={handleConfirmDeleteMachine}
         onCancel={handleCancelDeleteMachine}
       />
+
+      {/* User footer */}
+      {currentUser && (
+        <div className="flex items-center justify-between border-t-2 border-black bg-[#ffd700] px-3 py-2">
+          <button
+            type="button"
+            className="min-w-0 flex-1 text-left"
+            title="User settings"
+            onClick={() => setShowUserSettings(true)}
+          >
+            <span className="truncate text-xs font-medium text-zinc-700">
+              {currentUser.username}
+              {currentUser.isAdmin && (
+                <span className="ml-1 text-[10px] text-zinc-500">(admin)</span>
+              )}
+            </span>
+          </button>
+          <div className="flex items-center gap-1 shrink-0">
+            <button
+              type="button"
+              className="p-1 rounded text-zinc-500 hover:text-zinc-800 transition-colors cursor-pointer"
+              title="Settings"
+              onClick={() => setShowUserSettings(true)}
+            >
+              <SettingsIcon className="size-3" />
+            </button>
+            {currentUser.isAdmin && (
+              <button
+                type="button"
+                className="p-1 rounded text-zinc-500 hover:text-zinc-800 transition-colors cursor-pointer"
+                title="Generate invite link"
+                onClick={() => setShowInviteDialog(true)}
+              >
+                <LinkIcon className="size-3" />
+              </button>
+            )}
+            {onLogout && (
+              <button
+                type="button"
+                className="p-1 rounded text-zinc-500 hover:text-red-600 transition-colors cursor-pointer"
+                title="Sign out"
+                onClick={onLogout}
+              >
+                <LogOutIcon className="size-3" />
+              </button>
+            )}
+          </div>
+        </div>
+      )}
+
+      <InviteGenerateDialog
+        isOpen={showInviteDialog}
+        onClose={() => setShowInviteDialog(false)}
+      />
+
+      {currentUser && showUserSettings && (
+        <UserSettingsPanel
+          user={currentUser}
+          onClose={() => setShowUserSettings(false)}
+        />
+      )}
+
+      {profileUser && currentUser && (
+        <HumanProfilePanel
+          user={profileUser}
+          currentUser={currentUser}
+          onClose={() => setProfileUser(null)}
+        />
+      )}
     </div>
   );
 }

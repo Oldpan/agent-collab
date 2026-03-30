@@ -11,6 +11,7 @@ const TURN_REPLY_CONTRACT = [
     'Before this run ends, send one final user-visible message with mcp__chat__send_message(..., kind="final").',
     'Use kind="final" only when your current answer is complete. The runtime decides when the run ends.',
 ].join('\n');
+const CORE_PUBLIC_HOST = '10.104.9.253';
 export class ExecutionDispatcher {
     db;
     config;
@@ -71,7 +72,7 @@ export class ExecutionDispatcher {
                     // Persist DM user messages to channel_messages so history/replay stay complete
                     // even though the triggering message is also injected directly into this run prompt.
                     const dmChannelId = `dm:${row.agentId}`;
-                    const humanUserName = this.config.humanUserName;
+                    const humanUserName = options?.senderName ?? this.config.humanUserName;
                     const dmReplyTarget = row.replyTarget?.trim() || `dm:@${humanUserName}`;
                     const msgSeq = (() => {
                         const r = this.db
@@ -118,7 +119,7 @@ export class ExecutionDispatcher {
         });
         let channelBridgeConfig;
         if (row.agentId) {
-            const cbHost = this.config.webHost === '0.0.0.0' ? '127.0.0.1' : this.config.webHost;
+            const cbHost = this.config.webHost === '0.0.0.0' ? CORE_PUBLIC_HOST : this.config.webHost;
             channelBridgeConfig = {
                 agentId: row.agentId,
                 conversationId,
@@ -224,7 +225,7 @@ export class ExecutionDispatcher {
             return;
         const next = this.db.prepare(`SELECT queue_id as queueId, agent_id as agentId, conversation_id as conversationId,
               prompt_text as promptText, record_as_user_message as recordAsUserMessage,
-              activation_context_text as activationContextText
+              activation_context_text as activationContextText, sender_name as senderName
        FROM conversation_prompt_queue
        WHERE agent_id = ?
        ORDER BY created_at ASC, queue_id ASC
@@ -236,6 +237,7 @@ export class ExecutionDispatcher {
             await this.dispatchPrompt(next.conversationId, next.promptText, {
                 recordAsUserMessage: next.recordAsUserMessage !== 0,
                 activationContextText: next.activationContextText ?? undefined,
+                senderName: next.senderName ?? undefined,
             });
         }
         catch {
@@ -340,9 +342,9 @@ export class ExecutionDispatcher {
     enqueuePrompt(agentId, conversationId, promptText, options) {
         const now = Date.now();
         this.db.prepare(`INSERT INTO conversation_prompt_queue(
-         agent_id, conversation_id, prompt_text, record_as_user_message, activation_context_text, created_at, updated_at
+         agent_id, conversation_id, prompt_text, record_as_user_message, activation_context_text, sender_name, created_at, updated_at
        )
-       VALUES(?, ?, ?, ?, ?, ?, ?)`).run(agentId, conversationId, promptText, (options?.recordAsUserMessage ?? true) ? 1 : 0, options?.activationContextText?.trim() || null, now, now);
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?)`).run(agentId, conversationId, promptText, (options?.recordAsUserMessage ?? true) ? 1 : 0, options?.activationContextText?.trim() || null, options?.senderName ?? null, now, now);
     }
 }
 function parseEnvVars(raw) {

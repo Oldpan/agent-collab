@@ -17,10 +17,21 @@ describe('migrations', () => {
         expect(colNames).toContain('updated_at');
         db.close();
     });
-    it('schema_version 应至少包含最新迁移所需版本', () => {
+    it('schema_version 应为最新版本 36', () => {
         const db = createTestDb();
         const row = db.prepare('SELECT version FROM schema_version').get();
-        expect(row.version).toBeGreaterThanOrEqual(35);
+        expect(row.version).toBeGreaterThanOrEqual(36);
+        db.close();
+    });
+    it('users/invite_tokens/user_sessions 认证表应存在', () => {
+        const db = createTestDb();
+        const tables = db
+            .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+            .all();
+        const tableNames = tables.map((t) => t.name);
+        expect(tableNames).toContain('users');
+        expect(tableNames).toContain('invite_tokens');
+        expect(tableNames).toContain('user_sessions');
         db.close();
     });
     it('nodes 表应包含 display_name, env_var_keys, provisioned_at 列', () => {

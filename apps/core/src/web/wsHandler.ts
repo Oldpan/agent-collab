@@ -24,6 +24,7 @@ export function handleWebSocket(
   socket: WebSocket,
   conversationId: string,
   manager: ConversationManager,
+  senderName?: string,
 ): void {
   // Register this connection
   let sockets = connectionsByConversation.get(conversationId);
@@ -68,7 +69,7 @@ export function handleWebSocket(
       return;
     }
 
-    handleClientEvent(conversationId, event, manager).catch((err) => {
+    handleClientEvent(conversationId, event, manager, senderName).catch((err) => {
       log.warn('WebSocket client event error', err);
       broadcast(conversationId, { type: 'error', message: String(err?.message ?? err) });
     });
@@ -264,6 +265,7 @@ async function handleClientEvent(
   conversationId: string,
   event: ClientEvent,
   manager: ConversationManager,
+  senderName?: string,
 ): Promise<void> {
   switch (event.type) {
     case 'prompt': {
@@ -276,7 +278,7 @@ async function handleClientEvent(
 
       log.info('[ws] prompt → remote node', { conversationId, nodeId: conv.nodeId });
       try {
-        const result = await manager.submitPrompt(conversationId, event.text);
+        const result = await manager.submitPrompt(conversationId, event.text, { senderName });
         if (result.queued) {
           broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'queued' });
         } else {

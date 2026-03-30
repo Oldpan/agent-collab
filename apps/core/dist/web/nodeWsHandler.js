@@ -13,6 +13,23 @@ const REPLAY_EVENT_TYPES = new Set([
     'plan.update',
     'task.update',
 ]);
+function adoptProvisionedNodeIdentity(db, pendingNodeId, registeredNodeId, hostname, agentTypesJson, version, now) {
+    db.prepare(`UPDATE agents
+     SET node_id = ?
+     WHERE node_id = ?`).run(registeredNodeId, pendingNodeId);
+    db.prepare(`UPDATE conversations
+     SET node_id = ?
+     WHERE node_id = ?`).run(registeredNodeId, pendingNodeId);
+    db.prepare(`UPDATE nodes
+     SET node_id = ?,
+         hostname = ?,
+         agent_types_json = ?,
+         version = ?,
+         status = 'online',
+         last_seen = ?,
+         created_at = CASE WHEN created_at = 0 THEN ? ELSE created_at END
+     WHERE node_id = ?`).run(registeredNodeId, hostname, agentTypesJson, version, now, now, pendingNodeId);
+}
 function requiresMcpReplyContract(db, conversationId) {
     const row = db
         .prepare('SELECT agent_id as agentId FROM conversations WHERE id = ?')
@@ -286,8 +303,19 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
              created_at=CASE WHEN created_at=0 THEN ? ELSE created_at END WHERE node_id=?`).run(msg.hostname, agentTypesJson, msg.version, now, now, msg.nodeId);
                 }
                 else {
-                    db.prepare(`INSERT INTO nodes(node_id, hostname, agent_types_json, version, status, last_seen, created_at, provisioned_at, display_name, env_var_keys)
-             VALUES(?,?,?,?,'online',?,?,0,NULL,'[]')`).run(msg.nodeId, msg.hostname, agentTypesJson, msg.version, now, now);
+                    const pending = db.prepare(`SELECT node_id
+             FROM nodes
+             WHERE status = 'pending'
+               AND display_name = ?
+             ORDER BY provisioned_at DESC
+             LIMIT 1`).get(msg.hostname);
+                    if (pending) {
+                        adoptProvisionedNodeIdentity(db, pending.node_id, msg.nodeId, msg.hostname, agentTypesJson, msg.version, now);
+                    }
+                    else {
+                        db.prepare(`INSERT INTO nodes(node_id, hostname, agent_types_json, version, status, last_seen, created_at, provisioned_at, display_name, env_var_keys)
+               VALUES(?,?,?,?,'online',?,?,0,NULL,'[]')`).run(msg.nodeId, msg.hostname, agentTypesJson, msg.version, now, now);
+                    }
                 }
                 socket.send(JSON.stringify({ type: 'node.ack', nodeId: msg.nodeId }));
                 log.info(`[node-ws] registered: ${msg.nodeId} (${msg.hostname})`);

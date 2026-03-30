@@ -14,7 +14,7 @@ export function broadcast(conversationId, event) {
     }
 }
 /** Handle a new WebSocket connection for a conversation */
-export function handleWebSocket(socket, conversationId, manager) {
+export function handleWebSocket(socket, conversationId, manager, senderName) {
     // Register this connection
     let sockets = connectionsByConversation.get(conversationId);
     if (!sockets) {
@@ -53,7 +53,7 @@ export function handleWebSocket(socket, conversationId, manager) {
             socket.send(JSON.stringify(errEvent));
             return;
         }
-        handleClientEvent(conversationId, event, manager).catch((err) => {
+        handleClientEvent(conversationId, event, manager, senderName).catch((err) => {
             log.warn('WebSocket client event error', err);
             broadcast(conversationId, { type: 'error', message: String(err?.message ?? err) });
         });
@@ -205,7 +205,7 @@ function replayHistory(socket, conversationId, manager) {
 function extractToolCallIdFromUpdate(update) {
     return update?.toolCallId ?? update?.tool_call_id ?? update?.callId ?? update?.call_id ?? null;
 }
-async function handleClientEvent(conversationId, event, manager) {
+async function handleClientEvent(conversationId, event, manager, senderName) {
     switch (event.type) {
         case 'prompt': {
             const conv = manager.getConversation(conversationId);
@@ -215,7 +215,7 @@ async function handleClientEvent(conversationId, event, manager) {
             }
             log.info('[ws] prompt → remote node', { conversationId, nodeId: conv.nodeId });
             try {
-                const result = await manager.submitPrompt(conversationId, event.text);
+                const result = await manager.submitPrompt(conversationId, event.text, { senderName });
                 if (result.queued) {
                     broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'queued' });
                 }

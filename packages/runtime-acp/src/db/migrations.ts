@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 35;
+const LATEST_VERSION = 37;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -665,11 +665,61 @@ export function migrate(db: Db): void {
     db.exec(`UPDATE schema_version SET version = 34;`);
   }
 
-  if (current < 35) {
-    const agentCols = db.prepare("PRAGMA table_info('agents')").all() as Array<{ name: string }>;
-    if (!agentCols.some((c) => c.name === 'description')) {
-      db.exec(`ALTER TABLE agents ADD COLUMN description TEXT;`);
+  if (current < 36) {
+    // Users table for authentication
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        username TEXT UNIQUE NOT NULL,
+        password_hash TEXT NOT NULL,
+        is_admin INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+    `);
+
+    // Invite tokens for initial setup and new user invitations
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS invite_tokens (
+        id TEXT PRIMARY KEY,
+        token TEXT UNIQUE NOT NULL,
+        used INTEGER NOT NULL DEFAULT 0,
+        expires_at INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        used_at INTEGER,
+        used_by TEXT REFERENCES users(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_invite_tokens_token ON invite_tokens(token);
+      CREATE INDEX IF NOT EXISTS idx_invite_tokens_expires ON invite_tokens(expires_at);
+    `);
+
+    // User sessions for authentication
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS user_sessions (
+        id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL REFERENCES users(id),
+        token TEXT UNIQUE NOT NULL,
+        created_at INTEGER NOT NULL,
+        expires_at INTEGER,
+        last_used_at INTEGER
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(token);
+      CREATE INDEX IF NOT EXISTS idx_user_sessions_user ON user_sessions(user_id);
+    `);
+
+    db.exec(`UPDATE schema_version SET version = 36;`);
+  }
+
+  if (current < 37) {
+    // Add sender_name to conversation_prompt_queue so queued messages preserve the sender identity
+    const cols = db.prepare("PRAGMA table_info('conversation_prompt_queue')").all() as Array<{ name: string }>;
+    if (!cols.some((c) => c.name === 'sender_name')) {
+      db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN sender_name TEXT;`);
     }
-    db.exec(`UPDATE schema_version SET version = 35;`);
+    db.exec(`UPDATE schema_version SET version = 37;`);
   }
 }

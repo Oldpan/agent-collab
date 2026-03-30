@@ -77,6 +77,61 @@ describe('nodeWsHandler', () => {
             toolKind: 'exec_command',
         });
     });
+    it('node.register 在未显式传 NODE_ID 时应按 machine name 接管 pending machine', () => {
+        const machine = manager.createMachine({
+            name: 'gpu-box-01',
+            envVarKeys: ['ANTHROPIC_API_KEY'],
+        });
+        const agent = manager.createAgent({
+            name: 'Alice',
+            agentType: 'claude_acp',
+            nodeId: machine.nodeId,
+            workspacePath: '/tmp/alice-contract',
+        });
+        const conv = manager.openAgentThread(agent.agentId);
+        if (!conv)
+            throw new Error('missing conversation');
+        const socket = new FakeSocket();
+        const registered = [];
+        const registry = {
+            register(entry) {
+                registered.push({ nodeId: entry.nodeId, hostname: entry.hostname });
+            },
+            unregister() { },
+            heartbeat() { },
+        };
+        handleNodeWebSocket(socket, registry, () => { }, db, manager);
+        socket.emit('message', JSON.stringify({
+            type: 'node.register',
+            nodeId: 'node-auto-1',
+            hostname: 'gpu-box-01',
+            agentTypes: ['claude_acp'],
+            version: '0.1.0',
+        }));
+        const adopted = db.prepare(`SELECT node_id as nodeId, hostname, status, display_name as displayName
+       FROM nodes
+       WHERE node_id = ?`).get('node-auto-1');
+        const pending = db.prepare(`SELECT node_id as nodeId
+       FROM nodes
+       WHERE node_id = ?`).get(machine.nodeId);
+        const adoptedAgent = db.prepare(`SELECT node_id as nodeId
+       FROM agents
+       WHERE agent_id = ?`).get(agent.agentId);
+        const adoptedConversation = db.prepare(`SELECT node_id as nodeId
+       FROM conversations
+       WHERE id = ?`).get(conv.id);
+        expect(registered).toEqual([{ nodeId: 'node-auto-1', hostname: 'gpu-box-01' }]);
+        expect(adopted).toEqual({
+            nodeId: 'node-auto-1',
+            hostname: 'gpu-box-01',
+            status: 'online',
+            displayName: 'gpu-box-01',
+        });
+        expect(pending).toBeUndefined();
+        expect(adoptedAgent.nodeId).toBe('node-auto-1');
+        expect(adoptedConversation.nodeId).toBe('node-auto-1');
+        expect(socket.sent).toContain(JSON.stringify({ type: 'node.ack', nodeId: 'node-auto-1' }));
+    });
     it('run.end 错误应把会话状态切到 failed', () => {
         const conv = manager.createConversation({ title: 'Failure Test', nodeId: 'node-1' });
         const socket = new FakeSocket();

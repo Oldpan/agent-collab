@@ -41,7 +41,7 @@ export class ExecutionDispatcher {
   async dispatchPrompt(
     conversationId: string,
     promptText: string,
-    options?: { recordAsUserMessage?: boolean; activationContextText?: string },
+    options?: { recordAsUserMessage?: boolean; activationContextText?: string; senderName?: string },
   ): Promise<{ runId: string; dispatchMode: RuntimeDispatchMode; hostKey: string }> {
     const row = this.db.prepare(
       `SELECT session_key as sessionKey, agent_type as agentType,
@@ -104,7 +104,7 @@ export class ExecutionDispatcher {
           // Persist DM user messages to channel_messages so history/replay stay complete
           // even though the triggering message is also injected directly into this run prompt.
           const dmChannelId = `dm:${row.agentId}`;
-          const humanUserName = this.config.humanUserName;
+          const humanUserName = options?.senderName ?? this.config.humanUserName;
           const dmReplyTarget = row.replyTarget?.trim() || `dm:@${humanUserName}`;
           const msgSeq = (() => {
             const r = this.db
@@ -206,7 +206,7 @@ export class ExecutionDispatcher {
   async submitPrompt(
     conversationId: string,
     promptText: string,
-    options?: { recordAsUserMessage?: boolean; activationContextText?: string },
+    options?: { recordAsUserMessage?: boolean; activationContextText?: string; senderName?: string },
   ): Promise<{ queued: boolean; runId?: string }> {
     const row = this.db.prepare(
       `SELECT agent_id as agentId
@@ -294,7 +294,7 @@ export class ExecutionDispatcher {
     const next = this.db.prepare(
       `SELECT queue_id as queueId, agent_id as agentId, conversation_id as conversationId,
               prompt_text as promptText, record_as_user_message as recordAsUserMessage,
-              activation_context_text as activationContextText
+              activation_context_text as activationContextText, sender_name as senderName
        FROM conversation_prompt_queue
        WHERE agent_id = ?
        ORDER BY created_at ASC, queue_id ASC
@@ -306,6 +306,7 @@ export class ExecutionDispatcher {
       promptText: string;
       recordAsUserMessage: number;
       activationContextText: string | null;
+      senderName: string | null;
     } | undefined;
 
     if (!next) return;
@@ -315,6 +316,7 @@ export class ExecutionDispatcher {
       await this.dispatchPrompt(next.conversationId, next.promptText, {
         recordAsUserMessage: next.recordAsUserMessage !== 0,
         activationContextText: next.activationContextText ?? undefined,
+        senderName: next.senderName ?? undefined,
       });
     } catch {
       this.updateStatus(next.conversationId, 'failed');
@@ -456,20 +458,21 @@ export class ExecutionDispatcher {
     agentId: string,
     conversationId: string,
     promptText: string,
-    options?: { recordAsUserMessage?: boolean; activationContextText?: string },
+    options?: { recordAsUserMessage?: boolean; activationContextText?: string; senderName?: string },
   ): void {
     const now = Date.now();
     this.db.prepare(
       `INSERT INTO conversation_prompt_queue(
-         agent_id, conversation_id, prompt_text, record_as_user_message, activation_context_text, created_at, updated_at
+         agent_id, conversation_id, prompt_text, record_as_user_message, activation_context_text, sender_name, created_at, updated_at
        )
-       VALUES(?, ?, ?, ?, ?, ?, ?)`,
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       agentId,
       conversationId,
       promptText,
       (options?.recordAsUserMessage ?? true) ? 1 : 0,
       options?.activationContextText?.trim() || null,
+      options?.senderName ?? null,
       now,
       now,
     );

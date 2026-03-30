@@ -4,10 +4,13 @@ import { useAgents } from "@/hooks/useAgents";
 import { useMachines } from "@/hooks/useMachines";
 import { useChannels } from "@/hooks/useChannels";
 import { useUnreadBadges } from "@/hooks/useUnreadBadges";
+import { useAuth } from "@/hooks/useAuth";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { ChatPanel } from "@/features/chat/ChatPanel";
 import { ChannelPanel } from "@/features/channel/ChannelPanel";
 import { SessionManagerPanel } from "@/features/sessions/SessionManagerPanel";
+import { LoginPanel } from "@/features/auth/LoginPanel";
+import { SetupPanel } from "@/features/auth/SetupPanel";
 import {
   ResizablePanelGroup,
   ResizablePanel,
@@ -33,10 +36,26 @@ function useIsMobile() {
   return isMobile;
 }
 
+// Extract invite token from URL query param
+function getInviteTokenFromUrl(): string {
+  if (typeof window === 'undefined') return '';
+  const params = new URLSearchParams(window.location.search);
+  return params.get('invite') ?? '';
+}
+
 export function App() {
   const isMobile = useIsMobile();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"chat" | "sessions">("chat");
+  const { user, isAuthenticated, isLoading, hasAdmin, checkAuth, checkSetupStatus, doLogout } = useAuth();
+
+  // On mount: check setup status and auth token
+  useEffect(() => {
+    checkSetupStatus().then(() => checkAuth());
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // All hooks must be called unconditionally (Rules of Hooks)
   const {
     conversations,
     selectedId,
@@ -197,6 +216,7 @@ export function App() {
     selectedId,
     selectedChannelId,
     selectedView: viewMode,
+    currentUser: user,
     onOpenSessions: handleOpenSessions,
     onCreateMachine: createMachine,
     onDeleteMachine: deleteMachine,
@@ -205,7 +225,25 @@ export function App() {
     onOpenAgentThread: handleOpenAgentThread,
     onSelectChannel: handleSelectChannel,
     onCreateChannel: createChannel,
+    onLogout: doLogout,
   };
+
+  // Auth gates — placed after all hooks
+  if (isLoading || hasAdmin === null) {
+    return (
+      <div className="flex h-full items-center justify-center bg-zinc-50">
+        <div className="text-sm text-zinc-400">Loading...</div>
+      </div>
+    );
+  }
+
+  if (!hasAdmin) {
+    return <SetupPanel initialToken={getInviteTokenFromUrl()} />;
+  }
+
+  if (!isAuthenticated) {
+    return <LoginPanel />;
+  }
 
   return (
     <div className="flex h-full bg-[#e8dcc8] text-foreground">
