@@ -9,6 +9,8 @@ import WebSocket from 'ws';
 import { findMentionedAgents } from '../web/channelMentions.js';
 import { buildChannelActivationPrompt } from '../web/channelActivationPrompt.js';
 import { bumpAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
+import { listChannelSubscriptions } from '../web/channelSubscriptions.js';
+import { listTargetParticipants, upsertTargetParticipant } from '../web/targetParticipants.js';
 
 let db: Db;
 let manager: ConversationManager;
@@ -268,22 +270,57 @@ beforeAll(async () => {
       }
 
       const mentionedAgents = findMentionedAgents(content, manager.listAgents(req.params.id));
+      const notifyAgent = (
+        agentId: string,
+        reason: 'mention' | 'thread_reply' | 'channel_activity',
+        role: 'owner' | 'participant',
+      ) => {
+        const conv = manager.openAgentChannelThread(agentId, req.params.id, threadRootId ?? null);
+        if (!conv) return;
+        const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
+        upsertTargetParticipant(db, {
+          agentId,
+          channelId: req.params.id,
+          threadRootId: threadRootId ?? null,
+          role,
+          lastActiveAt: now,
+        });
+        bumpAgentMessageCheckpoint(db, agentId, req.params.id, seq, threadRootId ?? null);
+        void manager.submitPrompt(
+          conv.id,
+          buildChannelActivationPrompt({
+            channelName: channel.name,
+            target: historyTarget,
+            senderName,
+            content,
+            reason,
+          }),
+          { recordAsUserMessage: false },
+        ).catch(() => {});
+      };
+
       for (const agent of mentionedAgents) {
-        const conv = manager.openAgentChannelThread(agent.agentId, req.params.id, threadRootId ?? null);
-        if (conv) {
-          const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
-          bumpAgentMessageCheckpoint(db, agent.agentId, req.params.id, seq, threadRootId ?? null);
-          void manager.submitPrompt(
-            conv.id,
-            buildChannelActivationPrompt({
-              channelName: channel.name,
-              target: historyTarget,
-              senderName,
-              content,
-              reason: 'mention',
-            }),
-            { recordAsUserMessage: false },
-          ).catch(() => {});
+        notifyAgent(agent.agentId, 'mention', threadRootId ? 'participant' : 'owner');
+      }
+
+      if (!threadRootId && mentionedAgents.length === 0 && channel.collaborationMode === 'subscribed_agents') {
+        const rootParticipants = listTargetParticipants(db, {
+          channelId: req.params.id,
+          threadRootId: null,
+        });
+        const subscribedAgents = listChannelSubscriptions(db, req.params.id);
+        const agentsToWake = rootParticipants.length > 0
+          ? rootParticipants.map((participant) => ({
+              agentId: participant.agentId,
+              role: participant.role,
+            }))
+          : subscribedAgents.map((agent) => ({
+              agentId: agent.agentId,
+              role: 'participant' as const,
+            }));
+
+        for (const agent of agentsToWake) {
+          notifyAgent(agent.agentId, 'channel_activity', agent.role);
         }
       }
 
@@ -590,6 +627,116 @@ describe('REST API', () => {
     expect(branch?.channelId).toBe('default');
     expect(branch?.threadRootId).toBeNull();
     expect(branch?.id).not.toBe(dmThread.id);
+  });
+
+  it('POST /api/channels/:id/messages 在 subscribed_agents 模式下，无 root participants 时应唤醒订阅者', async () => {
+    const channel = manager.createChannel({
+      name: 'subscribed-broadcast',
+      collaborationMode: 'subscribed_agents',
+    });
+    const alice = manager.createAgent({
+      name: 'SubscribedAlice',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/subscribed-alice',
+    });
+    const bob = manager.createAgent({
+      name: 'SubscribedBob',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/subscribed-bob',
+    });
+    manager.joinChannel(alice.agentId, channel.channelId);
+    manager.joinChannel(bob.agentId, channel.channelId);
+
+    const response = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '大家看下这个新问题', senderName: 'User' }),
+    });
+
+    expect(response.status).toBe(201);
+
+    const aliceConv = manager.openAgentChannelThread(alice.agentId, channel.channelId, null);
+    const bobConv = manager.openAgentChannelThread(bob.agentId, channel.channelId, null);
+    expect(aliceConv).not.toBeNull();
+    expect(bobConv).not.toBeNull();
+
+    const alicePrompt = db.prepare(
+      `SELECT r.prompt_text as promptText
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.id = ?
+       ORDER BY r.started_at DESC
+       LIMIT 1`,
+    ).get(aliceConv?.id) as { promptText: string } | undefined;
+    const bobPrompt = db.prepare(
+      `SELECT r.prompt_text as promptText
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.id = ?
+       ORDER BY r.started_at DESC
+       LIMIT 1`,
+    ).get(bobConv?.id) as { promptText: string } | undefined;
+
+    expect(alicePrompt?.promptText).toContain('There is new channel activity');
+    expect(bobPrompt?.promptText).toContain('There is new channel activity');
+  });
+
+  it('POST /api/channels/:id/messages 在 subscribed_agents 模式下，有 root participants 时应优先唤醒参与者', async () => {
+    const channel = manager.createChannel({
+      name: 'subscribed-priority',
+      collaborationMode: 'subscribed_agents',
+    });
+    const owner = manager.createAgent({
+      name: 'RootOwner',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/root-owner',
+    });
+    const watcher = manager.createAgent({
+      name: 'PassiveWatcher',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/passive-watcher',
+    });
+    manager.joinChannel(owner.agentId, channel.channelId);
+    manager.joinChannel(watcher.agentId, channel.channelId);
+    upsertTargetParticipant(db, {
+      agentId: owner.agentId,
+      channelId: channel.channelId,
+      threadRootId: null,
+      role: 'owner',
+      lastActiveAt: Date.now(),
+    });
+
+    const response = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '这里有个后续更新', senderName: 'User' }),
+    });
+
+    expect(response.status).toBe(201);
+
+    const ownerConv = manager.openAgentChannelThread(owner.agentId, channel.channelId, null);
+    expect(ownerConv).not.toBeNull();
+    const ownerPrompt = db.prepare(
+      `SELECT r.prompt_text as promptText
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.id = ?
+       ORDER BY r.started_at DESC
+       LIMIT 1`,
+    ).get(ownerConv?.id) as { promptText: string } | undefined;
+    expect(ownerPrompt?.promptText).toContain('There is new channel activity');
+
+    const watcherRunCount = db.prepare(
+      `SELECT COUNT(*) as count
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.agent_id = ? AND c.channel_id = ?`,
+    ).get(watcher.agentId, channel.channelId) as { count: number };
+    expect(watcherRunCount.count).toBe(0);
   });
 
   it('POST /api/channels/:id/messages 在主频道 @agent 时应直接把触发消息写进激活 prompt', async () => {

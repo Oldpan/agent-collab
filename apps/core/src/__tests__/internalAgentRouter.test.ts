@@ -657,6 +657,32 @@ describe('internalAgentRouter', () => {
     expect(body.messages.map((msg) => msg.content)).toContain('hello channel');
   });
 
+  it('thread conversation 中的 agent 仍可读取所属主频道历史', async () => {
+    const agent = manager.createAgent({
+      name: 'ThreadReader',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/thread-reader-router',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    const conv = manager.openAgentChannelThread(agent.agentId, 'default', 'mainread1');
+    if (!conv) throw new Error('missing thread conversation');
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES
+       ('main-msg-1', 'default', 'user', 'User', 'user', '#default', 'main channel context', 1, ?),
+       ('thread-msg-1', 'default', 'user', 'User', 'user', '#default:mainread1', 'thread-only context', 2, ?)`,
+    ).run(Date.now(), Date.now() + 1);
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent('#default')}`);
+    expect(res.status).toBe(200);
+
+    const body = await res.json() as { messages: Array<{ content: string }> };
+    expect(body.messages.map((msg) => msg.content)).toContain('main channel context');
+  });
+
   it('read_history 对未加入的 channel 应返回 403', async () => {
     const agent = manager.createAgent({
       name: 'NoMember',
