@@ -18,6 +18,8 @@ const TURN_REPLY_CONTRACT = [
   'Use kind="final" only when your current answer is complete. The runtime decides when the run ends.',
 ].join('\n');
 
+const CORE_PUBLIC_HOST = '10.104.9.253';
+
 export class ExecutionDispatcher {
   private readonly db: Db;
   private readonly config: AppConfig;
@@ -159,7 +161,7 @@ export class ExecutionDispatcher {
 
     let channelBridgeConfig: { agentId: string; conversationId: string; serverUrl: string } | undefined;
     if (row.agentId) {
-      const cbHost = this.config.webHost === '0.0.0.0' ? '127.0.0.1' : this.config.webHost;
+      const cbHost = this.config.webHost === '0.0.0.0' ? CORE_PUBLIC_HOST : this.config.webHost;
       channelBridgeConfig = {
         agentId: row.agentId,
         conversationId,

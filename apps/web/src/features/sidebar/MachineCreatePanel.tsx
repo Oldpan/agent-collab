@@ -158,6 +158,7 @@ function buildConnectionCommand(machine: MachineInfo, envVarKeys: string[]): str
   const envParts = envVarKeys.map((k) => `${k}=<your-${k.toLowerCase()}>`).join(" \\\n  ");
   const prefix = envParts ? `${envParts} \\\n  ` : "";
   return (
+    `export https_proxy=http://127.0.0.1:7893\n\n` +
     `${prefix}NODE_HOSTNAME=${machine.name} \\\n` +
     `  CORE_URL=${CORE_URL} \\\n` +
     `  pnpm --filter @agent-collab/agent-node run dev`

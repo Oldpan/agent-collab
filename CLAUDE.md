@@ -340,6 +340,11 @@ Current weak areas:
 
 These have recently existed and are worth remembering:
 
+- **better-sqlite3 bindings missing**: If agent-node fails to start with `Error: Could not locate the bindings file`, the native module needs to be rebuilt:
+  ```bash
+  cd node_modules/.pnpm/better-sqlite3@12.8.0/node_modules/better-sqlite3
+  npx node-gyp rebuild
+  ```
 - Activity duration bugs on replay were caused by missing real timestamps during history replay.
 - `Node not connected` / `Node disconnected during dispatch` runs are now treated as dispatch failures in Activity instead of `completed`.
 - Approval-pending runs cannot currently be replayed after reconnect/restart; they intentionally fail closed and require re-run.
