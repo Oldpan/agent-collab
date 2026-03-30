@@ -26,6 +26,49 @@ const REPLAY_EVENT_TYPES = new Set([
 
 type EventBroadcaster = (conversationId: string, event: ServerEvent) => void;
 
+type ExistingNodeRow = {
+  node_id: string;
+  status: string;
+};
+
+type PendingProvisionedNodeRow = {
+  node_id: string;
+};
+
+function adoptProvisionedNodeIdentity(
+  db: Db,
+  pendingNodeId: string,
+  registeredNodeId: string,
+  hostname: string,
+  agentTypesJson: string,
+  version: string,
+  now: number,
+): void {
+  db.prepare(
+    `UPDATE agents
+     SET node_id = ?
+     WHERE node_id = ?`,
+  ).run(registeredNodeId, pendingNodeId);
+
+  db.prepare(
+    `UPDATE conversations
+     SET node_id = ?
+     WHERE node_id = ?`,
+  ).run(registeredNodeId, pendingNodeId);
+
+  db.prepare(
+    `UPDATE nodes
+     SET node_id = ?,
+         hostname = ?,
+         agent_types_json = ?,
+         version = ?,
+         status = 'online',
+         last_seen = ?,
+         created_at = CASE WHEN created_at = 0 THEN ? ELSE created_at END
+     WHERE node_id = ?`,
+  ).run(registeredNodeId, hostname, agentTypesJson, version, now, now, pendingNodeId);
+}
+
 function requiresMcpReplyContract(db: Db, conversationId: string): boolean {
   const row = db
     .prepare('SELECT agent_id as agentId FROM conversations WHERE id = ?')
@@ -400,7 +443,7 @@ export function handleNodeWebSocket(
         nodeId = msg.nodeId;
         const now = Date.now();
 
-        const existing = db.prepare('SELECT node_id, status FROM nodes WHERE node_id = ?').get(msg.nodeId) as { node_id: string; status: string } | undefined;
+        const existing = db.prepare('SELECT node_id, status FROM nodes WHERE node_id = ?').get(msg.nodeId) as ExistingNodeRow | undefined;
         if (existing?.status === 'deleted') {
           log.warn(`[node-ws] connection rejected: node ${msg.nodeId} was deleted`);
           socket.close(4000, 'Machine has been deleted');
@@ -424,10 +467,31 @@ export function handleNodeWebSocket(
              created_at=CASE WHEN created_at=0 THEN ? ELSE created_at END WHERE node_id=?`
           ).run(msg.hostname, agentTypesJson, msg.version, now, now, msg.nodeId);
         } else {
-          db.prepare(
-            `INSERT INTO nodes(node_id, hostname, agent_types_json, version, status, last_seen, created_at, provisioned_at, display_name, env_var_keys)
-             VALUES(?,?,?,?,'online',?,?,0,NULL,'[]')`
-          ).run(msg.nodeId, msg.hostname, agentTypesJson, msg.version, now, now);
+          const pending = db.prepare(
+            `SELECT node_id
+             FROM nodes
+             WHERE status = 'pending'
+               AND display_name = ?
+             ORDER BY provisioned_at DESC
+             LIMIT 1`,
+          ).get(msg.hostname) as PendingProvisionedNodeRow | undefined;
+
+          if (pending) {
+            adoptProvisionedNodeIdentity(
+              db,
+              pending.node_id,
+              msg.nodeId,
+              msg.hostname,
+              agentTypesJson,
+              msg.version,
+              now,
+            );
+          } else {
+            db.prepare(
+              `INSERT INTO nodes(node_id, hostname, agent_types_json, version, status, last_seen, created_at, provisioned_at, display_name, env_var_keys)
+               VALUES(?,?,?,?,'online',?,?,0,NULL,'[]')`
+            ).run(msg.nodeId, msg.hostname, agentTypesJson, msg.version, now, now);
+          }
         }
 
         socket.send(JSON.stringify({ type: 'node.ack', nodeId: msg.nodeId }));
