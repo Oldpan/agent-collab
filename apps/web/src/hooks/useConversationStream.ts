@@ -174,6 +174,26 @@ export function useConversationStream(
       }
 
       switch (event.type) {
+        case "error": {
+          const message =
+            typeof (event as { message?: unknown }).message === "string"
+              ? (event as { message: string }).message
+              : "Conversation connection failed.";
+          finalizeCurrentToolCalls();
+          setStatus("error");
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: createId(),
+              role: "system",
+              text: message,
+              createdAt: Date.now(),
+              isStreaming: false,
+            },
+          ]);
+          break;
+        }
+
         case "channel.message": {
           // Channel-based message: agent responded via send_message MCP.
           // Do NOT finalize the run here — the agent may continue with tool calls
@@ -503,23 +523,6 @@ export function useConversationStream(
           } else if (event.status === "failed") {
             setStatus("error");
           }
-          break;
-        }
-
-        case "error": {
-          finalizeCurrentToolCalls();
-          setStatus("error");
-          const errorId = createId();
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: errorId,
-              role: "system",
-              text: event.message,
-              createdAt: Date.now(),
-              isStreaming: false,
-            },
-          ]);
           break;
         }
 
