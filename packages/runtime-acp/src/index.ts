@@ -68,5 +68,7 @@ export {
 // Utilities
 export { acquireProcessLock } from './runtime/lock.js';
 export type { ProcessLock } from './runtime/lock.js';
+export { WorkspaceLockManager } from './runtime/workspaceLockManager.js';
+export type { WorkspaceLockLease } from './runtime/workspaceLockManager.js';
 export { resolveWorkspacePath } from './tools/workspace.js';
 export { log } from './logging.js';

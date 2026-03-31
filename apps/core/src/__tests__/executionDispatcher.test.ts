@@ -257,7 +257,7 @@ describe('ExecutionDispatcher', () => {
     expect(sent[0].msg).toEqual({ type: 'run.cancel', runId: 'run-1' });
   });
 
-  it('同一 agent 的第二个 thread 提交时应进入 queued', async () => {
+  it('同一 direct conversation 的后续 prompt 应进入 queued', async () => {
     const agent = manager.createAgent({
       name: 'Bob',
       agentType: 'claude_acp',
@@ -266,44 +266,105 @@ describe('ExecutionDispatcher', () => {
     });
     const primary = manager.openAgentThread(agent.agentId);
     if (!primary) throw new Error('missing primary thread');
-    const branch = manager.createConversation({
-      agentId: agent.agentId,
-      agentType: agent.agentType,
-      nodeId: agent.nodeId ?? undefined,
-      workspacePath: agent.workspacePath ?? undefined,
-      channelId: agent.channelId,
-      threadKind: 'branch',
-      isPrimaryThread: false,
-      title: 'Branch',
-    });
 
     await manager.submitPrompt(primary.id, 'first');
-    const queued = await manager.submitPrompt(branch.id, 'second');
+    const queued = await manager.submitPrompt(primary.id, 'second');
+    const queuedAgain = await manager.submitPrompt(primary.id, 'third');
 
     expect(queued.queued).toBe(true);
+    expect(queuedAgain.queued).toBe(true);
     const queuedRow = db.prepare(
       'SELECT status FROM conversations WHERE id = ?'
-    ).get(branch.id) as { status: string };
+    ).get(primary.id) as { status: string };
     expect(queuedRow.status).toBe('queued');
 
-    const queueEntry = db.prepare(
+    const queueEntries = db.prepare(
       `SELECT conversation_id as conversationId, prompt_text as promptText,
               activation_context_text as activationContextText
        FROM conversation_prompt_queue
-       WHERE agent_id = ?`
-    ).get(agent.agentId) as {
+       ORDER BY queue_id ASC`
+    ).all() as Array<{
       conversationId: string;
       promptText: string;
       activationContextText: string | null;
-    } | undefined;
-    expect(queueEntry).toEqual({
-      conversationId: branch.id,
-      promptText: 'second',
-      activationContextText: null,
-    });
+    }>;
+    expect(queueEntries).toEqual([
+      {
+        conversationId: primary.id,
+        promptText: 'second',
+        activationContextText: null,
+      },
+      {
+        conversationId: primary.id,
+        promptText: 'third',
+        activationContextText: null,
+      },
+    ]);
   });
 
-  it('排队的 prompt 在重新派发时应保留 activationContextText', async () => {
+  it('不同用户的 direct conversation 应并发 dispatch，不进入 queued', async () => {
+    const agent = manager.createAgent({
+      name: 'Alice',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/alice-direct-concurrency',
+    });
+    db.prepare(
+      `INSERT INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES(?, ?, ?, 0, ?, ?)`,
+    ).run('oldpan', 'oldpan', 'hash', Date.now(), Date.now());
+    db.prepare(
+      `INSERT INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES(?, ?, ?, 0, ?, ?)`,
+    ).run('yanzong', 'yanzong', 'hash', Date.now(), Date.now());
+    const oldpan = manager.openAgentThread(agent.agentId, 'oldpan');
+    const yanzong = manager.openAgentThread(agent.agentId, 'yanzong');
+    if (!oldpan || !yanzong) throw new Error('missing direct threads');
+
+    const first = await manager.submitPrompt(oldpan.id, 'first');
+    const second = await manager.submitPrompt(yanzong.id, 'second');
+
+    expect(first.queued).toBe(false);
+    expect(second.queued).toBe(false);
+    expect(sent.filter((entry) => entry.msg.type === 'run.dispatch')).toHaveLength(2);
+
+    const queuedCount = db.prepare(
+      'SELECT COUNT(*) as count FROM conversation_prompt_queue'
+    ).get() as { count: number };
+    expect(queuedCount.count).toBe(0);
+  });
+
+  it('同一 agent 的 channel root 与 thread branch 应可并发 dispatch', async () => {
+    const channel = manager.createChannel({ name: 'project-room' });
+    const agent = manager.createAgent({
+      name: 'Tab',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/tab-channel-concurrency',
+      channelId: channel.channelId,
+    });
+    const root = manager.openAgentChannelThread(agent.agentId, channel.channelId, null);
+    const thread = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'thread-root-1');
+    if (!root || !thread) throw new Error('missing channel conversations');
+
+    const rootSubmit = await manager.submitPrompt(root.id, 'root prompt', {
+      recordAsUserMessage: false,
+    });
+    const threadSubmit = await manager.submitPrompt(thread.id, 'thread prompt', {
+      recordAsUserMessage: false,
+    });
+
+    expect(rootSubmit.queued).toBe(false);
+    expect(threadSubmit.queued).toBe(false);
+    expect(sent.filter((entry) => entry.msg.type === 'run.dispatch')).toHaveLength(2);
+
+    const queuedCount = db.prepare(
+      'SELECT COUNT(*) as count FROM conversation_prompt_queue'
+    ).get() as { count: number };
+    expect(queuedCount.count).toBe(0);
+  });
+
+  it('排队的 prompt 在同一 conversation 重新派发时应保留 activationContextText', async () => {
     const agent = manager.createAgent({
       name: 'Queued Bob',
       agentType: 'claude_acp',
@@ -312,19 +373,9 @@ describe('ExecutionDispatcher', () => {
     });
     const primary = manager.openAgentThread(agent.agentId);
     if (!primary) throw new Error('missing primary thread');
-    const branch = manager.createConversation({
-      agentId: agent.agentId,
-      agentType: agent.agentType,
-      nodeId: agent.nodeId ?? undefined,
-      workspacePath: agent.workspacePath ?? undefined,
-      channelId: agent.channelId,
-      threadKind: 'branch',
-      isPrimaryThread: false,
-      title: 'Queued Branch',
-    });
 
     await manager.submitPrompt(primary.id, 'first');
-    const queued = await manager.submitPrompt(branch.id, 'second', {
+    const queued = await manager.submitPrompt(primary.id, 'second', {
       recordAsUserMessage: false,
       activationContextText: '[Thread root message]\nhello root',
     });
@@ -335,7 +386,7 @@ describe('ExecutionDispatcher', () => {
       `SELECT activation_context_text as activationContextText
        FROM conversation_prompt_queue
        WHERE conversation_id = ?`
-    ).get(branch.id) as { activationContextText: string | null } | undefined;
+    ).get(primary.id) as { activationContextText: string | null } | undefined;
     expect(queueEntry?.activationContextText).toBe('[Thread root message]\nhello root');
 
     const firstDispatch = sent[0]?.msg;

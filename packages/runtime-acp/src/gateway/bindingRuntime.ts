@@ -16,6 +16,7 @@ import {
   updateLoadSupported,
 } from './sessionStore.js';
 import { ToolAuth, parseToolKind, type ToolKind } from './toolAuth.js';
+import type { WorkspaceLockManager } from '../runtime/workspaceLockManager.js';
 
 export class BindingRuntime {
   private readonly db: Db;
@@ -64,6 +65,7 @@ export class BindingRuntime {
     disabledToolKinds?: ToolKind[];
     acpRpc?: import('../acp/stdio.js').StdioProcess;
     channelBridgeMcpEntry?: McpServerEntry;
+    workspaceLockManager?: WorkspaceLockManager;
   }) {
     this.db = params.db;
     this.config = params.config;
@@ -87,6 +89,7 @@ export class BindingRuntime {
       disabledToolKinds: this.disabledToolKinds,
       rpc: params.acpRpc,
       env: this.env,
+      workspaceLockManager: params.workspaceLockManager,
       events: {
         onSessionUpdate: (run, _sessionId, update, eventSeq) => {
           if (run.runId === this.currentRunId) {
@@ -211,6 +214,20 @@ export class BindingRuntime {
             // No-op for UI: tool updates are emitted via session/update
             // (tool_call/tool_call_update) to avoid duplicate user messages.
             void event;
+          });
+        },
+        onTaskUpdate: (run, task) => {
+          this.enqueueSinkWrite(async () => {
+            if (run.runId !== this.currentRunId) return;
+            const sink = this.activeSink;
+            if (!sink?.sendUi) return;
+            await sink.sendUi({
+              kind: 'task',
+              mode: this.currentUiMode,
+              title: task.title,
+              detail: task.detail,
+              silent: task.silent,
+            });
           });
         },
         onPermissionRequest: (req) => {

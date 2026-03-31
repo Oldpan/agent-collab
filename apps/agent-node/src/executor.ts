@@ -2,6 +2,7 @@ import { createRequire } from 'node:module';
 import path from 'node:path';
 import {
   ToolAuth,
+  WorkspaceLockManager,
   createSession,
   getSession,
   upsertBinding,
@@ -38,13 +39,21 @@ export class Executor {
   private readonly send: SendFn;
   private readonly createHost: CreateHostFn;
   private readonly hostSweepTimer: NodeJS.Timeout;
+  private readonly workspaceLockManager: WorkspaceLockManager;
 
-  constructor(params: { db: Db; config: AgentNodeConfig; send: SendFn; createHost?: CreateHostFn }) {
+  constructor(params: {
+    db: Db;
+    config: AgentNodeConfig;
+    send: SendFn;
+    createHost?: CreateHostFn;
+    workspaceLockManager?: WorkspaceLockManager;
+  }) {
     this.db = params.db;
     this.config = params.config;
     this.toolAuth = new ToolAuth(params.db);
     this.send = params.send;
     this.createHost = params.createHost ?? ((hostParams) => new AgentHost(hostParams));
+    this.workspaceLockManager = params.workspaceLockManager ?? new WorkspaceLockManager();
     this.hostSweepTimer = setInterval(() => {
       this.reapIdleHosts();
     }, this.config.hostSweepIntervalMs);
@@ -160,6 +169,7 @@ export class Executor {
         env: runtimeEnv,
         disabledToolKinds: msg.disabledToolKinds,
         channelBridgeMcpEntry,
+        workspaceLockManager: this.workspaceLockManager,
         send: this.send,
         hooks: {
           onRunStart: (dispatchMsg) => {

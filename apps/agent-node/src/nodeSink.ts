@@ -76,6 +76,7 @@ export class NodeSink implements OutboundSink {
         detail: event.detail,
         createdAt,
       });
+      if (event.silent) return;
       const text = event.detail
         ? `\n[${event.kind}] ${event.title}\n${event.detail}\n`
         : `\n[${event.kind}] ${event.title}\n`;

@@ -223,7 +223,7 @@ export class ExecutionDispatcher {
       return { queued: false, runId: dispatched.runId };
     }
 
-    const blocking = this.findBlockingConversation(row.agentId, conversationId);
+    const blocking = this.findBlockingConversation(conversationId);
     if (blocking) {
       this.enqueuePrompt(row.agentId, conversationId, promptText, options);
       this.updateStatus(conversationId, 'queued');
@@ -291,17 +291,17 @@ export class ExecutionDispatcher {
     ).get(conversationId) as { agentId: string | null } | undefined;
 
     if (!row?.agentId) return;
-    if (this.findBlockingConversation(row.agentId)) return;
+    if (this.findBlockingConversation(conversationId)) return;
 
     const next = this.db.prepare(
       `SELECT queue_id as queueId, agent_id as agentId, conversation_id as conversationId,
               prompt_text as promptText, record_as_user_message as recordAsUserMessage,
               activation_context_text as activationContextText, sender_name as senderName
        FROM conversation_prompt_queue
-       WHERE agent_id = ?
+       WHERE conversation_id = ?
        ORDER BY created_at ASC, queue_id ASC
        LIMIT 1`,
-    ).get(row.agentId) as {
+    ).get(conversationId) as {
       queueId: number;
       agentId: string;
       conversationId: string;
@@ -438,18 +438,19 @@ export class ExecutionDispatcher {
   }
 
   private findBlockingConversation(
-    agentId: string,
-    excludeConversationId?: string,
+    conversationId: string,
   ): { id: string; status: ConversationStatus } | null {
     const row = this.db.prepare(
-      `SELECT id, status
-       FROM conversations
-       WHERE agent_id = ?
-         AND status IN ('active', 'recovering', 'awaiting_approval')
-         AND (? IS NULL OR id != ?)
-       ORDER BY updated_at ASC
+      `SELECT c.id, c.status
+       FROM conversations c
+       LEFT JOIN runs r ON r.session_key = c.session_key AND r.ended_at IS NULL
+       WHERE c.id = ?
+         AND (
+           r.run_id IS NOT NULL
+           OR c.status IN ('active', 'recovering', 'awaiting_approval')
+         )
        LIMIT 1`,
-    ).get(agentId, excludeConversationId ?? null, excludeConversationId ?? null) as {
+    ).get(conversationId) as {
       id: string;
       status: ConversationStatus;
     } | undefined;

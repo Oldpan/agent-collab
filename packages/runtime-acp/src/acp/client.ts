@@ -6,6 +6,7 @@ import { spawn } from 'node:child_process';
 import { log } from '../logging.js';
 import type { Db } from '../db/db.js';
 import type { ToolAuth, ToolKind } from '../gateway/toolAuth.js';
+import { WorkspaceLockManager, type WorkspaceLockLease } from '../runtime/workspaceLockManager.js';
 import { resolveWorkspacePath } from '../tools/workspace.js';
 import {
   isNotification,
@@ -73,6 +74,7 @@ export type AcpClientEvents = {
   ) => void;
   onPermissionRequest?: (req: PermissionRequest) => void;
   onClientTool?: (run: AcpRun, event: ClientToolEvent) => void;
+  onTaskUpdate?: (run: AcpRun, task: { title: string; detail?: string; silent?: boolean }) => void;
   onAgentStderr?: (line: string) => void;
 };
 
@@ -93,6 +95,7 @@ export class AcpClient {
   private readonly toolAuth: ToolAuth | null;
   private readonly defaultAllowTools: boolean;
   private readonly disabledToolKinds: ReadonlySet<ToolKind>;
+  private readonly workspaceLockManager: WorkspaceLockManager;
 
   private readonly rpc: StdioProcess;
   private nextId = 1;
@@ -123,6 +126,7 @@ export class AcpClient {
     events?: AcpClientEvents;
     rpc?: StdioProcess;
     env?: Record<string, string>;
+    workspaceLockManager?: WorkspaceLockManager;
   }) {
     this.db = params.db;
     this.workspaceRoot = params.workspaceRoot;
@@ -132,6 +136,7 @@ export class AcpClient {
     this.defaultAllowTools = params.defaultAllowTools ?? false;
     this.disabledToolKinds = new Set(params.disabledToolKinds ?? []);
     this.events = params.events ?? {};
+    this.workspaceLockManager = params.workspaceLockManager ?? new WorkspaceLockManager();
 
     this.rpc =
       params.rpc ?? spawnAcpAgent(this.agentCommand, this.agentArgs, params.env);
@@ -158,6 +163,12 @@ export class AcpClient {
   close(): void {
     this.rejectAllPending(this.makeTransportError('ACP client closed'));
     this.rejectAllLocalPermissions(this.makeTransportError('ACP client closed'));
+    for (const [terminalId, state] of this.terminals.entries()) {
+      state.releaseLock?.();
+      state.releaseLock = undefined;
+      this.killChild(state.child);
+      this.terminals.delete(terminalId);
+    }
     this.rpc.kill();
   }
 
@@ -349,13 +360,15 @@ export class AcpClient {
             method: req.method,
             params,
           });
-          const resolvedPath = resolveWorkspacePath(
-            this.workspaceRoot,
-            params.path,
-          );
-          fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
-          fs.writeFileSync(resolvedPath, params.content, 'utf8');
-          this.respond(req.id, {});
+          await this.withWorkspaceWriteLock(req.method, params, async () => {
+            const resolvedPath = resolveWorkspacePath(
+              this.workspaceRoot,
+              params.path,
+            );
+            fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
+            fs.writeFileSync(resolvedPath, params.content, 'utf8');
+            this.respond(req.id, {});
+          });
 
           emitTool({
             phase: 'end',
@@ -383,7 +396,14 @@ export class AcpClient {
             method: req.method,
             params,
           });
-          const terminalId = await this.terminalCreate(params);
+          const lease = await this.acquireWorkspaceWriteLock(req.method, params);
+          let terminalId: string | null = null;
+          try {
+            terminalId = await this.terminalCreate(params, lease);
+          } catch (error) {
+            lease.release();
+            throw error;
+          }
           this.respond(req.id, { terminalId } satisfies TerminalCreateResult);
 
           emitTool({
@@ -666,10 +686,44 @@ export class AcpClient {
       output: string;
       truncated: boolean;
       byteLimit: number;
+      releaseLock?: () => void;
     }
   >();
 
-  private async terminalCreate(params: TerminalCreateParams): Promise<string> {
+  private async withWorkspaceWriteLock<T>(
+    method: string,
+    params: unknown,
+    action: () => Promise<T> | T,
+  ): Promise<T> {
+    const lease = await this.acquireWorkspaceWriteLock(method, params);
+    try {
+      return await action();
+    } finally {
+      lease.release();
+    }
+  }
+
+  private async acquireWorkspaceWriteLock(
+    method: string,
+    params: unknown,
+  ): Promise<WorkspaceLockLease> {
+    const run = this.currentRun;
+    return this.workspaceLockManager.acquire(this.workspaceRoot, {
+      onWaitStart: () => {
+        if (!run) return;
+        this.events.onTaskUpdate?.(run, {
+          title: 'waiting for workspace lock',
+          detail: buildWorkspaceLockWaitDetail(method, params),
+          silent: true,
+        });
+      },
+    });
+  }
+
+  private async terminalCreate(
+    params: TerminalCreateParams,
+    lease: WorkspaceLockLease,
+  ): Promise<string> {
     const terminalId = randomUUID();
     const cwd = params.cwd
       ? resolveWorkspacePath(this.workspaceRoot, params.cwd)
@@ -696,7 +750,13 @@ export class AcpClient {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    const state = { child, output: '', truncated: false, byteLimit };
+    const state = {
+      child,
+      output: '',
+      truncated: false,
+      byteLimit,
+      releaseLock: () => lease.release(),
+    };
     this.terminals.set(terminalId, state);
 
     const onData = (buf: Buffer) => {
@@ -712,6 +772,10 @@ export class AcpClient {
 
     child.stdout?.on('data', onData);
     child.stderr?.on('data', onData);
+    child.once('exit', () => {
+      state.releaseLock?.();
+      this.terminals.delete(terminalId);
+    });
 
     return terminalId;
   }
@@ -748,15 +812,37 @@ export class AcpClient {
   private terminalKill(params: TerminalKillParams): void {
     const state = this.terminals.get(params.terminalId);
     if (!state) throw new Error(`Unknown terminalId: ${params.terminalId}`);
-    state.child.kill('SIGKILL');
+    this.killChild(state.child);
   }
 
   private terminalRelease(params: TerminalReleaseParams): void {
     const state = this.terminals.get(params.terminalId);
     if (!state) return;
-    state.child.kill('SIGKILL');
     this.terminals.delete(params.terminalId);
   }
+
+  private killChild(child: ReturnType<typeof spawn>): void {
+    if (child.exitCode !== null || child.signalCode !== null) return;
+    child.kill('SIGKILL');
+  }
+}
+
+function buildWorkspaceLockWaitDetail(method: string, params: unknown): string {
+  if (method === 'fs/write_text_file') {
+    const pathValue = typeof (params as { path?: unknown })?.path === 'string'
+      ? (params as { path: string }).path
+      : 'file';
+    return `Waiting to write ${pathValue}.`;
+  }
+
+  if (method === 'terminal/create') {
+    const command = typeof (params as { command?: unknown })?.command === 'string'
+      ? (params as { command: string }).command
+      : 'command';
+    return `Waiting to execute ${command}.`;
+  }
+
+  return 'Waiting for another run to finish mutating this workspace.';
 }
 
 function formatJsonRpcErrorData(value: unknown): string {

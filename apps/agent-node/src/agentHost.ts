@@ -10,6 +10,7 @@ import {
   type ToolAuth,
   type UiMode,
   type McpServerEntry,
+  type WorkspaceLockManager,
 } from '@agent-collab/runtime-acp';
 import type { AgentNodeConfig } from './config.js';
 import { NodeSink } from './nodeSink.js';
@@ -59,6 +60,7 @@ export class AgentHost {
     env?: Record<string, string>;
     disabledToolKinds?: ToolKind[];
     channelBridgeMcpEntry?: McpServerEntry;
+    workspaceLockManager?: WorkspaceLockManager;
     send: SendFn;
     hooks?: RunLifecycleHooks;
   }) {
@@ -80,6 +82,7 @@ export class AgentHost {
       env: params.env,
       disabledToolKinds: params.disabledToolKinds,
       channelBridgeMcpEntry: params.channelBridgeMcpEntry,
+      workspaceLockManager: params.workspaceLockManager,
     });
   }
 

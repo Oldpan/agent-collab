@@ -1,7 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs';
 
-import { openDb, migrate, log } from '@agent-collab/runtime-acp';
+import { openDb, migrate, log, WorkspaceLockManager } from '@agent-collab/runtime-acp';
 import type { CoreToNode } from '@agent-collab/protocol';
 import { loadConfig } from './config.js';
 import { CoreConnection } from './connection.js';
@@ -24,10 +24,12 @@ async function main(): Promise<void> {
 
   const db = openDb(config.dbPath);
   migrate(db);
+  const workspaceLockManager = new WorkspaceLockManager();
 
   let executor: Executor;
 
   const handleMessage = (msg: CoreToNode): void => {
+    void (async () => {
     switch (msg.type) {
       case 'node.ack':
         log.info(`[agent-node] registered with core as ${msg.nodeId}`);
@@ -127,7 +129,9 @@ async function main(): Promise<void> {
 
       case 'workspace.write.request':
         try {
-          const result = writeWorkspaceFile(msg.workspaceRoot, msg.relativePath, msg.content, msg.mode);
+          const result = await workspaceLockManager.runExclusive(msg.workspaceRoot, async () =>
+            writeWorkspaceFile(msg.workspaceRoot, msg.relativePath, msg.content, msg.mode),
+          );
           connection.send({
             type: 'workspace.write.response',
             requestId: msg.requestId,
@@ -148,7 +152,9 @@ async function main(): Promise<void> {
       case 'workspace.reset.request':
         try {
           executor.resetWorkspace(msg.workspaceRoot);
-          resetWorkspaceDirectory(msg.workspaceRoot);
+          await workspaceLockManager.runExclusive(msg.workspaceRoot, async () => {
+            resetWorkspaceDirectory(msg.workspaceRoot);
+          });
           connection.send({
             type: 'workspace.reset.response',
             requestId: msg.requestId,
@@ -165,6 +171,12 @@ async function main(): Promise<void> {
         log.warn('[agent-node] unknown message', _exhaustive);
       }
     }
+    })().catch((error) => {
+      log.warn('[agent-node] message handler error', {
+        type: msg.type,
+        error: String((error as Error)?.message ?? error),
+      });
+    });
   };
 
   const connection = new CoreConnection(config, handleMessage, {
@@ -176,7 +188,12 @@ async function main(): Promise<void> {
       log.warn('[agent-node] disconnected from core, waiting to reconnect');
     },
   });
-  executor = new Executor({ db, config, send: (msg) => connection.send(msg) });
+  executor = new Executor({
+    db,
+    config,
+    send: (msg) => connection.send(msg),
+    workspaceLockManager,
+  });
 
   await connection.connect();
 

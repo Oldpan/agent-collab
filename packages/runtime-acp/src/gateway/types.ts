@@ -22,6 +22,7 @@ export type UiEvent =
       mode: UiMode;
       title: string;
       detail?: string;
+      silent?: boolean;
     }
   | {
       kind: 'tool';
