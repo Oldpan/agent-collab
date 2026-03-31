@@ -22,10 +22,11 @@ import {
 
 type AgentSkillsPanelProps = {
   agent: AgentInfo | null;
+  isAdmin?: boolean;
   onUpdate: (req: UpdateAgentRequest) => Promise<void>;
 };
 
-export function AgentSkillsPanel({ agent, onUpdate }: AgentSkillsPanelProps) {
+export function AgentSkillsPanel({ agent, isAdmin = false, onUpdate }: AgentSkillsPanelProps) {
   const [skillRootsText, setSkillRootsText] = useState((agent?.skillRoots ?? []).join("\n"));
   const [summary, setSummary] = useState<AgentSkillListResult | null>(null);
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
@@ -176,10 +177,12 @@ export function AgentSkillsPanel({ agent, onUpdate }: AgentSkillsPanelProps) {
         </div>
 
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" onClick={handleSave} disabled={saving}>
-            <SaveIcon className="mr-1 size-4" />
-            {saving ? "Saving..." : "Save"}
-          </Button>
+          {isAdmin && (
+            <Button size="sm" onClick={handleSave} disabled={saving}>
+              <SaveIcon className="mr-1 size-4" />
+              {saving ? "Saving..." : "Save"}
+            </Button>
+          )}
           <Button size="sm" variant="outline" onClick={handleRefresh} disabled={loading}>
             <RefreshCwIcon className="mr-1 size-4" />
             Refresh

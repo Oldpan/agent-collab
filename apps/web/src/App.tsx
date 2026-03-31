@@ -237,8 +237,11 @@ export function App() {
     );
   }
 
-  if (!hasAdmin) {
-    return <SetupPanel initialToken={getInviteTokenFromUrl()} />;
+  const inviteToken = getInviteTokenFromUrl();
+
+  // First-time setup (no admin yet) OR invite link opened by unauthenticated user
+  if (!hasAdmin || (inviteToken && !isAuthenticated)) {
+    return <SetupPanel initialToken={inviteToken} />;
   }
 
   if (!isAuthenticated) {
@@ -305,6 +308,7 @@ export function App() {
             <ChatPanel
               conversation={selectedConversation}
               agent={selectedAgent}
+              isAdmin={user?.isAdmin ?? false}
               onSeenSeq={handleConversationSeenSeq}
               onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
               onUpdateAgent={handleUpdateAgent}

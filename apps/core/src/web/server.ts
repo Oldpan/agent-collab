@@ -34,6 +34,7 @@ import {
   loginUser,
   logoutUser,
   validateSession,
+  validateInviteToken,
   createInviteToken,
   getUserById,
   listUsers,
@@ -1192,6 +1193,14 @@ export async function startServer(params: {
   // Check if setup is complete (has admin user)
   app.get('/api/auth/check-setup', async () => {
     return { hasAdmin: hasAdminUser(db) };
+  });
+
+  // Check invite token validity (public, no auth needed) — always 200 to avoid proxy interference
+  app.get<{ Params: { token: string } }>('/api/auth/invite/:token', async (req, reply) => {
+    const { token } = req.params;
+    const result = validateInviteToken(db, token);
+    reply.code(200);
+    return result.valid ? { valid: true } : { valid: false, error: result.error };
   });
 
   // Initial setup with invite token

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useAuth } from '@/hooks/useAuth';
+import { checkInviteToken } from '@/lib/auth-api';
 
 interface SetupPanelProps {
   initialToken?: string;
@@ -10,11 +11,23 @@ interface SetupPanelProps {
 
 export function SetupPanel({ initialToken = '', onSuccess }: SetupPanelProps) {
   const [token, setToken] = useState(initialToken);
-  const [username, setUsername] = useState('yanzong');
-  const [password, setPassword] = useState('7fL9xQ2mVp~-=');
-  const [confirmPassword, setConfirmPassword] = useState('7fL9xQ2mVp~-=');
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  // null = checking, true = valid, false = invalid
+  const [tokenValid, setTokenValid] = useState<boolean | null>(initialToken ? null : true);
+  const [tokenError, setTokenError] = useState<string | null>(null);
   const { doSetup, isLoading, error, clearError } = useAuth();
+
+  // Validate token from URL on mount
+  useEffect(() => {
+    if (!initialToken) return;
+    checkInviteToken(initialToken).then((result) => {
+      setTokenValid(result.valid);
+      if (!result.valid) setTokenError(result.error ?? 'Invalid invite token');
+    });
+  }, [initialToken]);
 
   // Clear error when inputs change
   useEffect(() => {
@@ -40,6 +53,33 @@ export function SetupPanel({ initialToken = '', onSuccess }: SetupPanelProps) {
 
   const passwordsMatch = password === confirmPassword;
   const canSubmit = token.trim() && username.trim() && password.trim() && passwordsMatch;
+
+  // Still checking token validity
+  if (tokenValid === null) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-zinc-50">
+        <div className="text-sm text-zinc-400">Validating invite token...</div>
+      </div>
+    );
+  }
+
+  // Token is invalid/used/expired
+  if (tokenValid === false) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-zinc-50">
+        <div className="w-full max-w-md">
+          <div className="rounded-sm border-2 border-zinc-900 bg-white p-8 shadow-[8px_8px_0_0_rgba(0,0,0,0.3)]">
+            <div className="mb-6 text-center">
+              <h1 className="mb-2 text-2xl font-bold text-zinc-900">Agent Collab</h1>
+            </div>
+            <div className="rounded-sm border border-red-300 bg-red-50 px-4 py-3 text-sm text-red-700">
+              {tokenError ?? 'This invite link is no longer valid.'}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-zinc-50">

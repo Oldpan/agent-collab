@@ -12,13 +12,14 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 
 type Props = {
   agent: AgentInfo;
+  isAdmin?: boolean;
   onUpdate: (req: UpdateAgentRequest) => Promise<void>;
   onRestart: () => Promise<void>;
   onClearChat: () => Promise<void>;
   onReset: () => Promise<void>;
 };
 
-export function AgentSettingsPanel({ agent, onUpdate, onRestart, onClearChat, onReset }: Props) {
+export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart, onClearChat, onReset }: Props) {
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
   const [joinedChannelIds, setJoinedChannelIds] = useState<Set<string>>(
@@ -251,15 +252,17 @@ export function AgentSettingsPanel({ agent, onUpdate, onRestart, onClearChat, on
               onChange={setDisabledToolKinds}
             />
 
-            <Button
-              size="sm"
-              className="w-full rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-sm text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
-              onClick={handleSave}
-              disabled={saving || !name.trim()}
-            >
-              <SaveIcon className="size-3.5 mr-1" />
-              {saving ? "Saving..." : "Save Changes"}
-            </Button>
+            {isAdmin && (
+              <Button
+                size="sm"
+                className="w-full rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-sm text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
+                onClick={handleSave}
+                disabled={saving || !name.trim()}
+              >
+                <SaveIcon className="size-3.5 mr-1" />
+                {saving ? "Saving..." : "Save Changes"}
+              </Button>
+            )}
           </section>
         </div>
       </ScrollArea>

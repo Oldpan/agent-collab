@@ -134,6 +134,8 @@ export function Sidebar({
   onSelectChannel, onCreateChannel,
   onLogout,
 }: SidebarProps) {
+  const isAdmin = currentUser?.isAdmin ?? false;
+
   const [expandedMachines, setExpandedMachines] = useState<Set<string>>(
     () => readStoredSet(EXPANDED_MACHINES_STORAGE_KEY),
   );
@@ -263,15 +265,17 @@ export function Sidebar({
           >
             <Rows3Icon className="size-3" />
           </Button>
-          <Button
-            size="icon-xs"
-            variant="outline"
-            className="rounded-sm border-2 border-zinc-900 bg-[#fff9d8] text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff1a9]"
-            title="Add machine"
-            onClick={() => setShowCreateMachine(true)}
-          >
-            <PlusIcon className="size-3" />
-          </Button>
+          {isAdmin && (
+            <Button
+              size="icon-xs"
+              variant="outline"
+              className="rounded-sm border-2 border-zinc-900 bg-[#fff9d8] text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff1a9]"
+              title="Add machine"
+              onClick={() => setShowCreateMachine(true)}
+            >
+              <PlusIcon className="size-3" />
+            </Button>
+          )}
         </div>
       </div>
 
@@ -356,24 +360,26 @@ export function Sidebar({
                   }
                   <StatusDot status={machine.status} />
                   <span className="flex-1 truncate text-xs font-medium">{machine.name}</span>
-                  <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
-                    <button
-                      type="button"
-                      className="rounded-sm p-0.5 hover:bg-[#ffe27a] cursor-pointer"
-                      title="Add agent to this machine"
-                      onClick={(e) => openCreateAgentDialog(machine.nodeId, e)}
-                    >
-                      <PlusIcon className="size-3 text-zinc-500" />
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-sm p-0.5 hover:bg-[#ffe27a] cursor-pointer"
-                      title="Delete machine"
-                      onClick={(e) => { e.stopPropagation(); handleOpenDeleteMachineDialog(machine); }}
-                    >
-                      <TrashIcon className="size-3 text-zinc-500 hover:text-destructive" />
-                    </button>
-                  </div>
+                  {isAdmin && (
+                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                      <button
+                        type="button"
+                        className="rounded-sm p-0.5 hover:bg-[#ffe27a] cursor-pointer"
+                        title="Add agent to this machine"
+                        onClick={(e) => openCreateAgentDialog(machine.nodeId, e)}
+                      >
+                        <PlusIcon className="size-3 text-zinc-500" />
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-sm p-0.5 hover:bg-[#ffe27a] cursor-pointer"
+                        title="Delete machine"
+                        onClick={(e) => { e.stopPropagation(); handleOpenDeleteMachineDialog(machine); }}
+                      >
+                        <TrashIcon className="size-3 text-zinc-500 hover:text-destructive" />
+                      </button>
+                    </div>
+                  )}
                 </button>
 
                 {/* Machine content */}
@@ -399,6 +405,7 @@ export function Sidebar({
                           unreadCount={agentUnreadCounts[agent.agentId] ?? 0}
                           machineStatus={machine.status}
                           conversationStatus={primaryConversation?.status ?? null}
+                          isAdmin={isAdmin}
                           onOpen={() => onOpenAgentThread(agent.agentId)}
                           onDelete={() => handleOpenDeleteDialog(agent)}
                         />
@@ -596,6 +603,7 @@ type AgentRowProps = {
   unreadCount: number;
   machineStatus: MachineInfo["status"] | null;
   conversationStatus: ConversationStatus | null;
+  isAdmin: boolean;
   onOpen: () => void;
   onDelete: () => void;
 };
@@ -637,7 +645,7 @@ function ChannelRow({ channel, isSelected, unreadCount, onSelect }: ChannelRowPr
 
 // ─── AgentRow ───
 
-function AgentRow({ agent, isSelected, updatedAt, unreadCount, machineStatus, conversationStatus, onOpen, onDelete }: AgentRowProps) {
+function AgentRow({ agent, isSelected, updatedAt, unreadCount, machineStatus, conversationStatus, isAdmin, onOpen, onDelete }: AgentRowProps) {
   return (
     <div className={cn(
       "group flex w-full items-center gap-1.5 rounded-md border-2 border-zinc-900 px-2 py-1.5 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]",
@@ -663,17 +671,19 @@ function AgentRow({ agent, isSelected, updatedAt, unreadCount, machineStatus, co
       </button>
       <div className="flex items-center gap-1 shrink-0">
         <UnreadBadge count={unreadCount} />
-        <button
-          type="button"
-          className={cn(
-            "p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer",
-            "text-zinc-500 hover:text-red-600",
-          )}
-          onClick={(e) => { e.stopPropagation(); onDelete(); }}
-          title="Delete agent"
-        >
-          <TrashIcon className="size-3" />
-        </button>
+        {isAdmin && (
+          <button
+            type="button"
+            className={cn(
+              "p-0.5 rounded opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer",
+              "text-zinc-500 hover:text-red-600",
+            )}
+            onClick={(e) => { e.stopPropagation(); onDelete(); }}
+            title="Delete agent"
+          >
+            <TrashIcon className="size-3" />
+          </button>
+        )}
       </div>
     </div>
   );

@@ -121,10 +121,24 @@ export async function getMe(): Promise<{ user: User }> {
   });
 }
 
+// Check invite token validity — server always returns 200, result in body
+export async function checkInviteToken(token: string): Promise<{ valid: boolean; error?: string }> {
+  try {
+    const data = await apiRequest<{ valid: boolean; error?: string }>(`/auth/invite/${encodeURIComponent(token)}`, {
+      method: 'GET',
+    });
+    return data;
+  } catch {
+    // Network error or proxy interference — treat as invalid
+    return { valid: false, error: 'Unable to validate invite token' };
+  }
+}
+
 // Admin: Create invite token
 export async function createInvite(): Promise<InviteResponse> {
   return apiRequest<InviteResponse>('/admin/invite', {
     method: 'POST',
+    body: JSON.stringify({}),
   });
 }
 

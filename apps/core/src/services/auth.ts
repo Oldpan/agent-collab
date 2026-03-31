@@ -294,7 +294,7 @@ export function useInviteToken(db: Db, token: string, userId: string): void {
   ).run(now, userId, token);
 }
 
-// Setup with invite token (for first admin)
+// Setup with invite token — first invite creates admin, subsequent ones create regular users
 export async function setupWithInvite(
   db: Db,
   token: string,
@@ -307,8 +307,12 @@ export async function setupWithInvite(
     return { success: false, error: validation.error };
   }
 
-  // Create admin user
-  const result = await createAdminUser(db, username, password);
+  // First user becomes admin, everyone else is a regular user
+  const isFirstAdmin = !hasAdminUser(db);
+  const result = isFirstAdmin
+    ? await createAdminUser(db, username, password)
+    : await createUser(db, username, password, false);
+
   if (!result.success) {
     return result;
   }

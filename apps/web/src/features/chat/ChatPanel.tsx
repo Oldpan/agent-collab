@@ -45,6 +45,7 @@ import { cn } from "@/lib/utils";
 type ChatPanelProps = {
   conversation: ConversationInfo;
   agent: AgentInfo | null;
+  isAdmin?: boolean;
   onOpenSidebar?: () => void;
   onSeenSeq?: (seq: number) => void;
   onUpdateAgent?: (id: string, req: UpdateAgentRequest) => Promise<void>;
@@ -76,6 +77,7 @@ function isDispatchFailureError(error?: string): boolean {
 export function ChatPanel({
   conversation,
   agent,
+  isAdmin = false,
   onOpenSidebar,
   onSeenSeq,
   onUpdateAgent,
@@ -241,6 +243,7 @@ export function ChatPanel({
         agent ? (
           <AgentSkillsPanel
             agent={agent}
+            isAdmin={isAdmin}
             onUpdate={(req) => onUpdateAgent?.(agent.agentId, req) ?? Promise.resolve()}
           />
         ) : (
@@ -254,6 +257,7 @@ export function ChatPanel({
         agent ? (
           <AgentSettingsPanel
             agent={agent}
+            isAdmin={isAdmin}
             onUpdate={(req) => onUpdateAgent?.(agent.agentId, req) ?? Promise.resolve()}
             onRestart={() => onRestartAgent?.(agent.agentId) ?? Promise.resolve()}
             onClearChat={() => onClearAgentChat?.(agent.agentId) ?? Promise.resolve()}
