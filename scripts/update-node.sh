@@ -28,7 +28,6 @@ REMOTE=$(git rev-parse origin/master)
 
 if [[ "$LOCAL" == "$REMOTE" ]]; then
   echo "==> [update-node] already up to date ($LOCAL)"
-  exit 0
 else
   echo "==> [update-node] updating $LOCAL -> $REMOTE"
   git pull --ff-only origin master

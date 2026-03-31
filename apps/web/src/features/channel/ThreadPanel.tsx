@@ -20,6 +20,7 @@ import {
   streamdownRootClass,
   escapeHtmlOutsideCodeBlocks,
 } from "@/components/ai-elements/streamdown";
+import { MessageSourceBadge } from "@/components/MessageSourceBadge";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
   month: "2-digit",
@@ -43,6 +44,7 @@ function renderContent(content: string) {
 
 function ThreadMessage({ message }: { message: ChannelMessage }) {
   const isUser = message.senderType === "user";
+  const showFallbackBadge = message.messageSource === "delta_fallback" && !isUser;
   return (
     <div className="flex gap-2.5 px-4 py-2">
       <div
@@ -65,6 +67,11 @@ function ThreadMessage({ message }: { message: ChannelMessage }) {
             isUser ? "bg-[#d8efff] text-zinc-900" : "bg-[#d8f8c8] text-zinc-900",
           )}
         >
+          {showFallbackBadge && (
+            <div className="mb-2 flex items-start justify-end">
+              <MessageSourceBadge messageSource={message.messageSource} />
+            </div>
+          )}
           {isUser ? (
             <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
               {renderContent(message.content)}

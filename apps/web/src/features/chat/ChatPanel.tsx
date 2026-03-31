@@ -41,6 +41,7 @@ import { AgentSettingsPanel } from "./AgentSettingsPanel";
 import type { AgentInfo, ConversationInfo, UpdateAgentRequest } from "@agent-collab/protocol";
 import type { LiveMessage, LiveToolCall } from "@/hooks/types";
 import { cn } from "@/lib/utils";
+import { MessageSourceBadge } from "@/components/MessageSourceBadge";
 
 type ChatPanelProps = {
   conversation: ConversationInfo;
@@ -349,26 +350,6 @@ function MessageRow({
     );
   }
 
-  if (message.messageSource === "delta_fallback") {
-    const displayName = agent?.name ?? "Agent";
-    return (
-      <div className="px-3 py-1.5">
-        <div className="rounded border border-zinc-200 bg-zinc-50 px-3 py-2 text-xs text-zinc-500">
-          <div className="mb-1.5 flex items-center gap-1.5">
-            <span className="font-medium text-zinc-500">{displayName}</span>
-            <span className="rounded bg-zinc-200 px-1 py-0.5 text-[10px] font-medium uppercase tracking-wide text-zinc-400">
-              fallback
-            </span>
-            <span className="ml-auto text-[10px] text-zinc-400">
-              {messageTimeFormatter.format(message.createdAt)}
-            </span>
-          </div>
-          <MessageResponse>{message.text}</MessageResponse>
-        </div>
-      </div>
-    );
-  }
-
   const isUser = message.role === "user";
   const displayName = isUser ? userName : (agent?.name ?? "Agent");
   const displayRole = isUser ? "Owner" : "Agent";
@@ -379,13 +360,19 @@ function MessageRow({
   const contentAlign = isUser ? "items-end text-right" : "items-start text-left";
   const metaAlign = isUser ? "justify-end" : "justify-between";
   const infoAlign = isUser ? "justify-end" : "justify-start";
+  const showFallbackBadge = message.messageSource === "delta_fallback";
 
   const body = isUser ? (
     <UserMessageContent className={cn("w-fit max-w-full self-end rounded-md border-2 px-3 py-2.5", cardTone)}>
       {message.text}
     </UserMessageContent>
   ) : (
-    <MessageContent className={cn("rounded-md border-2 px-3 py-2.5", cardTone)}>
+    <MessageContent className={cn("relative rounded-md border-2 px-3 py-2.5", cardTone)}>
+      {showFallbackBadge ? (
+        <div className="mb-2 flex items-start justify-end">
+          <MessageSourceBadge messageSource={message.messageSource} />
+        </div>
+      ) : null}
       {/* Thinking */}
       {message.thinking && <ThinkingDisclosure thinking={message.thinking} />}
 
