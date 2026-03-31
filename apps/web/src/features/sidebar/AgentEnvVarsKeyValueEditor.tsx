@@ -35,7 +35,10 @@ export function AgentEnvVarsKeyValueEditor({ value, onChange, editorKey, classNa
 
   useEffect(() => {
     setRows(rowsFromEnvVars(value));
-  }, [editorKey, value]);
+    // Only re-sync from parent when the agent changes (editorKey), not when
+    // envVars updates in reaction to our own onChange — that would loop.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [editorKey]);
 
   const hasDuplicateKeys = useMemo(() => {
     const seen = new Set<string>();
