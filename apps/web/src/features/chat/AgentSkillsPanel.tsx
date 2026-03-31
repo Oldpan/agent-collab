@@ -170,9 +170,12 @@ export function AgentSkillsPanel({ agent, isAdmin = false, onUpdate }: AgentSkil
             placeholder="/code/.claude/skills"
             value={skillRootsText}
             onChange={(event) => setSkillRootsText(event.target.value)}
+            readOnly={!isAdmin}
           />
           <div className="text-[11px] text-muted-foreground">
-            One absolute path per line. These paths are resolved on the assigned node.
+            {isAdmin
+              ? "One absolute path per line. These paths are resolved on the assigned node."
+              : "Skill roots are read-only for non-admin users. These paths are resolved on the assigned node."}
           </div>
         </div>
 

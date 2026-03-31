@@ -160,6 +160,21 @@ describe('ConversationManager', () => {
       expect(found!.title).toBe('Find me');
     });
 
+    it('应保留 direct 会话的 userId，用于鉴权', () => {
+      db.prepare(
+        `INSERT INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+         VALUES(?, ?, ?, 0, ?, ?)`,
+      ).run('user-123', 'tester', 'hash', 1, 1);
+      const created = manager.createConversation({
+        title: 'Private',
+        threadKind: 'direct',
+        userId: 'user-123',
+      });
+      const found = manager.getConversation(created.id);
+      expect(found).not.toBeNull();
+      expect(found!.userId).toBe('user-123');
+    });
+
     it('不存在的 id 应返回 null', () => {
       expect(manager.getConversation('non-existent')).toBeNull();
     });

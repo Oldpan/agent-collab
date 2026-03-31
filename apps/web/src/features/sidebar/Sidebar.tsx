@@ -387,7 +387,7 @@ export function Sidebar({
                   <div className="ml-3 mt-1 flex flex-col items-start gap-1">
                     {machineAgents.length === 0 && (
                       <p className="rounded-md border-2 border-dashed border-zinc-900/40 bg-[#fff8d8] px-2 py-2 text-[10px] text-zinc-500">
-                        No agents — click + to create one
+                        {isAdmin ? "No agents — click + to create one" : "No agents available"}
                       </p>
                     )}
 
@@ -422,19 +422,21 @@ export function Sidebar({
               <span className="text-xs font-bold uppercase tracking-wider text-zinc-800">
                 Channels
               </span>
-              <button
-                type="button"
-                className="rounded-sm border-2 border-zinc-900 bg-[#fff9d8] p-1 text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff1a9] cursor-pointer transition-colors"
-                title="Create channel"
-                onClick={() => { setShowCreateChannel(true); }}
-              >
-                <PlusIcon className="size-3" />
-              </button>
+              {isAdmin && (
+                <button
+                  type="button"
+                  className="rounded-sm border-2 border-zinc-900 bg-[#fff9d8] p-1 text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff1a9] cursor-pointer transition-colors"
+                  title="Create channel"
+                  onClick={() => { setShowCreateChannel(true); }}
+                >
+                  <PlusIcon className="size-3" />
+                </button>
+              )}
             </div>
 
             {channels.length === 0 && (
               <p className="rounded-md border-2 border-dashed border-zinc-900/40 bg-[#fff8d8] px-2 py-2 text-[10px] text-zinc-500">
-                No channels — click + to create one
+                {isAdmin ? "No channels — click + to create one" : "No channels available"}
               </p>
             )}
 

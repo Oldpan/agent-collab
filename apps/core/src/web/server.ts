@@ -73,28 +73,52 @@ export async function startServer(params: {
   await app.register(fastifyCors, { origin: true });
   await app.register(fastifyWebSocket);
 
+  const getRequestUser = (req: { headers: Record<string, unknown> }): User | null => {
+    const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
+    const token = authHeader.replace('Bearer ', '');
+    return token ? validateSession(db, token) : null;
+  };
+
+  const requireUser = (req: { headers: Record<string, unknown> }, reply: { code: (statusCode: number) => unknown }): User | null => {
+    const user = getRequestUser(req);
+    if (!user) {
+      reply.code(401);
+      return null;
+    }
+    return user;
+  };
+
+  const requireAdmin = (req: { headers: Record<string, unknown> }, reply: { code: (statusCode: number) => unknown }): User | null => {
+    const user = requireUser(req, reply);
+    if (!user) return null;
+    if (!user.isAdmin) {
+      reply.code(403);
+      return null;
+    }
+    return user;
+  };
+
   // ─── REST routes ───
 
   // List conversations — filtered by the requesting user
   app.get('/api/conversations', async (req, reply) => {
-    const token = ((req.headers as Record<string, string>).authorization ?? '').replace('Bearer ', '');
-    const user = token ? validateSession(db, token) : null;
-    if (!user) { reply.code(401); return { error: 'Unauthorized' }; }
+    const user = requireUser(req, reply);
+    if (!user) return { error: 'Unauthorized' };
     return conversationManager.listConversations({ userId: user.id, isAdmin: user.isAdmin });
   });
 
   // ─── Agent routes ───
 
   app.get('/api/agents', async (req, reply) => {
-    const token = ((req.headers as Record<string, string>).authorization ?? '').replace('Bearer ', '');
-    const user = token ? validateSession(db, token) : null;
-    if (!user) { reply.code(401); return { error: 'Unauthorized' }; }
+    const user = requireUser(req, reply);
+    if (!user) return { error: 'Unauthorized' };
     if (user.isAdmin) return conversationManager.listAgents();
     const allowed = getUserAgentAccess(db, user.id);
     return conversationManager.listAgents().filter((a) => allowed.includes(a.agentId));
   });
 
   app.post<{ Body: CreateAgentRequest }>('/api/agents', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     const body = (req.body ?? {}) as CreateAgentRequest;
     if (!body.name) {
       reply.code(400);
@@ -112,12 +136,14 @@ export async function startServer(params: {
   });
 
   app.patch<{ Params: { id: string }; Body: UpdateAgentRequest }>('/api/agents/:id', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     const updated = conversationManager.updateAgent(req.params.id, req.body ?? {});
     if (!updated) { reply.code(404); return { error: 'Not found' }; }
     return updated;
   });
 
   app.delete<{ Params: { id: string } }>('/api/agents/:id', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     const agent = conversationManager.getAgent(req.params.id);
     if (!agent) { reply.code(404); return { error: 'Not found' }; }
     const result = conversationManager.deleteAgent(req.params.id);
@@ -131,8 +157,7 @@ export async function startServer(params: {
   });
 
   app.post<{ Params: { id: string } }>('/api/agents/:id/open-thread', async (req, reply) => {
-    const token = ((req.headers as Record<string, string>).authorization ?? '').replace('Bearer ', '');
-    const user = token ? validateSession(db, token) : null;
+    const user = getRequestUser(req);
     const thread = conversationManager.openAgentThread(req.params.id, user?.id ?? null);
     if (!thread) {
       reply.code(404);
@@ -142,6 +167,7 @@ export async function startServer(params: {
   });
 
   app.post<{ Params: { id: string } }>('/api/agents/:id/restart', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     const agent = conversationManager.getAgent(req.params.id);
     if (!agent) { reply.code(404); return { error: 'Not found' }; }
     if (!agent.nodeId) { reply.code(409); return { error: 'Agent is not assigned to a remote node.' }; }
@@ -181,6 +207,7 @@ export async function startServer(params: {
   });
 
   app.post<{ Params: { id: string } }>('/api/agents/:id/clear-chat', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     const agent = conversationManager.getAgent(req.params.id);
     if (!agent) { reply.code(404); return { error: 'Not found' }; }
 
@@ -200,6 +227,7 @@ export async function startServer(params: {
   });
 
   app.post<{ Params: { id: string } }>('/api/agents/:id/reset', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     const agent = conversationManager.getAgent(req.params.id);
     if (!agent) {
       reply.code(404);
@@ -321,10 +349,8 @@ export async function startServer(params: {
 
   // Get conversation history (stored events from DB)
   app.get<{ Params: { id: string } }>('/api/conversations/:id/history', async (req, reply) => {
-    // Auth check
-    const token = ((req.headers as Record<string, string>).authorization ?? '').replace('Bearer ', '');
-    const user = token ? validateSession(db, token) : null;
-    if (!user) { reply.code(401); return { error: 'Unauthorized' }; }
+    const user = requireUser(req, reply);
+    if (!user) return { error: 'Unauthorized' };
 
     const conv = conversationManager.getConversation(req.params.id);
     if (!conv) {
@@ -400,10 +426,8 @@ export async function startServer(params: {
   app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
     '/api/conversations/:id/channel-messages',
     async (req, reply) => {
-      // Auth check
-      const token = ((req.headers as Record<string, string>).authorization ?? '').replace('Bearer ', '');
-      const user = token ? validateSession(db, token) : null;
-      if (!user) { reply.code(401); return { error: 'Unauthorized' }; }
+      const user = requireUser(req, reply);
+      if (!user) return { error: 'Unauthorized' };
 
       const conv = conversationManager.getConversation(req.params.id);
       if (!conv) {
@@ -518,9 +542,8 @@ export async function startServer(params: {
 
   // List all channels (filtered by user access for non-admins)
   app.get('/api/channels', async (req, reply) => {
-    const token = ((req.headers as Record<string, string>).authorization ?? '').replace('Bearer ', '');
-    const user = token ? validateSession(db, token) : null;
-    if (!user) { reply.code(401); return { error: 'Unauthorized' }; }
+    const user = requireUser(req, reply);
+    if (!user) return { error: 'Unauthorized' };
     if (user.isAdmin) return conversationManager.listChannels();
     const allowed = getUserChannelAccess(db, user.id);
     return conversationManager.listChannels().filter((c) => allowed.includes(c.channelId));
@@ -528,6 +551,7 @@ export async function startServer(params: {
 
   // Create channel
   app.post<{ Body: CreateChannelRequest }>('/api/channels', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     const body = (req.body ?? {}) as CreateChannelRequest;
     if (!body.name) {
       reply.code(400);
@@ -654,6 +678,7 @@ export async function startServer(params: {
   app.post<{ Params: { id: string; channelId: string } }>(
     '/api/agents/:id/channels/:channelId',
     async (req, reply) => {
+      if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
       const agent = conversationManager.getAgent(req.params.id);
       if (!agent) { reply.code(404); return { error: 'Agent not found' }; }
       const channel = conversationManager.getChannel(req.params.channelId);
@@ -667,6 +692,7 @@ export async function startServer(params: {
   app.delete<{ Params: { id: string; channelId: string } }>(
     '/api/agents/:id/channels/:channelId',
     async (req, reply) => {
+      if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
       conversationManager.leaveChannel(req.params.id, req.params.channelId);
       reply.code(204);
     },

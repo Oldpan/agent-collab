@@ -514,11 +514,18 @@ export class ConversationManager {
                 thread_kind as threadKind, is_primary_thread as isPrimaryThread,
                 thread_root_id as threadRootId,
                 workspace_path as workspacePath, status, node_id as nodeId,
-                agent_id as agentId, created_at as createdAt, updated_at as updatedAt
+                agent_id as agentId, user_id as userId, created_at as createdAt, updated_at as updatedAt
          FROM conversations WHERE id = ?`,
       )
-      .get(id) as ConversationInfo | undefined;
-    return row ? { ...row, isPrimaryThread: !!row.isPrimaryThread, threadRootId: row.threadRootId ?? null } : null;
+      .get(id) as (ConversationInfo & { userId?: string | null }) | undefined;
+    return row
+      ? {
+          ...row,
+          isPrimaryThread: !!row.isPrimaryThread,
+          threadRootId: row.threadRootId ?? null,
+          userId: row.userId ?? null,
+        }
+      : null;
   }
 
   deleteConversation(id: string): void {

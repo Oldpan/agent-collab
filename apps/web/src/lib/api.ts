@@ -17,10 +17,17 @@ import type {
 
 const API_BASE = "/api";
 
+function withAuthHeaders(headers?: Record<string, string>): Record<string, string> {
+  const token = localStorage.getItem("auth_token") ?? "";
+  return {
+    ...(headers ?? {}),
+    ...(token ? { Authorization: `Bearer ${token}` } : {}),
+  };
+}
+
 export async function listConversations(): Promise<ConversationInfo[]> {
-  const token = localStorage.getItem('auth_token') ?? '';
   const res = await fetch(`${API_BASE}/conversations`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: withAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to list conversations: ${res.statusText}`);
   return res.json();
@@ -55,9 +62,8 @@ export type ConversationRunSummary = {
 };
 
 export async function getHistory(id: string): Promise<ConversationRunSummary[]> {
-  const token = localStorage.getItem('auth_token') ?? '';
   const res = await fetch(`${API_BASE}/conversations/${id}/history`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: withAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to get history: ${res.statusText}`);
   return res.json();
@@ -67,18 +73,16 @@ export async function getConversationChannelMessages(
   id: string,
   limit = 100,
 ): Promise<{ messages: ChannelMessage[] }> {
-  const token = localStorage.getItem('auth_token') ?? '';
   const res = await fetch(`${API_BASE}/conversations/${id}/channel-messages?limit=${limit}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: withAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to get conversation channel messages: ${res.statusText}`);
   return res.json();
 }
 
 export async function listChannels(): Promise<ChannelInfo[]> {
-  const token = localStorage.getItem('auth_token') ?? '';
   const res = await fetch(`${API_BASE}/channels`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: withAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to list channels: ${res.statusText}`);
   return res.json();
@@ -121,7 +125,7 @@ export async function createChannel(req: {
 }): Promise<ChannelInfo> {
   const res = await fetch(`${API_BASE}/channels`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error(`Failed to create channel: ${res.statusText}`);
@@ -156,7 +160,7 @@ export async function updateChannel(channelId: string, req: {
 }): Promise<ChannelInfo> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}`, {
     method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error(`Failed to update channel: ${res.statusText}`);
@@ -166,6 +170,7 @@ export async function updateChannel(channelId: string, req: {
 export async function subscribeChannelAgent(channelId: string, agentId: string): Promise<ChannelInfo> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/subscriptions/${encodeURIComponent(agentId)}`, {
     method: "POST",
+    headers: withAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to subscribe agent: ${res.statusText}`);
   return res.json();
@@ -174,6 +179,7 @@ export async function subscribeChannelAgent(channelId: string, agentId: string):
 export async function unsubscribeChannelAgent(channelId: string, agentId: string): Promise<ChannelInfo> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/subscriptions/${encodeURIComponent(agentId)}`, {
     method: "DELETE",
+    headers: withAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to unsubscribe agent: ${res.statusText}`);
   return res.json();
@@ -182,6 +188,7 @@ export async function unsubscribeChannelAgent(channelId: string, agentId: string
 export async function clearChannelChat(channelId: string): Promise<{ ok: true; clearedConversationIds: string[] }> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/clear-chat`, {
     method: "POST",
+    headers: withAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to clear channel chat: ${res.statusText}`);
   return res.json();
@@ -230,6 +237,7 @@ export async function updateTaskStatus(
 export async function joinAgentChannel(agentId: string, channelId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/agents/${agentId}/channels/${encodeURIComponent(channelId)}`, {
     method: 'POST',
+    headers: withAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to join channel: ${res.statusText}`);
 }
@@ -237,6 +245,7 @@ export async function joinAgentChannel(agentId: string, channelId: string): Prom
 export async function leaveAgentChannel(agentId: string, channelId: string): Promise<void> {
   const res = await fetch(`${API_BASE}/agents/${agentId}/channels/${encodeURIComponent(channelId)}`, {
     method: 'DELETE',
+    headers: withAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to leave channel: ${res.statusText}`);
 }
@@ -391,7 +400,7 @@ export async function setUserAccess(userId: string, agentIds: string[], channelI
 export async function createAgent(req: CreateAgentRequest): Promise<AgentInfo> {
   const res = await fetch(`${API_BASE}/agents`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error(`Failed to create agent: ${res.statusText}`);
@@ -401,7 +410,7 @@ export async function createAgent(req: CreateAgentRequest): Promise<AgentInfo> {
 export async function updateAgent(id: string, req: UpdateAgentRequest): Promise<AgentInfo> {
   const res = await fetch(`${API_BASE}/agents/${id}`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error(`Failed to update agent: ${res.statusText}`);
@@ -409,7 +418,7 @@ export async function updateAgent(id: string, req: UpdateAgentRequest): Promise<
 }
 
 export async function deleteAgent(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/agents/${id}`, { method: "DELETE" });
+  const res = await fetch(`${API_BASE}/agents/${id}`, { method: "DELETE", headers: withAuthHeaders() });
   if (!res.ok) throw new Error(`Failed to delete agent: ${res.statusText}`);
 }
 
@@ -420,10 +429,9 @@ export async function listAgentConversations(agentId: string): Promise<Conversat
 }
 
 export async function openAgentThread(agentId: string): Promise<ConversationInfo> {
-  const token = localStorage.getItem('auth_token') ?? '';
   const res = await fetch(`${API_BASE}/agents/${agentId}/open-thread`, {
     method: "POST",
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    headers: withAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to open agent thread: ${res.statusText}`);
   return res.json();
@@ -432,7 +440,7 @@ export async function openAgentThread(agentId: string): Promise<ConversationInfo
 export async function restartAgent(
   agentId: string,
 ): Promise<{ ok: boolean; conversations: ConversationInfo[] }> {
-  const res = await fetch(`${API_BASE}/agents/${agentId}/restart`, { method: "POST" });
+  const res = await fetch(`${API_BASE}/agents/${agentId}/restart`, { method: "POST", headers: withAuthHeaders() });
   if (!res.ok) {
     const body = await safeReadErrorBody(res);
     throw new Error(body ?? `Failed to restart agent: ${res.statusText}`);
@@ -443,7 +451,7 @@ export async function restartAgent(
 export async function clearAgentChat(
   agentId: string,
 ): Promise<{ ok: boolean; conversations: ConversationInfo[] }> {
-  const res = await fetch(`${API_BASE}/agents/${agentId}/clear-chat`, { method: "POST" });
+  const res = await fetch(`${API_BASE}/agents/${agentId}/clear-chat`, { method: "POST", headers: withAuthHeaders() });
   if (!res.ok) {
     const body = await safeReadErrorBody(res);
     throw new Error(body ?? `Failed to clear agent chat: ${res.statusText}`);
@@ -456,6 +464,7 @@ export async function resetAgent(
 ): Promise<{ ok: boolean; conversations: ConversationInfo[] }> {
   const res = await fetch(`${API_BASE}/agents/${agentId}/reset`, {
     method: "POST",
+    headers: withAuthHeaders(),
   });
   if (!res.ok) {
     const body = await safeReadErrorBody(res);

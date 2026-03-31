@@ -224,17 +224,19 @@ export function ChatPanel({
           >
             Profile
           </Button>
-          <Button
-            size="sm"
-            variant={activeTab === "setting" ? "default" : "outline"}
-            className={cn(
-              "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
-              activeTab === "setting" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
-            )}
-            onClick={() => setActiveTab("setting")}
-          >
-            Setting
-          </Button>
+          {isAdmin && (
+            <Button
+              size="sm"
+              variant={activeTab === "setting" ? "default" : "outline"}
+              className={cn(
+                "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+                activeTab === "setting" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+              )}
+              onClick={() => setActiveTab("setting")}
+            >
+              Setting
+            </Button>
+          )}
         </div>
       </div>
 
