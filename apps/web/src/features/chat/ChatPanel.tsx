@@ -33,6 +33,7 @@ import { ChevronRightIcon, MenuIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { PromptComposer } from "./PromptComposer";
 import { AgentWorkspacePanel } from "./AgentWorkspacePanel";
+import { AgentSkillsPanel } from "./AgentSkillsPanel";
 import { AgentProfilePanel } from "./AgentProfilePanel";
 import { AgentActivityPanel } from "./AgentActivityPanel";
 import { ChatAvatar, readStoredUserIdentity } from "./ChatAvatar";
@@ -82,7 +83,7 @@ export function ChatPanel({
   onClearAgentChat,
   onResetAgent,
 }: ChatPanelProps) {
-  const [activeTab, setActiveTab] = useState<"chat" | "activity" | "workspace" | "profile" | "setting">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "activity" | "workspace" | "skills" | "profile" | "setting">("chat");
   const userIdentity = useMemo(() => readStoredUserIdentity(), []);
   const {
     messages,
@@ -193,6 +194,17 @@ export function ChatPanel({
           </Button>
           <Button
             size="sm"
+            variant={activeTab === "skills" ? "default" : "outline"}
+            className={cn(
+              "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+              activeTab === "skills" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+            )}
+            onClick={() => setActiveTab("skills")}
+          >
+            Skills
+          </Button>
+          <Button
+            size="sm"
             variant={activeTab === "profile" ? "default" : "outline"}
             className={cn(
               "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
@@ -218,6 +230,17 @@ export function ChatPanel({
 
       {activeTab === "workspace" ? (
         <AgentWorkspacePanel agent={agent} />
+      ) : activeTab === "skills" ? (
+        agent ? (
+          <AgentSkillsPanel
+            agent={agent}
+            onUpdate={(req) => onUpdateAgent?.(agent.agentId, req) ?? Promise.resolve()}
+          />
+        ) : (
+          <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+            Agent skills unavailable.
+          </div>
+        )
       ) : activeTab === "profile" ? (
         <AgentProfilePanel agent={agent} />
       ) : activeTab === "setting" ? (

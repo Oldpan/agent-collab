@@ -21,10 +21,10 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('schema_version 应为最新版本 36', () => {
+  it('schema_version 应为最新版本 39', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBeGreaterThanOrEqual(36);
+    expect(row.version).toBeGreaterThanOrEqual(39);
     db.close();
   });
 
@@ -84,10 +84,12 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('agents 表应包含 disabled_tool_kinds 列', () => {
+  it('agents 表应包含 description、disabled_tool_kinds、skill_roots 列', () => {
     const db = createTestDb();
     const agentCols = db.prepare("PRAGMA table_info('agents')").all() as Array<{ name: string }>;
+    expect(agentCols.map((c) => c.name)).toContain('description');
     expect(agentCols.map((c) => c.name)).toContain('disabled_tool_kinds');
+    expect(agentCols.map((c) => c.name)).toContain('skill_roots');
     db.close();
   });
 

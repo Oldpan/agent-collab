@@ -13,6 +13,7 @@ import { getRuntimeDriver, type RunDispatchMsg, type NodeToCore } from '@agent-c
 import type { AgentNodeConfig } from './config.js';
 import { AgentHost } from './agentHost.js';
 import { ensureIsolatedClaudeConfig } from './claudeConfig.js';
+import { ensureNativeSkillMounts } from './nativeSkillMounts.js';
 import {
   enqueueDispatch,
   listPendingDispatches,
@@ -60,7 +61,19 @@ export class Executor {
     const runtimeEnv = { ...(msg.envVars ?? {}) };
 
     if (msg.agentType === 'claude_acp') {
-      runtimeEnv.CLAUDE_CONFIG_DIR = ensureIsolatedClaudeConfig(workspaceRoot);
+      const claudeConfigDir = ensureIsolatedClaudeConfig(workspaceRoot);
+      runtimeEnv.CLAUDE_CONFIG_DIR = claudeConfigDir;
+      ensureNativeSkillMounts({
+        agentType: msg.agentType,
+        workspaceRoot,
+        skillRoots: msg.skillRoots,
+      });
+    } else {
+      ensureNativeSkillMounts({
+        agentType: msg.agentType,
+        workspaceRoot,
+        skillRoots: msg.skillRoots,
+      });
     }
 
     log.info('[executor] dispatch received', {

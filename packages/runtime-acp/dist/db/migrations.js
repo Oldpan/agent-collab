@@ -1,4 +1,4 @@
-const LATEST_VERSION = 37;
+const LATEST_VERSION = 39;
 export function migrate(db) {
     db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -634,5 +634,19 @@ export function migrate(db) {
             db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN sender_name TEXT;`);
         }
         db.exec(`UPDATE schema_version SET version = 37;`);
+    }
+    if (current < 38) {
+        const agentCols = db.prepare("PRAGMA table_info('agents')").all();
+        if (!agentCols.some((c) => c.name === 'skill_roots')) {
+            db.exec(`ALTER TABLE agents ADD COLUMN skill_roots TEXT;`);
+        }
+        db.exec(`UPDATE schema_version SET version = 38;`);
+    }
+    if (current < 39) {
+        const agentCols = db.prepare("PRAGMA table_info('agents')").all();
+        if (!agentCols.some((c) => c.name === 'description')) {
+            db.exec(`ALTER TABLE agents ADD COLUMN description TEXT;`);
+        }
+        db.exec(`UPDATE schema_version SET version = 39;`);
     }
 }

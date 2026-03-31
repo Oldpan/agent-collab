@@ -138,6 +138,7 @@ export class ExecutionDispatcher {
           const label = pendingCount === 1 ? '1 unread message' : `${pendingCount} unread messages`;
           contextText += `\n\n[Inbox]\n${label} in your channels since last check. Call check_messages when ready.`;
         }
+
       }
     }
 
@@ -175,6 +176,7 @@ export class ExecutionDispatcher {
       conversationId,
       agentType: row.agentType,
       workspacePath: row.workspacePath,
+      ...(row.agentId ? { skillRoots: this.getAgentById(row.agentId)?.skillRoots } : {}),
       envVars: {
         ...(agentEnvVars ?? {}),
         ...(parseEnvVars(row.envVarsJson) ?? {}),

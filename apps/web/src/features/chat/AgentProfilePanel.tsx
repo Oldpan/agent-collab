@@ -18,11 +18,17 @@ export function AgentProfilePanel({ agent }: AgentProfilePanelProps) {
 
   const envKeys = Object.keys(agent.envVars ?? {}).sort((a, b) => a.localeCompare(b));
   const disabledToolKinds = [...(agent.disabledToolKinds ?? [])].sort((a, b) => a.localeCompare(b));
+  const skillRoots = [...(agent.skillRoots ?? [])].sort((a, b) => a.localeCompare(b));
   const memoryPath = agent.workspacePath ? `${agent.workspacePath}/MEMORY.md` : null;
   const claudeConfigDir =
     agent.agentType === "claude_acp" && agent.workspacePath
       ? `${agent.workspacePath}/.claude-runtime`
       : null;
+  const nativeSkillMountDir = agent.workspacePath
+    ? agent.agentType === "claude_acp"
+      ? `${agent.workspacePath}/.claude/skills`
+      : `${agent.workspacePath}/.agents/skills`
+    : null;
 
   return (
     <ScrollArea className="flex-1">
@@ -41,6 +47,8 @@ export function AgentProfilePanel({ agent }: AgentProfilePanelProps) {
           <InfoRow label="Node" value={agent.nodeId ?? "Unassigned"} mono />
           <InfoRow label="Workspace" value={agent.workspacePath ?? "Not configured"} mono />
           <InfoRow label="Local Memory" value={memoryPath ?? "Not configured"} mono />
+          <InfoRow label="Skill Roots" value={skillRoots.length > 0 ? skillRoots.join("\n") : "Not configured"} mono />
+          {nativeSkillMountDir ? <InfoRow label="Native Skill Mount" value={nativeSkillMountDir} mono /> : null}
           {claudeConfigDir ? <InfoRow label="Claude Config Dir" value={claudeConfigDir} mono /> : null}
         </ProfileSection>
 

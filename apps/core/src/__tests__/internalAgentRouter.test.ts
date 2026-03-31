@@ -6,6 +6,7 @@ import { createRun } from '@agent-collab/runtime-acp';
 import { createTestConfig, createTestDb } from './helpers.js';
 import { ConversationManager } from '../web/conversationManager.js';
 import { registerInternalAgentRoutes } from '../web/internalAgentRouter.js';
+import { AgentSkillsService } from '../services/agentSkillsService.js';
 
 let db: Db;
 let manager: ConversationManager;
@@ -33,7 +34,65 @@ beforeAll(async () => {
   manager.start();
 
   const app = Fastify({ logger: false });
-  registerInternalAgentRoutes(app, db, manager, () => {}, () => {}, createTestConfig().humanUserName);
+  const skillsService = new AgentSkillsService({
+    getAgentById: (agentId) => manager.getAgent(agentId),
+    broker: {
+      async listSkills(
+        _nodeId: string,
+        skillRoots: string[],
+        _params?: { agentType?: string; workspaceRoot?: string | null },
+        skillPath?: string | null,
+      ) {
+        if (skillPath) {
+          return {
+            path: skillPath,
+            roots: skillRoots,
+            skills: [],
+            entries: [
+              {
+                name: 'SKILL.md',
+                path: `${skillPath}/SKILL.md`,
+                kind: 'file',
+                size: 64,
+                modifiedAt: 123,
+              },
+            ],
+          };
+        }
+        return {
+          path: null,
+          roots: skillRoots,
+          skills: [
+            {
+              name: 'deploy',
+              path: `${skillRoots[0]}/deploy/SKILL.md`,
+              sourceRoot: skillRoots[0],
+              description: 'Deploy workflow',
+            },
+          ],
+          entries: [],
+        };
+      },
+      async readSkillFile(
+        _nodeId: string,
+        _skillRoots: string[],
+        _params: { agentType?: string; workspaceRoot?: string | null },
+        skillPath: string,
+      ) {
+        if (!skillPath.endsWith('SKILL.md')) {
+          throw new Error('not_found:Skill file not found.');
+        }
+        return {
+          path: skillPath,
+          content: '# Deploy\nUse rollout checklist.',
+          mimeType: 'text/markdown' as const,
+          size: 31,
+          modifiedAt: 123,
+        };
+      },
+    } as any,
+  });
+  registerInternalAgentRoutes(app, db, manager, () => {}, () => {}, createTestConfig().humanUserName, skillsService);
 
   await app.listen({ port: 0, host: '127.0.0.1' });
   const addr = app.server.address() as { port: number };
@@ -41,7 +100,8 @@ beforeAll(async () => {
   serverClose = () => app.close();
 });
 
-beforeEach(() => {
+beforeEach(async () => {
+  await settleDispatches();
   dispatches.length = 0;
 });
 
@@ -432,7 +492,7 @@ describe('internalAgentRouter', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(dispatches.filter((msg) => msg.type === 'run.dispatch')).toHaveLength(1);
+    await expectDispatchCount(1);
 
     const bobConv = manager.openAgentChannelThread(bob.agentId, 'default', null);
     if (!bobConv) throw new Error('missing mentioned conversation');
@@ -546,6 +606,7 @@ describe('internalAgentRouter', () => {
       }),
     });
     expect(dmRes.status).toBe(200);
+    await settleDispatches();
     expect(dispatches.filter((msg) => msg.type === 'run.dispatch')).toHaveLength(0);
 
     const rootConv = manager.openAgentChannelThread(tab.agentId, 'default', null);
@@ -582,7 +643,7 @@ describe('internalAgentRouter', () => {
     });
     expect(secondRes.status).toBe(200);
 
-    expect(dispatches.filter((msg) => msg.type === 'run.dispatch')).toHaveLength(1);
+    await expectDispatchCount(1);
 
     const cooldownRows = db.prepare(
       `SELECT COUNT(*) as count
@@ -697,6 +758,70 @@ describe('internalAgentRouter', () => {
 
     const body = await res.json() as { error: string };
     expect(body.error).toContain('not a member');
+  });
+
+  it('已配置 skillRoots 的 agent 应可列出 skills', async () => {
+    const agent = manager.createAgent({
+      name: 'SkillListBob',
+      agentType: 'codex_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/skill-list-bob',
+      skillRoots: ['/skills'],
+    });
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/skills`);
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      path: string | null;
+      roots: string[];
+      skills: Array<{ name: string; path: string; sourceRoot: string; description?: string }>;
+    };
+    expect(body.path).toBeNull();
+    expect(body.roots).toEqual(['/skills']);
+    expect(body.skills).toEqual([
+      {
+        name: 'deploy',
+        path: '/skills/deploy/SKILL.md',
+        sourceRoot: '/skills',
+        description: 'Deploy workflow',
+      },
+    ]);
+  });
+
+  it('已配置 skillRoots 的 agent 应可读取 skill 文件', async () => {
+    const agent = manager.createAgent({
+      name: 'SkillReadBob',
+      agentType: 'codex_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/skill-read-bob',
+      skillRoots: ['/skills'],
+    });
+
+    const res = await fetch(
+      `${baseUrl}/api/internal/agent/${agent.agentId}/skills/file?path=${encodeURIComponent('/skills/deploy/SKILL.md')}`,
+    );
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { path: string; content: string; mimeType: string };
+    expect(body.path).toBe('/skills/deploy/SKILL.md');
+    expect(body.mimeType).toBe('text/markdown');
+    expect(body.content).toContain('rollout checklist');
+  });
+
+  it('未配置 skillRoots 时 skills 接口应返回 409', async () => {
+    const agent = manager.createAgent({
+      name: 'NoSkillsBob',
+      agentType: 'codex_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/no-skills-bob',
+    });
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/skills`);
+
+    expect(res.status).toBe(409);
+    const body = await res.json() as { error?: string };
+    expect(body.error).toBe('Agent has no skill roots configured.');
   });
 
   it('thread 中 claim task 时应自动绑定 thread 并同步 owner', async () => {
@@ -850,3 +975,17 @@ describe('internalAgentRouter', () => {
     expect(binding?.taskId).toBe('task-done-1');
   });
 });
+
+async function expectDispatchCount(expected: number): Promise<void> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    await settleDispatches();
+    if (dispatches.filter((msg) => msg.type === 'run.dispatch').length === expected) {
+      return;
+    }
+  }
+  expect(dispatches.filter((msg) => msg.type === 'run.dispatch')).toHaveLength(expected);
+}
+
+async function settleDispatches(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 10));
+}

@@ -55,6 +55,7 @@ type AgentRow = {
   disabledToolKindsJson: string | null;
   nodeId: string | null;
   workspacePath: string | null;
+  skillRootsJson: string | null;
   createdAt: number;
   updatedAt: number;
 };
@@ -106,6 +107,9 @@ export class ConversationManager {
     const disabledToolKindsJson = params.disabledToolKinds && params.disabledToolKinds.length > 0
       ? JSON.stringify(params.disabledToolKinds)
       : null;
+    const skillRootsJson = params.skillRoots && params.skillRoots.length > 0
+      ? JSON.stringify(params.skillRoots)
+      : null;
     const now = Date.now();
 
     const workspacePath = params.workspacePath
@@ -115,12 +119,12 @@ export class ConversationManager {
     const description = params.description?.trim() || null;
 
     this.db.prepare(
-      `INSERT INTO agents(agent_id, name, agent_type, channel_id, system_prompt, description, memory, env_vars, disabled_tool_kinds, node_id, workspace_path, created_at, updated_at)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO agents(agent_id, name, agent_type, channel_id, system_prompt, description, memory, env_vars, disabled_tool_kinds, node_id, workspace_path, skill_roots, created_at, updated_at)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       agentId, params.name, agentType, channelId,
       params.systemPrompt ?? '', description, '',
-      envVarsJson, disabledToolKindsJson, params.nodeId ?? null, workspacePath,
+      envVarsJson, disabledToolKindsJson, params.nodeId ?? null, workspacePath, skillRootsJson,
       now, now,
     );
     this.db.prepare(
@@ -133,7 +137,7 @@ export class ConversationManager {
       systemPrompt: params.systemPrompt ?? '',
       ...(description ? { description } : {}),
       envVars: params.envVars, disabledToolKinds: params.disabledToolKinds, nodeId: params.nodeId ?? null,
-      workspacePath, createdAt: now, updatedAt: now,
+      workspacePath, skillRoots: params.skillRoots, createdAt: now, updatedAt: now,
     };
   }
 
@@ -142,7 +146,7 @@ export class ConversationManager {
       ? `SELECT a.agent_id as agentId, a.name, a.agent_type as agentType, a.channel_id as channelId,
                 a.system_prompt as systemPrompt, a.description,
                 a.env_vars as envVarsJson, a.disabled_tool_kinds as disabledToolKindsJson,
-                a.node_id as nodeId, a.workspace_path as workspacePath,
+                a.node_id as nodeId, a.workspace_path as workspacePath, a.skill_roots as skillRootsJson,
                 a.created_at as createdAt, a.updated_at as updatedAt
          FROM agents a
          JOIN agent_channel_memberships m ON m.agent_id = a.agent_id
@@ -150,7 +154,7 @@ export class ConversationManager {
       : `SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
                 system_prompt as systemPrompt, description,
                 env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
-                node_id as nodeId, workspace_path as workspacePath,
+                node_id as nodeId, workspace_path as workspacePath, skill_roots as skillRootsJson,
                 created_at as createdAt, updated_at as updatedAt
          FROM agents ORDER BY updated_at DESC`;
     const rows = channelId
@@ -164,7 +168,7 @@ export class ConversationManager {
       `SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
               system_prompt as systemPrompt, description,
               env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
-              node_id as nodeId, workspace_path as workspacePath,
+              node_id as nodeId, workspace_path as workspacePath, skill_roots as skillRootsJson,
               created_at as createdAt, updated_at as updatedAt
        FROM agents WHERE agent_id = ?`
     ).get(agentId) as AgentRow | undefined;
@@ -181,6 +185,7 @@ export class ConversationManager {
     const description = 'description' in req ? (req.description?.trim() || null) : (existing.description ?? null);
     const envVars = req.envVars ?? existing.envVars;
     const disabledToolKinds = req.disabledToolKinds ?? existing.disabledToolKinds;
+    const skillRoots = req.skillRoots ?? existing.skillRoots;
     const channelId = req.channelId ?? existing.channelId;
     const envVarsJson = envVars && Object.keys(envVars).length > 0
       ? JSON.stringify(envVars)
@@ -188,12 +193,15 @@ export class ConversationManager {
     const disabledToolKindsJson = disabledToolKinds && disabledToolKinds.length > 0
       ? JSON.stringify(disabledToolKinds)
       : null;
+    const skillRootsJson = skillRoots && skillRoots.length > 0
+      ? JSON.stringify(skillRoots)
+      : null;
 
     this.db.prepare(
       `UPDATE agents
-       SET name = ?, system_prompt = ?, description = ?, env_vars = ?, disabled_tool_kinds = ?, channel_id = ?, updated_at = ?
+       SET name = ?, system_prompt = ?, description = ?, env_vars = ?, disabled_tool_kinds = ?, channel_id = ?, skill_roots = ?, updated_at = ?
        WHERE agent_id = ?`
-    ).run(name, systemPrompt, description, envVarsJson, disabledToolKindsJson, channelId, now, agentId);
+    ).run(name, systemPrompt, description, envVarsJson, disabledToolKindsJson, channelId, skillRootsJson, now, agentId);
 
     // Migrate home channel membership if channelId changed
     if (req.channelId && req.channelId !== existing.channelId) {
@@ -207,7 +215,7 @@ export class ConversationManager {
       ).run(agentId, channelId, now);
     }
 
-    return this.getAgent(agentId) ?? { ...existing, name, systemPrompt, envVars, disabledToolKinds, channelId, updatedAt: now } satisfies AgentInfo;
+    return this.getAgent(agentId) ?? { ...existing, name, systemPrompt, envVars, disabledToolKinds, skillRoots, channelId, updatedAt: now } satisfies AgentInfo;
   }
 
   deleteAgent(agentId: string): { deletedConversations: number } {
@@ -959,6 +967,7 @@ export class ConversationManager {
       disabledToolKinds: parseDisabledToolKinds(row.disabledToolKindsJson),
       nodeId: row.nodeId,
       workspacePath: row.workspacePath,
+      skillRoots: parseStringArray(row.skillRootsJson),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
@@ -1024,6 +1033,19 @@ function parseDisabledToolKinds(raw: string | null): AgentPermissionKind[] | und
     const parsed = JSON.parse(raw);
     if (Array.isArray(parsed)) {
       return parsed.filter((value): value is AgentPermissionKind => typeof value === 'string');
+    }
+  } catch {
+    // ignore
+  }
+  return undefined;
+}
+
+function parseStringArray(raw: string | null): string[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
     }
   } catch {
     // ignore

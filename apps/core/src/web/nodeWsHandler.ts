@@ -5,6 +5,7 @@ import { log, finishRun } from '@agent-collab/runtime-acp';
 import type { Db } from '@agent-collab/runtime-acp';
 import type { NodeRegistry } from '../services/nodeRegistry.js';
 import type { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
+import type { AgentSkillsBroker } from '../services/agentSkillsBroker.js';
 import type { ConversationManager } from './conversationManager.js';
 
 /** Persist a ServerEvent from a remote run into core DB as a node/event entry */
@@ -424,6 +425,7 @@ export function handleNodeWebSocket(
   db: Db,
   manager: ConversationManager,
   workspaceBroker?: AgentWorkspaceBroker,
+  skillsBroker?: AgentSkillsBroker,
 ): void {
   let nodeId: string | null = null;
   // Sequence counter per runId for node/event persistence
@@ -616,6 +618,16 @@ export function handleNodeWebSocket(
         break;
       }
 
+      case 'skills.list.response': {
+        skillsBroker?.handleSkillsListResponse(msg);
+        break;
+      }
+
+      case 'skills.read.response': {
+        skillsBroker?.handleSkillsReadResponse(msg);
+        break;
+      }
+
       default: {
         log.warn('[node-ws] unknown message type', (msg as any).type);
       }
@@ -625,6 +637,7 @@ export function handleNodeWebSocket(
   socket.on('close', () => {
     if (nodeId) {
       workspaceBroker?.rejectPendingForNode(nodeId);
+      skillsBroker?.rejectPendingForNode(nodeId);
       registry.unregister(nodeId);
       manager.clearQueuedPromptsForNode(nodeId);
       db.prepare(`UPDATE nodes SET status='offline', last_seen=? WHERE node_id=?`)

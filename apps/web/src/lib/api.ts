@@ -11,6 +11,8 @@ import type {
   CreateMachineRequest,
   AgentWorkspaceListResult,
   AgentWorkspaceFileResult,
+  AgentSkillListResult,
+  AgentSkillFileResult,
 } from "@agent-collab/protocol";
 
 const API_BASE = "/api";
@@ -451,6 +453,34 @@ export async function readAgentWorkspaceFile(
   if (!res.ok) {
     const body = await safeReadErrorBody(res);
     throw new Error(body ?? `Failed to read workspace file: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function listAgentSkills(
+  agentId: string,
+  skillPath?: string | null,
+): Promise<AgentSkillListResult> {
+  const params = new URLSearchParams();
+  if (skillPath) params.set("path", skillPath);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const res = await fetch(`${API_BASE}/agents/${agentId}/skills${suffix}`);
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to list skills: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function readAgentSkillFile(
+  agentId: string,
+  skillPath: string,
+): Promise<AgentSkillFileResult> {
+  const params = new URLSearchParams({ path: skillPath });
+  const res = await fetch(`${API_BASE}/agents/${agentId}/skills/file?${params.toString()}`);
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to read skill file: ${res.statusText}`);
   }
   return res.json();
 }

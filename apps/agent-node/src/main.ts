@@ -6,6 +6,7 @@ import type { CoreToNode } from '@agent-collab/protocol';
 import { loadConfig } from './config.js';
 import { CoreConnection } from './connection.js';
 import { Executor } from './executor.js';
+import { ensureNativeSkillMounts } from './nativeSkillMounts.js';
 import {
   listWorkspaceDirectory,
   readWorkspaceFile,
@@ -13,6 +14,7 @@ import {
   writeWorkspaceFile,
   WorkspaceFsError,
 } from './workspaceFs.js';
+import { listSkills, readSkillFile } from './skillFs.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -88,6 +90,41 @@ async function main(): Promise<void> {
         }
         break;
 
+      case 'skills.list.request':
+        try {
+          syncNativeSkillsFromRequest(msg);
+          const result = listSkills(msg.skillRoots, msg.path);
+          connection.send({
+            type: 'skills.list.response',
+            requestId: msg.requestId,
+            roots: result.roots,
+            path: result.path,
+            skills: result.skills,
+            entries: result.entries,
+          });
+        } catch (error) {
+          connection.send(skillListErrorResponse(msg.requestId, msg.skillRoots, msg.path ?? null, error));
+        }
+        break;
+
+      case 'skills.read.request':
+        try {
+          syncNativeSkillsFromRequest(msg);
+          const result = readSkillFile(msg.skillRoots, msg.path);
+          connection.send({
+            type: 'skills.read.response',
+            requestId: msg.requestId,
+            path: result.path,
+            content: result.content,
+            mimeType: result.mimeType,
+            size: result.size,
+            modifiedAt: result.modifiedAt,
+          });
+        } catch (error) {
+          connection.send(skillReadErrorResponse(msg.requestId, msg.path, error));
+        }
+        break;
+
       case 'workspace.write.request':
         try {
           const result = writeWorkspaceFile(msg.workspaceRoot, msg.relativePath, msg.content, msg.mode);
@@ -157,6 +194,17 @@ async function main(): Promise<void> {
 
 await main();
 
+function syncNativeSkillsFromRequest(
+  msg: Extract<CoreToNode, { type: 'skills.list.request' | 'skills.read.request' }>,
+): void {
+  if (!msg.agentType || !msg.workspaceRoot) return;
+  ensureNativeSkillMounts({
+    agentType: msg.agentType,
+    workspaceRoot: msg.workspaceRoot,
+    skillRoots: msg.skillRoots,
+  });
+}
+
 function workspacePathErrorResponse(
   type: 'workspace.list.response' | 'workspace.read.response',
   requestId: string,
@@ -225,6 +273,57 @@ function workspaceWriteErrorResponse(
     type: 'workspace.write.response' as const,
     requestId,
     relativePath,
+    error: String((error as Error)?.message ?? error),
+    errorCode: 'io_error' as const,
+  };
+}
+
+function skillListErrorResponse(
+  requestId: string,
+  skillRoots: string[],
+  skillPath: string | null,
+  error: unknown,
+) {
+  if (error instanceof WorkspaceFsError) {
+    return {
+      type: 'skills.list.response' as const,
+      requestId,
+      roots: skillRoots,
+      path: skillPath,
+      error: error.message,
+      errorCode: error.code,
+    };
+  }
+
+  return {
+    type: 'skills.list.response' as const,
+    requestId,
+    roots: skillRoots,
+    path: skillPath,
+    error: String((error as Error)?.message ?? error),
+    errorCode: 'io_error' as const,
+  };
+}
+
+function skillReadErrorResponse(
+  requestId: string,
+  skillPath: string,
+  error: unknown,
+) {
+  if (error instanceof WorkspaceFsError) {
+    return {
+      type: 'skills.read.response' as const,
+      requestId,
+      path: skillPath,
+      error: error.message,
+      errorCode: error.code,
+    };
+  }
+
+  return {
+    type: 'skills.read.response' as const,
+    requestId,
+    path: skillPath,
     error: String((error as Error)?.message ?? error),
     errorCode: 'io_error' as const,
   };

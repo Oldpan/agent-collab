@@ -3,6 +3,8 @@ import type { FastifyInstance } from 'fastify';
 import type { Db } from '@agent-collab/runtime-acp';
 import type { ServerEvent } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
+import type { AgentSkillsService } from '../services/agentSkillsService.js';
+import { AgentSkillsServiceError } from '../services/agentSkillsService.js';
 import {
   bumpAgentMessageCheckpoint,
   checkpointThreadKey,
@@ -58,6 +60,7 @@ export function registerInternalAgentRoutes(
   broadcastToAgent: (agentId: string, event: ServerEvent, conversationId?: string) => void,
   broadcastToChannel: (channelId: string, event: ServerEvent) => void,
   humanUserName: string,
+  skillsService?: AgentSkillsService,
 ): void {
   // ─── Messaging ───────────────────────────────────────────────────────────
 
@@ -484,6 +487,62 @@ export function registerInternalAgentRoutes(
     return { messages, has_more: hasMore };
   });
 
+  app.get<{
+    Params: { agentId: string };
+    Querystring: { path?: string };
+  }>('/api/internal/agent/:agentId/skills', async (req, reply) => {
+    if (!skillsService) {
+      reply.code(503);
+      return { error: 'Skill service unavailable' };
+    }
+    if (!conversationManager.getAgent(req.params.agentId)) {
+      reply.code(404);
+      return { error: 'Agent not found' };
+    }
+
+    try {
+      return await skillsService.listSkills(req.params.agentId, normalizeSkillPath(req.query.path));
+    } catch (error) {
+      if (error instanceof AgentSkillsServiceError) {
+        reply.code(error.statusCode);
+        return { error: error.message };
+      }
+      reply.code(500);
+      return { error: String((error as Error)?.message ?? error) };
+    }
+  });
+
+  app.get<{
+    Params: { agentId: string };
+    Querystring: { path?: string };
+  }>('/api/internal/agent/:agentId/skills/file', async (req, reply) => {
+    if (!skillsService) {
+      reply.code(503);
+      return { error: 'Skill service unavailable' };
+    }
+    if (!conversationManager.getAgent(req.params.agentId)) {
+      reply.code(404);
+      return { error: 'Agent not found' };
+    }
+
+    const skillPath = normalizeSkillPath(req.query.path);
+    if (!skillPath) {
+      reply.code(400);
+      return { error: 'path query parameter is required' };
+    }
+
+    try {
+      return await skillsService.readSkillFile(req.params.agentId, skillPath);
+    } catch (error) {
+      if (error instanceof AgentSkillsServiceError) {
+        reply.code(error.statusCode);
+        return { error: error.message };
+      }
+      reply.code(500);
+      return { error: String((error as Error)?.message ?? error) };
+    }
+  });
+
   // ─── Task board ──────────────────────────────────────────────────────────
 
   /**
@@ -821,6 +880,11 @@ export function registerInternalAgentRoutes(
 
     return { ok: true, taskNumber: task_number, status };
   });
+}
+
+function normalizeSkillPath(rawPath?: string): string | null {
+  const trimmed = (rawPath ?? '').trim();
+  return trimmed || null;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────

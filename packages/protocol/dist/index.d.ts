@@ -181,6 +181,19 @@ export type AgentWorkspaceEntry = {
     size: number | null;
     modifiedAt: number | null;
 };
+export type AgentSkillEntry = {
+    name: string;
+    path: string;
+    kind: 'directory' | 'file';
+    size: number | null;
+    modifiedAt: number | null;
+};
+export type AgentSkillSummary = {
+    name: string;
+    path: string;
+    sourceRoot: string;
+    description?: string;
+};
 export type WorkspaceListResponseMsg = {
     type: 'workspace.list.response';
     requestId: string;
@@ -222,7 +235,40 @@ export type WorkspaceResetResponseMsg = {
     error?: string;
     errorCode?: WorkspaceErrorCode;
 };
-export type NodeToCore = NodeRegisterMsg | NodeHeartbeatMsg | RunEventMsg | RunEndMsg | NodePermissionRequestMsg | WorkspaceListResponseMsg | WorkspaceReadResponseMsg | WorkspaceWriteResponseMsg | WorkspaceResetResponseMsg;
+export type SkillsListRequestMsg = {
+    type: 'skills.list.request';
+    requestId: string;
+    skillRoots: string[];
+    path?: string | null;
+};
+export type SkillsListResponseMsg = {
+    type: 'skills.list.response';
+    requestId: string;
+    roots: string[];
+    path?: string | null;
+    skills?: AgentSkillSummary[];
+    entries?: AgentSkillEntry[];
+    error?: string;
+    errorCode?: WorkspaceErrorCode;
+};
+export type SkillsReadRequestMsg = {
+    type: 'skills.read.request';
+    requestId: string;
+    skillRoots: string[];
+    path: string;
+};
+export type SkillsReadResponseMsg = {
+    type: 'skills.read.response';
+    requestId: string;
+    path: string;
+    content?: string;
+    mimeType?: 'text/markdown' | 'text/plain';
+    size?: number;
+    modifiedAt?: number | null;
+    error?: string;
+    errorCode?: WorkspaceErrorCode;
+};
+export type NodeToCore = NodeRegisterMsg | NodeHeartbeatMsg | RunEventMsg | RunEndMsg | NodePermissionRequestMsg | WorkspaceListResponseMsg | WorkspaceReadResponseMsg | WorkspaceWriteResponseMsg | WorkspaceResetResponseMsg | SkillsListResponseMsg | SkillsReadResponseMsg;
 export type NodeAckMsg = {
     type: 'node.ack';
     nodeId: string;
@@ -233,6 +279,7 @@ export type RunDispatchMsg = {
     conversationId: string;
     agentType: AgentType;
     workspacePath: string | null;
+    skillRoots?: string[];
     envVars?: Record<string, string>;
     disabledToolKinds?: AgentPermissionKind[];
     prompt: string;
@@ -277,11 +324,13 @@ export type WorkspaceWriteRequestMsg = {
     content: string;
     mode: WorkspaceWriteMode;
 };
+export type SkillsListCoreRequestMsg = SkillsListRequestMsg;
+export type SkillsReadCoreRequestMsg = SkillsReadRequestMsg;
 export type HostCloseMsg = {
     type: 'host.close';
     hostKey: string;
 };
-export type CoreToNode = NodeAckMsg | RunDispatchMsg | RunCancelMsg | NodePermissionResponseMsg | WorkspaceListRequestMsg | WorkspaceReadRequestMsg | WorkspaceWriteRequestMsg | WorkspaceResetRequestMsg | HostCloseMsg;
+export type CoreToNode = NodeAckMsg | RunDispatchMsg | RunCancelMsg | NodePermissionResponseMsg | WorkspaceListRequestMsg | WorkspaceReadRequestMsg | WorkspaceWriteRequestMsg | WorkspaceResetRequestMsg | SkillsListCoreRequestMsg | SkillsReadCoreRequestMsg | HostCloseMsg;
 export type ConversationInfo = {
     id: string;
     channelId: string;
@@ -321,6 +370,19 @@ export type AgentWorkspaceFileResult = {
     size: number;
     modifiedAt: number | null;
 };
+export type AgentSkillListResult = {
+    path: string | null;
+    roots: string[];
+    skills: AgentSkillSummary[];
+    entries: AgentSkillEntry[];
+};
+export type AgentSkillFileResult = {
+    path: string;
+    content: string;
+    mimeType: 'text/markdown' | 'text/plain';
+    size: number;
+    modifiedAt: number | null;
+};
 export type AgentInfo = {
     agentId: string;
     name: string;
@@ -333,6 +395,7 @@ export type AgentInfo = {
     disabledToolKinds?: AgentPermissionKind[];
     nodeId?: string | null;
     workspacePath?: string | null;
+    skillRoots?: string[];
     createdAt: number;
     updatedAt: number;
 };
@@ -346,6 +409,7 @@ export type CreateAgentRequest = {
     disabledToolKinds?: AgentPermissionKind[];
     nodeId?: string;
     workspacePath?: string;
+    skillRoots?: string[];
 };
 export type UpdateAgentRequest = {
     name?: string;
@@ -354,6 +418,7 @@ export type UpdateAgentRequest = {
     envVars?: Record<string, string>;
     disabledToolKinds?: AgentPermissionKind[];
     channelId?: string;
+    skillRoots?: string[];
 };
 export type ChannelInfo = {
     channelId: string;

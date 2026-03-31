@@ -290,6 +290,21 @@ export type AgentWorkspaceEntry = {
   modifiedAt: number | null;
 };
 
+export type AgentSkillEntry = {
+  name: string;
+  path: string;
+  kind: 'directory' | 'file';
+  size: number | null;
+  modifiedAt: number | null;
+};
+
+export type AgentSkillSummary = {
+  name: string;
+  path: string;
+  sourceRoot: string;
+  description?: string;
+};
+
 export type WorkspaceListResponseMsg = {
   type: 'workspace.list.response';
   requestId: string;
@@ -336,6 +351,47 @@ export type WorkspaceResetResponseMsg = {
   errorCode?: WorkspaceErrorCode;
 };
 
+export type SkillsListRequestMsg = {
+  type: 'skills.list.request';
+  requestId: string;
+  skillRoots: string[];
+  path?: string | null;
+  agentType?: AgentType;
+  workspaceRoot?: string | null;
+};
+
+export type SkillsListResponseMsg = {
+  type: 'skills.list.response';
+  requestId: string;
+  roots: string[];
+  path?: string | null;
+  skills?: AgentSkillSummary[];
+  entries?: AgentSkillEntry[];
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
+export type SkillsReadRequestMsg = {
+  type: 'skills.read.request';
+  requestId: string;
+  skillRoots: string[];
+  path: string;
+  agentType?: AgentType;
+  workspaceRoot?: string | null;
+};
+
+export type SkillsReadResponseMsg = {
+  type: 'skills.read.response';
+  requestId: string;
+  path: string;
+  content?: string;
+  mimeType?: 'text/markdown' | 'text/plain';
+  size?: number;
+  modifiedAt?: number | null;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
 export type NodeToCore =
   | NodeRegisterMsg
   | NodeHeartbeatMsg
@@ -345,7 +401,9 @@ export type NodeToCore =
   | WorkspaceListResponseMsg
   | WorkspaceReadResponseMsg
   | WorkspaceWriteResponseMsg
-  | WorkspaceResetResponseMsg;
+  | WorkspaceResetResponseMsg
+  | SkillsListResponseMsg
+  | SkillsReadResponseMsg;
 
 // Core → Node
 
@@ -360,6 +418,7 @@ export type RunDispatchMsg = {
   conversationId: string;
   agentType: AgentType;
   workspacePath: string | null;
+  skillRoots?: string[];
   envVars?: Record<string, string>;
   disabledToolKinds?: AgentPermissionKind[];
   prompt: string;
@@ -410,6 +469,10 @@ export type WorkspaceWriteRequestMsg = {
   mode: WorkspaceWriteMode;
 };
 
+export type SkillsListCoreRequestMsg = SkillsListRequestMsg;
+
+export type SkillsReadCoreRequestMsg = SkillsReadRequestMsg;
+
 export type HostCloseMsg = {
   type: 'host.close';
   hostKey: string;
@@ -424,6 +487,8 @@ export type CoreToNode =
   | WorkspaceReadRequestMsg
   | WorkspaceWriteRequestMsg
   | WorkspaceResetRequestMsg
+  | SkillsListCoreRequestMsg
+  | SkillsReadCoreRequestMsg
   | HostCloseMsg;
 
 // ─── REST API 类型 ───
@@ -471,6 +536,21 @@ export type AgentWorkspaceFileResult = {
   modifiedAt: number | null;
 };
 
+export type AgentSkillListResult = {
+  path: string | null;
+  roots: string[];
+  skills: AgentSkillSummary[];
+  entries: AgentSkillEntry[];
+};
+
+export type AgentSkillFileResult = {
+  path: string;
+  content: string;
+  mimeType: 'text/markdown' | 'text/plain';
+  size: number;
+  modifiedAt: number | null;
+};
+
 export type AgentInfo = {
   agentId: string;
   name: string;
@@ -483,6 +563,7 @@ export type AgentInfo = {
   disabledToolKinds?: AgentPermissionKind[];
   nodeId?: string | null;
   workspacePath?: string | null;
+  skillRoots?: string[];
   createdAt: number;
   updatedAt: number;
 };
@@ -497,6 +578,7 @@ export type CreateAgentRequest = {
   disabledToolKinds?: AgentPermissionKind[];
   nodeId?: string;
   workspacePath?: string;
+  skillRoots?: string[];
 };
 
 export type UpdateAgentRequest = {
@@ -506,6 +588,7 @@ export type UpdateAgentRequest = {
   envVars?: Record<string, string>;
   disabledToolKinds?: AgentPermissionKind[];
   channelId?: string;
+  skillRoots?: string[];
 };
 
 export type ChannelInfo = {

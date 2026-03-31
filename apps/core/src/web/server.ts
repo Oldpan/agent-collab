@@ -17,6 +17,8 @@ import { registerInternalAgentRoutes } from './internalAgentRouter.js';
 import { NodeRegistry } from '../services/nodeRegistry.js';
 import { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/agentWorkspaceService.js';
+import { AgentSkillsBroker } from '../services/agentSkillsBroker.js';
+import { AgentSkillsService, AgentSkillsServiceError } from '../services/agentSkillsService.js';
 import { findMentionedAgents } from './channelMentions.js';
 import { buildChannelActivationPrompt, buildChannelActivationContextText } from './channelActivationPrompt.js';
 import { appendChannelResetMarkers } from './channelMemoryNotes.js';
@@ -46,14 +48,20 @@ export async function startServer(params: {
   db: Db;
   nodeRegistry?: NodeRegistry;
   workspaceBroker?: AgentWorkspaceBroker;
+  skillsBroker?: AgentSkillsBroker;
 }): Promise<void> {
   const { port, host, conversationManager, db } = params;
   const config = conversationManager.getConfig();
   const nodeRegistry = params.nodeRegistry ?? new NodeRegistry();
   const workspaceBroker = params.workspaceBroker ?? new AgentWorkspaceBroker({ nodeRegistry });
+  const skillsBroker = params.skillsBroker ?? new AgentSkillsBroker({ nodeRegistry });
   const workspaceService = new AgentWorkspaceService({
     getAgentById: (agentId) => conversationManager.getAgent(agentId),
     broker: workspaceBroker,
+  });
+  const skillsService = new AgentSkillsService({
+    getAgentById: (agentId) => conversationManager.getAgent(agentId),
+    broker: skillsBroker,
   });
 
   const app = Fastify({ logger: false });
@@ -233,6 +241,32 @@ export async function startServer(params: {
       return await workspaceService.readWorkspaceFile(req.params.id, normalizeWorkspaceQueryPath(req.query.path));
     } catch (error) {
       if (error instanceof AgentWorkspaceServiceError) {
+        reply.code(error.statusCode);
+        return { error: error.message };
+      }
+      reply.code(500);
+      return { error: String((error as Error)?.message ?? error) };
+    }
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/agents/:id/skills', async (req, reply) => {
+    try {
+      return await skillsService.listSkills(req.params.id, normalizeSkillQueryPath(req.query.path));
+    } catch (error) {
+      if (error instanceof AgentSkillsServiceError) {
+        reply.code(error.statusCode);
+        return { error: error.message };
+      }
+      reply.code(500);
+      return { error: String((error as Error)?.message ?? error) };
+    }
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/agents/:id/skills/file', async (req, reply) => {
+    try {
+      return await skillsService.readSkillFile(req.params.id, normalizeRequiredSkillQueryPath(req.query.path));
+    } catch (error) {
+      if (error instanceof AgentSkillsServiceError) {
         reply.code(error.statusCode);
         return { error: error.message };
       }
@@ -1005,7 +1039,7 @@ export async function startServer(params: {
     }
   }
 
-  registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel, config.humanUserName);
+  registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel, config.humanUserName, skillsService);
 
   // ─── User-facing Task routes ───
 
@@ -1136,7 +1170,7 @@ export async function startServer(params: {
     '/api/nodes/connect',
     { websocket: true },
     (socket) => {
-      handleNodeWebSocket(socket, nodeRegistry, broadcast, db, conversationManager, workspaceBroker);
+      handleNodeWebSocket(socket, nodeRegistry, broadcast, db, conversationManager, workspaceBroker, skillsBroker);
     },
   );
 
@@ -1433,4 +1467,15 @@ export async function startServer(params: {
 function normalizeWorkspaceQueryPath(rawPath?: string): string {
   if (!rawPath) return '';
   return rawPath.replace(/^\/+/, '');
+}
+
+function normalizeSkillQueryPath(rawPath?: string): string | null {
+  const trimmed = (rawPath ?? '').trim();
+  return trimmed || null;
+}
+
+function normalizeRequiredSkillQueryPath(rawPath?: string): string {
+  const trimmed = (rawPath ?? '').trim();
+  if (!trimmed) throw new AgentSkillsServiceError(400, 'path query parameter is required.');
+  return trimmed;
 }

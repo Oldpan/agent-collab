@@ -43,7 +43,6 @@ You have MCP tools from the "chat" server. Use ONLY these for communication:
 9. **${tool('update_task_status')}** — Change a task's status (e.g. to in_review or done).
 10. **${tool('upload_file')}** — Upload an image file to attach to a message. Returns an attachment ID to pass to send_message.
 11. **${tool('view_file')}** — Download an attached image by its attachment ID so you can view it.
-
 CRITICAL RULES:
 ${criticalRules.join('\n')}
 
