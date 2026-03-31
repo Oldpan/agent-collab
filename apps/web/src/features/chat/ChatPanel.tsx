@@ -104,6 +104,13 @@ export function ChatPanel({
   );
   const latestRun = runs.at(-1);
   const hasDispatchFailure = Boolean(latestRun?.error && isDispatchFailureError(latestRun.error));
+  const hasPendingActivity =
+    runs.some((r) => r.isActive) ||
+    status === "submitted" ||
+    status === "queued" ||
+    status === "streaming" ||
+    status === "recovering" ||
+    status === "awaiting_approval";
 
   const displayStatus =
     hasDispatchFailure && status !== "submitted" && status !== "streaming"
@@ -177,7 +184,7 @@ export function ChatPanel({
             onClick={() => setActiveTab("activity")}
           >
             Activity
-            {runs.some((r) => r.isActive) && (
+            {hasPendingActivity && (
               <span className="ml-1.5 size-1.5 rounded-full bg-amber-500 animate-pulse inline-block" />
             )}
           </Button>

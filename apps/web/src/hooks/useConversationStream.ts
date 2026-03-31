@@ -112,6 +112,7 @@ export function useConversationStream(
   const currentToolCallsRef = useRef<LiveToolCall[]>([]);
   const currentMsgIdRef = useRef<string | null>(null);
   const currentRunIdRef = useRef<string | null>(null);
+  const pendingClientEventsRef = useRef<ClientEvent[]>([]);
 
   useEffect(() => {
     onSeenSeqRef.current = onSeenSeq;
@@ -577,6 +578,7 @@ export function useConversationStream(
     currentToolCallsRef.current = [];
     currentMsgIdRef.current = null;
     currentRunIdRef.current = null;
+    pendingClientEventsRef.current = [];
 
     if (!conversationId) {
       wsRef.current = null;
@@ -649,6 +651,15 @@ export function useConversationStream(
     const ws = new WebSocket(wsUrl);
     wsRef.current = ws;
 
+    ws.onopen = () => {
+      if (wsRef.current !== ws) return;
+      if (pendingClientEventsRef.current.length === 0) return;
+      for (const pendingEvent of pendingClientEventsRef.current) {
+        ws.send(JSON.stringify(pendingEvent));
+      }
+      pendingClientEventsRef.current = [];
+    };
+
     ws.onmessage = (evt) => {
       try {
         const event: ServerEvent = JSON.parse(evt.data);
@@ -666,6 +677,19 @@ export function useConversationStream(
     ws.onclose = () => {
       if (wsRef.current !== ws) return;
       finalizeCurrentToolCalls();
+      if (pendingClientEventsRef.current.length > 0) {
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: createId(),
+            role: "system",
+            text: "Message delivery failed before the conversation connection was ready. Please resend.",
+            createdAt: Date.now(),
+            isStreaming: false,
+          },
+        ]);
+        pendingClientEventsRef.current = [];
+      }
       // Mark any streaming message as done
       const msgId = currentMsgIdRef.current;
       if (msgId) {
@@ -691,11 +715,32 @@ export function useConversationStream(
     const ws = wsRef.current;
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify(event));
+      return true;
     }
+    if (ws && ws.readyState === WebSocket.CONNECTING) {
+      pendingClientEventsRef.current.push(event);
+      return true;
+    }
+    return false;
   }, []);
 
-    const sendPrompt = useCallback(
+  const sendPrompt = useCallback(
     (text: string) => {
+      const delivered = sendEvent({ type: "prompt", text });
+      if (!delivered) {
+        setStatus("error");
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: createId(),
+            role: "system",
+            text: "Conversation connection is unavailable. Please wait a moment and resend.",
+            createdAt: Date.now(),
+            isStreaming: false,
+          },
+        ]);
+        return;
+      }
       // Add user message to timeline
       const id = createId();
       setMessages((prev) => [
@@ -703,7 +748,6 @@ export function useConversationStream(
         { id, role: "user", text, createdAt: Date.now(), isStreaming: false },
       ]);
       setStatus("submitted");
-      sendEvent({ type: "prompt", text });
     },
     [sendEvent],
   );
@@ -712,13 +756,17 @@ export function useConversationStream(
     (requestId: string, decision: "allow" | "deny") => {
       setPendingApproval(null);
       setStatus("submitted");
-      sendEvent({ type: "approval.response", requestId, decision });
+      if (!sendEvent({ type: "approval.response", requestId, decision })) {
+        setStatus("error");
+      }
     },
     [sendEvent],
   );
 
   const cancel = useCallback(() => {
-    sendEvent({ type: "cancel" });
+    if (!sendEvent({ type: "cancel" })) {
+      setStatus("error");
+    }
   }, [sendEvent]);
 
   return {
