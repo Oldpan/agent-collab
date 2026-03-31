@@ -265,7 +265,7 @@ function finishConversationRun(params) {
     }
     void params.manager.onConversationSettled(params.conversationId);
 }
-export function handleNodeWebSocket(socket, registry, broadcast, db, manager, workspaceBroker) {
+export function handleNodeWebSocket(socket, registry, broadcast, db, manager, workspaceBroker, skillsBroker) {
     let nodeId = null;
     // Sequence counter per runId for node/event persistence
     const runSeq = new Map();
@@ -428,6 +428,14 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
                 workspaceBroker?.handleWorkspaceResetResponse(msg);
                 break;
             }
+            case 'skills.list.response': {
+                skillsBroker?.handleSkillsListResponse(msg);
+                break;
+            }
+            case 'skills.read.response': {
+                skillsBroker?.handleSkillsReadResponse(msg);
+                break;
+            }
             default: {
                 log.warn('[node-ws] unknown message type', msg.type);
             }
@@ -436,6 +444,7 @@ export function handleNodeWebSocket(socket, registry, broadcast, db, manager, wo
     socket.on('close', () => {
         if (nodeId) {
             workspaceBroker?.rejectPendingForNode(nodeId);
+            skillsBroker?.rejectPendingForNode(nodeId);
             registry.unregister(nodeId);
             manager.clearQueuedPromptsForNode(nodeId);
             db.prepare(`UPDATE nodes SET status='offline', last_seen=? WHERE node_id=?`)

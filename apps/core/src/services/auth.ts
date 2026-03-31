@@ -372,3 +372,46 @@ export function cleanupExpiredTokens(db: Db): void {
   db.prepare('DELETE FROM user_sessions WHERE expires_at IS NOT NULL AND expires_at < ?').run(now);
   db.prepare('DELETE FROM invite_tokens WHERE expires_at < ?').run(now);
 }
+
+// Get agent IDs the user has been granted access to
+export function getUserAgentAccess(db: Db, userId: string): string[] {
+  const rows = db
+    .prepare('SELECT agent_id FROM user_agent_access WHERE user_id = ?')
+    .all(userId) as Array<{ agent_id: string }>;
+  return rows.map((r) => r.agent_id);
+}
+
+// Get channel IDs the user has been granted access to
+export function getUserChannelAccess(db: Db, userId: string): string[] {
+  const rows = db
+    .prepare('SELECT channel_id FROM user_channel_access WHERE user_id = ?')
+    .all(userId) as Array<{ channel_id: string }>;
+  return rows.map((r) => r.channel_id);
+}
+
+// Replace all access grants for a user atomically
+export function setUserAccess(
+  db: Db,
+  userId: string,
+  agentIds: string[],
+  channelIds: string[],
+): void {
+  const now = Date.now();
+  const tx = db.transaction(() => {
+    db.prepare('DELETE FROM user_agent_access WHERE user_id = ?').run(userId);
+    db.prepare('DELETE FROM user_channel_access WHERE user_id = ?').run(userId);
+    const insertAgent = db.prepare(
+      'INSERT INTO user_agent_access (user_id, agent_id, granted_at) VALUES (?, ?, ?)',
+    );
+    for (const agentId of agentIds) {
+      insertAgent.run(userId, agentId, now);
+    }
+    const insertChannel = db.prepare(
+      'INSERT INTO user_channel_access (user_id, channel_id, granted_at) VALUES (?, ?, ?)',
+    );
+    for (const channelId of channelIds) {
+      insertChannel.run(userId, channelId, now);
+    }
+  });
+  tx();
+}

@@ -1,4 +1,4 @@
-const LATEST_VERSION = 39;
+const LATEST_VERSION = 40;
 export function migrate(db) {
     db.exec(`
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -648,5 +648,23 @@ export function migrate(db) {
             db.exec(`ALTER TABLE agents ADD COLUMN description TEXT;`);
         }
         db.exec(`UPDATE schema_version SET version = 39;`);
+    }
+    if (current < 40) {
+        // Per-user access control: which agents/channels each user can see
+        db.exec(`
+      CREATE TABLE IF NOT EXISTS user_agent_access (
+        user_id    TEXT NOT NULL REFERENCES users(id)           ON DELETE CASCADE,
+        agent_id   TEXT NOT NULL REFERENCES agents(agent_id)    ON DELETE CASCADE,
+        granted_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, agent_id)
+      );
+      CREATE TABLE IF NOT EXISTS user_channel_access (
+        user_id    TEXT NOT NULL REFERENCES users(id)              ON DELETE CASCADE,
+        channel_id TEXT NOT NULL REFERENCES channels(channel_id)   ON DELETE CASCADE,
+        granted_at INTEGER NOT NULL,
+        PRIMARY KEY (user_id, channel_id)
+      );
+    `);
+        db.exec(`UPDATE schema_version SET version = 40;`);
     }
 }

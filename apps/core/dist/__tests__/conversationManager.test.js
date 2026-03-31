@@ -473,4 +473,32 @@ describe('ConversationManager', () => {
             expect(JSON.parse(row.disabled_tool_kinds)).toEqual(['edit', 'delete']);
         });
     });
+    describe('skillRoots', () => {
+        it('创建 agent 时应保留 skillRoots', () => {
+            const agent = manager.createAgent({
+                name: 'Skilled Agent',
+                skillRoots: ['/skills/alpha', '/skills/beta'],
+            });
+            expect(agent.skillRoots).toEqual(['/skills/alpha', '/skills/beta']);
+            const row = db
+                .prepare('SELECT skill_roots FROM agents WHERE agent_id = ?')
+                .get(agent.agentId);
+            expect(JSON.parse(row.skill_roots ?? '[]')).toEqual(['/skills/alpha', '/skills/beta']);
+            expect(manager.getAgent(agent.agentId)?.skillRoots).toEqual(['/skills/alpha', '/skills/beta']);
+        });
+        it('更新 agent 时应覆盖 skillRoots', () => {
+            const agent = manager.createAgent({
+                name: 'Updated Skilled Agent',
+                skillRoots: ['/skills/old'],
+            });
+            const updated = manager.updateAgent(agent.agentId, {
+                skillRoots: ['/skills/new', '/skills/tools'],
+            });
+            expect(updated?.skillRoots).toEqual(['/skills/new', '/skills/tools']);
+            const row = db
+                .prepare('SELECT skill_roots FROM agents WHERE agent_id = ?')
+                .get(agent.agentId);
+            expect(JSON.parse(row.skill_roots ?? '[]')).toEqual(['/skills/new', '/skills/tools']);
+        });
+    });
 });

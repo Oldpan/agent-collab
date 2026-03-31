@@ -17,10 +17,10 @@ describe('migrations', () => {
         expect(colNames).toContain('updated_at');
         db.close();
     });
-    it('schema_version 应为最新版本 36', () => {
+    it('schema_version 应为最新版本 40', () => {
         const db = createTestDb();
         const row = db.prepare('SELECT version FROM schema_version').get();
-        expect(row.version).toBeGreaterThanOrEqual(36);
+        expect(row.version).toBeGreaterThanOrEqual(40);
         db.close();
     });
     it('users/invite_tokens/user_sessions 认证表应存在', () => {
@@ -32,6 +32,8 @@ describe('migrations', () => {
         expect(tableNames).toContain('users');
         expect(tableNames).toContain('invite_tokens');
         expect(tableNames).toContain('user_sessions');
+        expect(tableNames).toContain('user_agent_access');
+        expect(tableNames).toContain('user_channel_access');
         db.close();
     });
     it('nodes 表应包含 display_name, env_var_keys, provisioned_at 列', () => {
@@ -71,10 +73,12 @@ describe('migrations', () => {
         expect(queueCols.map((c) => c.name)).toContain('activation_context_text');
         db.close();
     });
-    it('agents 表应包含 disabled_tool_kinds 列', () => {
+    it('agents 表应包含 description、disabled_tool_kinds、skill_roots 列', () => {
         const db = createTestDb();
         const agentCols = db.prepare("PRAGMA table_info('agents')").all();
+        expect(agentCols.map((c) => c.name)).toContain('description');
         expect(agentCols.map((c) => c.name)).toContain('disabled_tool_kinds');
+        expect(agentCols.map((c) => c.name)).toContain('skill_roots');
         db.close();
     });
     it('agent_channel_memberships 表应存在且 channels 含 description 列', () => {

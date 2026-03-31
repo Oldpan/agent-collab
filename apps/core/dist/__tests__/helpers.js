@@ -40,6 +40,13 @@ export function createTestDb() {
     if (!channelCols.some((col) => col.name === 'collaboration_mode')) {
         db.exec(`ALTER TABLE channels ADD COLUMN collaboration_mode TEXT NOT NULL DEFAULT 'mention_only';`);
     }
+    const agentCols = db.prepare("PRAGMA table_info('agents')").all();
+    if (!agentCols.some((col) => col.name === 'description')) {
+        db.exec(`ALTER TABLE agents ADD COLUMN description TEXT;`);
+    }
+    if (!agentCols.some((col) => col.name === 'skill_roots')) {
+        db.exec(`ALTER TABLE agents ADD COLUMN skill_roots TEXT;`);
+    }
     db.exec(`
     CREATE TABLE IF NOT EXISTS target_participants (
       agent_id       TEXT NOT NULL,
@@ -90,7 +97,7 @@ export function createTestDb() {
     if (!channelMessageCols.some((col) => col.name === 'message_source')) {
         db.exec(`ALTER TABLE channel_messages ADD COLUMN message_source TEXT;`);
     }
-    db.exec(`UPDATE schema_version SET version = MAX(version, 34);`);
+    db.exec(`UPDATE schema_version SET version = MAX(version, 39);`);
     return db;
 }
 /** 默认测试配置 */

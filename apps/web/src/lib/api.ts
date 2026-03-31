@@ -67,7 +67,10 @@ export async function getConversationChannelMessages(
 }
 
 export async function listChannels(): Promise<ChannelInfo[]> {
-  const res = await fetch(`${API_BASE}/channels`);
+  const token = localStorage.getItem('auth_token') ?? '';
+  const res = await fetch(`${API_BASE}/channels`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
   if (!res.ok) throw new Error(`Failed to list channels: ${res.statusText}`);
   return res.json();
 }
@@ -349,9 +352,31 @@ export async function deleteMachine(id: string): Promise<void> {
 // ─── Agent API ───
 
 export async function listAgents(): Promise<AgentInfo[]> {
-  const res = await fetch(`${API_BASE}/agents`);
+  const token = localStorage.getItem('auth_token') ?? '';
+  const res = await fetch(`${API_BASE}/agents`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
   if (!res.ok) throw new Error(`Failed to list agents: ${res.statusText}`);
   return res.json();
+}
+
+export async function getUserAccess(userId: string): Promise<{ agentIds: string[]; channelIds: string[] }> {
+  const token = localStorage.getItem('auth_token') ?? '';
+  const res = await fetch(`${API_BASE}/admin/users/${encodeURIComponent(userId)}/access`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`Failed to get user access: ${res.statusText}`);
+  return res.json();
+}
+
+export async function setUserAccess(userId: string, agentIds: string[], channelIds: string[]): Promise<void> {
+  const token = localStorage.getItem('auth_token') ?? '';
+  const res = await fetch(`${API_BASE}/admin/users/${encodeURIComponent(userId)}/access`, {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    body: JSON.stringify({ agentIds, channelIds }),
+  });
+  if (!res.ok) throw new Error(`Failed to set user access: ${res.statusText}`);
 }
 
 export async function createAgent(req: CreateAgentRequest): Promise<AgentInfo> {

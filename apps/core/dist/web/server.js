@@ -1,7 +1,11 @@
 import { randomUUID } from 'node:crypto';
+import path from 'node:path';
+import fs from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
 import fastifyCors from '@fastify/cors';
 import fastifyWebSocket from '@fastify/websocket';
+import fastifyStatic from '@fastify/static';
 import { log, finishRun } from '@agent-collab/runtime-acp';
 import { handleWebSocket, broadcast } from './wsHandler.js';
 import { handleNodeWebSocket } from './nodeWsHandler.js';
@@ -9,6 +13,8 @@ import { registerInternalAgentRoutes } from './internalAgentRouter.js';
 import { NodeRegistry } from '../services/nodeRegistry.js';
 import { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/agentWorkspaceService.js';
+import { AgentSkillsBroker } from '../services/agentSkillsBroker.js';
+import { AgentSkillsService, AgentSkillsServiceError } from '../services/agentSkillsService.js';
 import { findMentionedAgents } from './channelMentions.js';
 import { buildChannelActivationPrompt, buildChannelActivationContextText } from './channelActivationPrompt.js';
 import { appendChannelResetMarkers } from './channelMemoryNotes.js';
@@ -17,15 +23,20 @@ import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
 import { deleteChannelSubscription, listChannelSubscriptions, upsertChannelSubscription } from './channelSubscriptions.js';
 import { listTargetParticipants, setTargetOwner, upsertTargetParticipant } from './targetParticipants.js';
 import { bindTaskToThread, getBoundTaskForThread, getThreadCollaborationSummary, unbindTaskFromThread } from './threadTaskBindings.js';
-import { hasAdminUser, setupWithInvite, loginUser, logoutUser, validateSession, createInviteToken, listUsers, deleteUser, cleanupExpiredTokens, } from '../services/auth.js';
+import { hasAdminUser, setupWithInvite, loginUser, logoutUser, validateSession, createInviteToken, listUsers, deleteUser, cleanupExpiredTokens, getUserAgentAccess, getUserChannelAccess, setUserAccess, } from '../services/auth.js';
 export async function startServer(params) {
     const { port, host, conversationManager, db } = params;
     const config = conversationManager.getConfig();
     const nodeRegistry = params.nodeRegistry ?? new NodeRegistry();
     const workspaceBroker = params.workspaceBroker ?? new AgentWorkspaceBroker({ nodeRegistry });
+    const skillsBroker = params.skillsBroker ?? new AgentSkillsBroker({ nodeRegistry });
     const workspaceService = new AgentWorkspaceService({
         getAgentById: (agentId) => conversationManager.getAgent(agentId),
         broker: workspaceBroker,
+    });
+    const skillsService = new AgentSkillsService({
+        getAgentById: (agentId) => conversationManager.getAgent(agentId),
+        broker: skillsBroker,
     });
     const app = Fastify({ logger: false });
     await app.register(fastifyCors, { origin: true });
@@ -36,8 +47,17 @@ export async function startServer(params) {
         return conversationManager.listConversations();
     });
     // ─── Agent routes ───
-    app.get('/api/agents', async () => {
-        return conversationManager.listAgents();
+    app.get('/api/agents', async (req, reply) => {
+        const token = (req.headers.authorization ?? '').replace('Bearer ', '');
+        const user = token ? validateSession(db, token) : null;
+        if (!user) {
+            reply.code(401);
+            return { error: 'Unauthorized' };
+        }
+        if (user.isAdmin)
+            return conversationManager.listAgents();
+        const allowed = getUserAgentAccess(db, user.id);
+        return conversationManager.listAgents().filter((a) => allowed.includes(a.agentId));
     });
     app.post('/api/agents', async (req, reply) => {
         const body = (req.body ?? {});
@@ -209,6 +229,32 @@ export async function startServer(params) {
             return { error: String(error?.message ?? error) };
         }
     });
+    app.get('/api/agents/:id/skills', async (req, reply) => {
+        try {
+            return await skillsService.listSkills(req.params.id, normalizeSkillQueryPath(req.query.path));
+        }
+        catch (error) {
+            if (error instanceof AgentSkillsServiceError) {
+                reply.code(error.statusCode);
+                return { error: error.message };
+            }
+            reply.code(500);
+            return { error: String(error?.message ?? error) };
+        }
+    });
+    app.get('/api/agents/:id/skills/file', async (req, reply) => {
+        try {
+            return await skillsService.readSkillFile(req.params.id, normalizeRequiredSkillQueryPath(req.query.path));
+        }
+        catch (error) {
+            if (error instanceof AgentSkillsServiceError) {
+                reply.code(error.statusCode);
+                return { error: error.message };
+            }
+            reply.code(500);
+            return { error: String(error?.message ?? error) };
+        }
+    });
     // Create conversation
     app.post('/api/conversations', async (req, reply) => {
         const body = req.body ?? {};
@@ -354,9 +400,18 @@ export async function startServer(params) {
         };
     });
     // ─── Channel routes ───
-    // List all channels
-    app.get('/api/channels', async () => {
-        return conversationManager.listChannels();
+    // List all channels (filtered by user access for non-admins)
+    app.get('/api/channels', async (req, reply) => {
+        const token = (req.headers.authorization ?? '').replace('Bearer ', '');
+        const user = token ? validateSession(db, token) : null;
+        if (!user) {
+            reply.code(401);
+            return { error: 'Unauthorized' };
+        }
+        if (user.isAdmin)
+            return conversationManager.listChannels();
+        const allowed = getUserChannelAccess(db, user.id);
+        return conversationManager.listChannels().filter((c) => allowed.includes(c.channelId));
     });
     // Create channel
     app.post('/api/channels', async (req, reply) => {
@@ -866,7 +921,7 @@ export async function startServer(params) {
             broadcast(row.id, event);
         }
     }
-    registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel, config.humanUserName);
+    registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel, config.humanUserName, skillsService);
     // ─── User-facing Task routes ───
     // GET /api/channels/:id/tasks
     app.get('/api/channels/:id/tasks', async (req, reply) => {
@@ -980,7 +1035,7 @@ export async function startServer(params) {
     });
     // Agent-node WebSocket connection
     app.get('/api/nodes/connect', { websocket: true }, (socket) => {
-        handleNodeWebSocket(socket, nodeRegistry, broadcast, db, conversationManager, workspaceBroker);
+        handleNodeWebSocket(socket, nodeRegistry, broadcast, db, conversationManager, workspaceBroker, skillsBroker);
     });
     // ─── Authentication routes ───
     // Check if setup is complete (has admin user)
@@ -1148,6 +1203,47 @@ export async function startServer(params) {
         }
         return { ok: true };
     });
+    // Admin: Get user access (which agents/channels are granted)
+    app.get('/api/admin/users/:id/access', async (req, reply) => {
+        const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
+        if (!token) {
+            reply.code(401);
+            return { error: 'Not authenticated' };
+        }
+        const user = validateSession(db, token);
+        if (!user) {
+            reply.code(401);
+            return { error: 'Invalid or expired session' };
+        }
+        if (!user.isAdmin) {
+            reply.code(403);
+            return { error: 'Admin access required' };
+        }
+        return {
+            agentIds: getUserAgentAccess(db, req.params.id),
+            channelIds: getUserChannelAccess(db, req.params.id),
+        };
+    });
+    // Admin: Set user access (replace all grants atomically)
+    app.put('/api/admin/users/:id/access', async (req, reply) => {
+        const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
+        if (!token) {
+            reply.code(401);
+            return { error: 'Not authenticated' };
+        }
+        const user = validateSession(db, token);
+        if (!user) {
+            reply.code(401);
+            return { error: 'Invalid or expired session' };
+        }
+        if (!user.isAdmin) {
+            reply.code(403);
+            return { error: 'Admin access required' };
+        }
+        const { agentIds = [], channelIds = [] } = req.body ?? {};
+        setUserAccess(db, req.params.id, agentIds, channelIds);
+        return { ok: true };
+    });
     // Change password (authenticated user)
     app.post('/api/auth/change-password', async (req, reply) => {
         const authHeader = req.headers.authorization ?? '';
@@ -1190,6 +1286,19 @@ export async function startServer(params) {
     setInterval(() => {
         cleanupExpiredTokens(db);
     }, 60 * 60 * 1000); // Every hour
+    // Serve built web UI static files if dist exists
+    const __serverDir = path.dirname(fileURLToPath(import.meta.url));
+    const webDistPath = path.resolve(__serverDir, '../../../..', 'apps/web/dist');
+    if (fs.existsSync(webDistPath)) {
+        await app.register(fastifyStatic, { root: webDistPath, prefix: '/' });
+        // SPA fallback: serve index.html for GET requests to non-API routes
+        app.setNotFoundHandler(async (req, reply) => {
+            if (req.method === 'GET' && !req.url.startsWith('/api/') && req.url !== '/ws' && !req.url.startsWith('/node-ws')) {
+                return reply.sendFile('index.html');
+            }
+            reply.code(404).send({ error: 'Not found' });
+        });
+    }
     await app.listen({ port, host });
     log.info(`Web server listening on ${host}:${port}`);
 }
@@ -1197,4 +1306,14 @@ function normalizeWorkspaceQueryPath(rawPath) {
     if (!rawPath)
         return '';
     return rawPath.replace(/^\/+/, '');
+}
+function normalizeSkillQueryPath(rawPath) {
+    const trimmed = (rawPath ?? '').trim();
+    return trimmed || null;
+}
+function normalizeRequiredSkillQueryPath(rawPath) {
+    const trimmed = (rawPath ?? '').trim();
+    if (!trimmed)
+        throw new AgentSkillsServiceError(400, 'path query parameter is required.');
+    return trimmed;
 }

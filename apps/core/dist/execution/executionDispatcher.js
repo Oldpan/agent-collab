@@ -132,6 +132,7 @@ export class ExecutionDispatcher {
             conversationId,
             agentType: row.agentType,
             workspacePath: row.workspacePath,
+            ...(row.agentId ? { skillRoots: this.getAgentById(row.agentId)?.skillRoots } : {}),
             envVars: {
                 ...(agentEnvVars ?? {}),
                 ...(parseEnvVars(row.envVarsJson) ?? {}),

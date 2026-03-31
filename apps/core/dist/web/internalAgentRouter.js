@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { AgentSkillsServiceError } from '../services/agentSkillsService.js';
 import { bumpAgentMessageCheckpoint, checkpointThreadKey, getAgentMessageCheckpoint, setAgentMessageCheckpoint, } from './messageCheckpoints.js';
 import { buildTargetActivationContext } from './activationContext.js';
 import { recordAgentMentionNotification, shouldTriggerAgentMention } from './agentMentionCooldowns.js';
@@ -13,7 +14,7 @@ const AGENT_MENTION_COOLDOWN_MS = 60_000;
  * These endpoints let agents (via the channel-bridge) send messages to channels,
  * poll for new messages, browse the server directory, and manage task boards.
  */
-export function registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel, humanUserName) {
+export function registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel, humanUserName, skillsService) {
     // ─── Messaging ───────────────────────────────────────────────────────────
     /**
      * POST /api/internal/agent/:agentId/send
@@ -349,6 +350,53 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
         }));
         return { messages, has_more: hasMore };
     });
+    app.get('/api/internal/agent/:agentId/skills', async (req, reply) => {
+        if (!skillsService) {
+            reply.code(503);
+            return { error: 'Skill service unavailable' };
+        }
+        if (!conversationManager.getAgent(req.params.agentId)) {
+            reply.code(404);
+            return { error: 'Agent not found' };
+        }
+        try {
+            return await skillsService.listSkills(req.params.agentId, normalizeSkillPath(req.query.path));
+        }
+        catch (error) {
+            if (error instanceof AgentSkillsServiceError) {
+                reply.code(error.statusCode);
+                return { error: error.message };
+            }
+            reply.code(500);
+            return { error: String(error?.message ?? error) };
+        }
+    });
+    app.get('/api/internal/agent/:agentId/skills/file', async (req, reply) => {
+        if (!skillsService) {
+            reply.code(503);
+            return { error: 'Skill service unavailable' };
+        }
+        if (!conversationManager.getAgent(req.params.agentId)) {
+            reply.code(404);
+            return { error: 'Agent not found' };
+        }
+        const skillPath = normalizeSkillPath(req.query.path);
+        if (!skillPath) {
+            reply.code(400);
+            return { error: 'path query parameter is required' };
+        }
+        try {
+            return await skillsService.readSkillFile(req.params.agentId, skillPath);
+        }
+        catch (error) {
+            if (error instanceof AgentSkillsServiceError) {
+                reply.code(error.statusCode);
+                return { error: error.message };
+            }
+            reply.code(500);
+            return { error: String(error?.message ?? error) };
+        }
+    });
     // ─── Task board ──────────────────────────────────────────────────────────
     /**
      * GET /api/internal/agent/:agentId/tasks
@@ -601,6 +649,10 @@ export function registerInternalAgentRoutes(app, db, conversationManager, broadc
         }
         return { ok: true, taskNumber: task_number, status };
     });
+}
+function normalizeSkillPath(rawPath) {
+    const trimmed = (rawPath ?? '').trim();
+    return trimmed || null;
 }
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 /**

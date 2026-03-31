@@ -39,6 +39,9 @@ import {
   listUsers,
   deleteUser,
   cleanupExpiredTokens,
+  getUserAgentAccess,
+  getUserChannelAccess,
+  setUserAccess,
 } from '../services/auth.js';
 
 export async function startServer(params: {
@@ -78,8 +81,13 @@ export async function startServer(params: {
 
   // ─── Agent routes ───
 
-  app.get('/api/agents', async () => {
-    return conversationManager.listAgents();
+  app.get('/api/agents', async (req, reply) => {
+    const token = ((req.headers as Record<string, string>).authorization ?? '').replace('Bearer ', '');
+    const user = token ? validateSession(db, token) : null;
+    if (!user) { reply.code(401); return { error: 'Unauthorized' }; }
+    if (user.isAdmin) return conversationManager.listAgents();
+    const allowed = getUserAgentAccess(db, user.id);
+    return conversationManager.listAgents().filter((a) => allowed.includes(a.agentId));
   });
 
   app.post<{ Body: CreateAgentRequest }>('/api/agents', async (req, reply) => {
@@ -473,9 +481,14 @@ export async function startServer(params: {
 
   // ─── Channel routes ───
 
-  // List all channels
-  app.get('/api/channels', async () => {
-    return conversationManager.listChannels();
+  // List all channels (filtered by user access for non-admins)
+  app.get('/api/channels', async (req, reply) => {
+    const token = ((req.headers as Record<string, string>).authorization ?? '').replace('Bearer ', '');
+    const user = token ? validateSession(db, token) : null;
+    if (!user) { reply.code(401); return { error: 'Unauthorized' }; }
+    if (user.isAdmin) return conversationManager.listChannels();
+    const allowed = getUserChannelAccess(db, user.id);
+    return conversationManager.listChannels().filter((c) => allowed.includes(c.channelId));
   });
 
   // Create channel
@@ -1401,6 +1414,41 @@ export async function startServer(params: {
         return { error: 'User not found' };
       }
 
+      return { ok: true };
+    },
+  );
+
+  // Admin: Get user access (which agents/channels are granted)
+  app.get<{ Params: { id: string }; Headers: { authorization?: string } }>(
+    '/api/admin/users/:id/access',
+    async (req, reply) => {
+      const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
+      if (!token) { reply.code(401); return { error: 'Not authenticated' }; }
+      const user = validateSession(db, token);
+      if (!user) { reply.code(401); return { error: 'Invalid or expired session' }; }
+      if (!user.isAdmin) { reply.code(403); return { error: 'Admin access required' }; }
+      return {
+        agentIds: getUserAgentAccess(db, req.params.id),
+        channelIds: getUserChannelAccess(db, req.params.id),
+      };
+    },
+  );
+
+  // Admin: Set user access (replace all grants atomically)
+  app.put<{
+    Params: { id: string };
+    Body: { agentIds: string[]; channelIds: string[] };
+    Headers: { authorization?: string };
+  }>(
+    '/api/admin/users/:id/access',
+    async (req, reply) => {
+      const token = (req.headers.authorization ?? '').replace(/^Bearer\s+/i, '');
+      if (!token) { reply.code(401); return { error: 'Not authenticated' }; }
+      const user = validateSession(db, token);
+      if (!user) { reply.code(401); return { error: 'Invalid or expired session' }; }
+      if (!user.isAdmin) { reply.code(403); return { error: 'Admin access required' }; }
+      const { agentIds = [], channelIds = [] } = req.body ?? {};
+      setUserAccess(db, req.params.id, agentIds, channelIds);
       return { ok: true };
     },
   );

@@ -21,10 +21,10 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('schema_version 应为最新版本 39', () => {
+  it('schema_version 应为最新版本 40', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBeGreaterThanOrEqual(39);
+    expect(row.version).toBeGreaterThanOrEqual(40);
     db.close();
   });
 
@@ -37,6 +37,8 @@ describe('migrations', () => {
     expect(tableNames).toContain('users');
     expect(tableNames).toContain('invite_tokens');
     expect(tableNames).toContain('user_sessions');
+    expect(tableNames).toContain('user_agent_access');
+    expect(tableNames).toContain('user_channel_access');
     db.close();
   });
 
