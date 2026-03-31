@@ -355,10 +355,10 @@ export function Sidebar({
                   onClick={() => toggleMachine(machine.nodeId)}
                 >
                   {isExpanded
-                    ? <ChevronDownIcon className="size-3 shrink-0 text-zinc-500 self-start mt-0.5" />
-                    : <ChevronRightIcon className="size-3 shrink-0 text-zinc-500 self-start mt-0.5" />
+                    ? <ChevronDownIcon className="size-3 shrink-0 text-zinc-500" />
+                    : <ChevronRightIcon className="size-3 shrink-0 text-zinc-500" />
                   }
-                  <span className="self-start mt-0.5"><StatusDot status={machine.status} /></span>
+                  <span><StatusDot status={machine.status} /></span>
                   <span className="min-w-0 flex-1 break-words text-xs font-medium leading-tight">{machine.name}</span>
                   {isAdmin && (
                     <div className="flex shrink-0 items-center gap-1 opacity-0 group-hover:opacity-100">
@@ -441,7 +441,7 @@ export function Sidebar({
             )}
 
             {channels.map((channel) => (
-              <div key={channel.channelId} className="mb-1 w-2/5">
+              <div key={channel.channelId} className="mb-1 w-full">
                 <ChannelRow
                   channel={channel}
                   isSelected={selectedChannelId === channel.channelId}
@@ -639,7 +639,7 @@ function ChannelRow({ channel, isSelected, unreadCount, onSelect }: ChannelRowPr
       onClick={onSelect}
     >
       <HashIcon className="size-3 shrink-0 text-zinc-500" />
-      <span className="flex-1 truncate text-xs font-medium">{channel.name}</span>
+      <span className="flex-1 break-words text-xs font-medium">{channel.name}</span>
       <UnreadBadge count={unreadCount} />
     </button>
   );
