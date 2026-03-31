@@ -4,6 +4,7 @@ import type { ConversationInfo, CreateConversationRequest } from "@agent-collab/
 import * as api from "@/lib/api";
 
 const SELECTED_CONVERSATION_STORAGE_KEY = "agent-collab:selected-conversation-id";
+const LAST_USER_STORAGE_KEY = "agent-collab:last-user-id";
 
 function readStoredSelectedConversationId(): string | null {
   if (typeof window === "undefined") return null;
@@ -19,9 +20,24 @@ function writeStoredSelectedConversationId(id: string | null): void {
   }
 }
 
+function readStoredLastUserId(): string | null {
+  if (typeof window === "undefined") return null;
+  return window.localStorage.getItem(LAST_USER_STORAGE_KEY);
+}
+
+function writeStoredLastUserId(id: string | null): void {
+  if (typeof window === "undefined") return;
+  if (id) {
+    window.localStorage.setItem(LAST_USER_STORAGE_KEY, id);
+  } else {
+    window.localStorage.removeItem(LAST_USER_STORAGE_KEY);
+  }
+}
+
 type ConversationsState = {
   conversations: ConversationInfo[];
   selectedId: string | null;
+  lastUserId: string | null;
   loading: boolean;
   error: string | null;
   setConversations: (conversations: ConversationInfo[]) => void;
@@ -31,11 +47,13 @@ type ConversationsState = {
   selectConversation: (id: string | null) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
+  checkAndResetUser: (userId: string | null) => void;
 };
 
 const useConversationsStore = create<ConversationsState>((set) => ({
   conversations: [],
   selectedId: readStoredSelectedConversationId(),
+  lastUserId: readStoredLastUserId(),
   loading: false,
   error: null,
   setConversations: (conversations) =>
@@ -86,91 +104,121 @@ const useConversationsStore = create<ConversationsState>((set) => ({
   },
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
+  checkAndResetUser: (userId) =>
+    set((state) => {
+      if (state.lastUserId !== userId) {
+        // User changed - clear selection
+        writeStoredLastUserId(userId);
+        writeStoredSelectedConversationId(null);
+        return { lastUserId: userId, selectedId: null, conversations: [] };
+      }
+      return {};
+    }),
 }));
 
-export function useConversations() {
-  const store = useConversationsStore();
+export function useConversations(userId?: string | null) {
+  const conversations = useConversationsStore((state) => state.conversations);
+  const selectedId = useConversationsStore((state) => state.selectedId);
+  const loading = useConversationsStore((state) => state.loading);
+  const error = useConversationsStore((state) => state.error);
+  const setConversations = useConversationsStore((state) => state.setConversations);
+  const addConversation = useConversationsStore((state) => state.addConversation);
+  const upsertConversation = useConversationsStore((state) => state.upsertConversation);
+  const removeConversation = useConversationsStore((state) => state.removeConversation);
+  const selectConversationInStore = useConversationsStore((state) => state.selectConversation);
+  const setLoading = useConversationsStore((state) => state.setLoading);
+  const setError = useConversationsStore((state) => state.setError);
+  const checkAndResetUser = useConversationsStore((state) => state.checkAndResetUser);
 
-  // Fetch conversations on mount
+  // Check for user change and clear selection if needed
+  useEffect(() => {
+    checkAndResetUser(userId ?? null);
+  }, [checkAndResetUser, userId]);
+
+  // Fetch conversations once auth state resolves for the current user.
   useEffect(() => {
     let cancelled = false;
-    store.setLoading(true);
+    if (!userId) {
+      setLoading(false);
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setLoading(true);
     api
       .listConversations()
       .then((conversations) => {
         if (!cancelled) {
-          store.setConversations(conversations);
-          store.setLoading(false);
+          setConversations(conversations);
+          setError(null);
+          setLoading(false);
         }
       })
       .catch((err) => {
         if (!cancelled) {
-          store.setError(err.message);
-          store.setLoading(false);
+          setError(err.message);
+          setLoading(false);
         }
       });
     return () => {
       cancelled = true;
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [setConversations, setError, setLoading, userId]);
 
   const createConversation = useCallback(
     async (req: CreateConversationRequest) => {
       try {
         const conversation = await api.createConversation(req);
-        store.addConversation(conversation);
+        addConversation(conversation);
         return conversation;
       } catch (err) {
-        store.setError(err instanceof Error ? err.message : "Failed to create conversation");
+        setError(err instanceof Error ? err.message : "Failed to create conversation");
         throw err;
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [addConversation, setError],
   );
 
   const openAgentThread = useCallback(
     async (agentId: string) => {
       try {
         const conversation = await api.openAgentThread(agentId);
-        store.upsertConversation(conversation);
+        upsertConversation(conversation);
         return conversation;
       } catch (err) {
-        store.setError(err instanceof Error ? err.message : "Failed to open agent thread");
+        setError(err instanceof Error ? err.message : "Failed to open agent thread");
         throw err;
       }
     },
-    [],
+    [setError, upsertConversation],
   );
 
   const deleteConversation = useCallback(
     async (id: string) => {
       try {
         await api.deleteConversation(id);
-        store.removeConversation(id);
+        removeConversation(id);
       } catch (err) {
-        store.setError(err instanceof Error ? err.message : "Failed to delete conversation");
+        setError(err instanceof Error ? err.message : "Failed to delete conversation");
         throw err;
       }
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [removeConversation, setError],
   );
 
   const selectConversation = useCallback(
     (id: string | null) => {
-      store.selectConversation(id);
+      selectConversationInStore(id);
     },
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [],
+    [selectConversationInStore],
   );
 
   return {
-    conversations: store.conversations,
-    selectedId: store.selectedId,
-    loading: store.loading,
-    error: store.error,
+    conversations,
+    selectedId,
+    loading,
+    error,
     createConversation,
     openAgentThread,
     deleteConversation,

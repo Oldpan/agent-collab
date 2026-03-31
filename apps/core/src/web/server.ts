@@ -75,9 +75,12 @@ export async function startServer(params: {
 
   // ─── REST routes ───
 
-  // List conversations
-  app.get('/api/conversations', async () => {
-    return conversationManager.listConversations();
+  // List conversations — filtered by the requesting user
+  app.get('/api/conversations', async (req, reply) => {
+    const token = ((req.headers as Record<string, string>).authorization ?? '').replace('Bearer ', '');
+    const user = token ? validateSession(db, token) : null;
+    if (!user) { reply.code(401); return { error: 'Unauthorized' }; }
+    return conversationManager.listConversations({ userId: user.id, isAdmin: user.isAdmin });
   });
 
   // ─── Agent routes ───
@@ -128,7 +131,9 @@ export async function startServer(params: {
   });
 
   app.post<{ Params: { id: string } }>('/api/agents/:id/open-thread', async (req, reply) => {
-    const thread = conversationManager.openAgentThread(req.params.id);
+    const token = ((req.headers as Record<string, string>).authorization ?? '').replace('Bearer ', '');
+    const user = token ? validateSession(db, token) : null;
+    const thread = conversationManager.openAgentThread(req.params.id, user?.id ?? null);
     if (!thread) {
       reply.code(404);
       return { error: 'Not found' };
@@ -316,10 +321,23 @@ export async function startServer(params: {
 
   // Get conversation history (stored events from DB)
   app.get<{ Params: { id: string } }>('/api/conversations/:id/history', async (req, reply) => {
+    // Auth check
+    const token = ((req.headers as Record<string, string>).authorization ?? '').replace('Bearer ', '');
+    const user = token ? validateSession(db, token) : null;
+    if (!user) { reply.code(401); return { error: 'Unauthorized' }; }
+
     const conv = conversationManager.getConversation(req.params.id);
     if (!conv) {
       reply.code(404);
       return { error: 'Not found' };
+    }
+    // Private DM conversations: user must own or be admin
+    const isDirectThread = conv.threadKind === 'direct';
+    const isOwner = conv.userId === user.id;
+    const isAdmin = user.isAdmin;
+    if (isDirectThread && !isOwner && !isAdmin) {
+      reply.code(403);
+      return { error: 'Access denied' };
     }
 
     // Fetch runs and events for this conversation's session
@@ -382,10 +400,23 @@ export async function startServer(params: {
   app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
     '/api/conversations/:id/channel-messages',
     async (req, reply) => {
+      // Auth check
+      const token = ((req.headers as Record<string, string>).authorization ?? '').replace('Bearer ', '');
+      const user = token ? validateSession(db, token) : null;
+      if (!user) { reply.code(401); return { error: 'Unauthorized' }; }
+
       const conv = conversationManager.getConversation(req.params.id);
       if (!conv) {
         reply.code(404);
         return { error: 'Not found' };
+      }
+      // Private DM conversations: user must own or be admin
+      const isDirectThread = conv.threadKind === 'direct';
+      const isOwner = conv.userId === user.id;
+      const isAdmin = user.isAdmin;
+      if (isDirectThread && !isOwner && !isAdmin) {
+        reply.code(403);
+        return { error: 'Access denied' };
       }
       if (!conv.agentId) {
         return { messages: [] };
@@ -393,16 +424,19 @@ export async function startServer(params: {
 
       const limit = Math.min(Number(req.query.limit ?? 50), 200);
       const dmChannelId = `dm:${conv.agentId}`;
+      const username = user.username;
 
+      // For DM conversations, only show messages sent by this user or targeted at this user
+      // This ensures users can't see other users' DM history with the same agent
       const rows = db
         .prepare(
           `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                  content, created_at as createdAt, seq, message_source as messageSource
+                  content, created_at as createdAt, seq, message_source as messageSource, target
            FROM channel_messages
-           WHERE channel_id = ?
+           WHERE channel_id = ? AND (sender_name = ? OR target LIKE ?)
            ORDER BY seq DESC LIMIT ?`,
         )
-        .all(dmChannelId, limit) as Array<{
+        .all(dmChannelId, username, `dm:@${username}%`, limit) as Array<{
         id: string;
         senderName: string;
         senderType: string;
@@ -1154,6 +1188,27 @@ export async function startServer(params: {
       // Resolve sender name from auth token (falls back to config default)
       const wsToken = (req.query as Record<string, string>)['token'] ?? '';
       const wsUser = wsToken ? validateSession(db, wsToken) : null;
+      if (!wsUser) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Unauthorized' }));
+        socket.close();
+        return;
+      }
+      // Check user owns this conversation (or it's shared channel thread, or user is admin)
+      const conv = conversationManager.getConversation(conversationId);
+      if (!conv) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Conversation not found' }));
+        socket.close();
+        return;
+      }
+      // Private DM conversations: user must own or be admin
+      const isDirectThread = conv.threadKind === 'direct';
+      const isOwner = conv.userId === wsUser.id;
+      const isAdmin = wsUser.isAdmin;
+      if (isDirectThread && !isOwner && !isAdmin) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Access denied' }));
+        socket.close();
+        return;
+      }
       const senderName = wsUser?.username ?? config.humanUserName;
       handleWebSocket(socket, conversationId, conversationManager, senderName);
     },

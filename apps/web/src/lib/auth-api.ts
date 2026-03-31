@@ -15,6 +15,8 @@ function setToken(token: string): void {
 // Clear token
 function clearToken(): void {
   localStorage.removeItem('auth_token');
+  // Also clear selected conversation to prevent cross-user access
+  localStorage.removeItem('agent-collab:selected-conversation-id');
 }
 
 // Request helper with auth header

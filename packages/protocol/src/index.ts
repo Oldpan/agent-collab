@@ -508,6 +508,7 @@ export type ConversationInfo = {
   updatedAt: number;
   nodeId?: string | null;
   agentId?: string | null;
+  userId?: string | null;
 };
 
 export type CreateConversationRequest = {

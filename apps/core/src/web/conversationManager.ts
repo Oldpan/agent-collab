@@ -281,6 +281,7 @@ export class ConversationManager {
     envVars?: Record<string, string>;
     nodeId?: string;
     agentId?: string;
+    userId?: string | null;
   }): ConversationInfo {
     const id = randomUUID();
 
@@ -327,13 +328,15 @@ export class ConversationManager {
       sessionKey,
     );
 
+    const userId = params.userId ?? null;
+
     // Create conversations row
     this.db
       .prepare(
-        `INSERT INTO conversations(id, channel_id, reply_target, title, agent_type, workspace_path, session_key, status, thread_kind, is_primary_thread, thread_root_id, env_vars, node_id, agent_id, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO conversations(id, channel_id, reply_target, title, agent_type, workspace_path, session_key, status, thread_kind, is_primary_thread, thread_root_id, env_vars, node_id, agent_id, user_id, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(id, channelId, replyTarget, title, agentType, workspacePath, sessionKey, threadKind, isPrimaryThread ? 1 : 0, threadRootId, envVarsJson, nodeId, params.agentId ?? null, now, now);
+      .run(id, channelId, replyTarget, title, agentType, workspacePath, sessionKey, threadKind, isPrimaryThread ? 1 : 0, threadRootId, envVarsJson, nodeId, params.agentId ?? null, userId, now, now);
 
     return {
       id,
@@ -350,50 +353,46 @@ export class ConversationManager {
       updatedAt: now,
       nodeId,
       agentId: params.agentId ?? null,
+      userId,
     };
   }
 
-  openAgentThread(agentId: string): ConversationInfo | null {
+  openAgentThread(agentId: string, userId?: string | null): ConversationInfo | null {
     const agent = this.getAgent(agentId);
     if (!agent) return null;
 
-    const existing = this.db.prepare(
-      `SELECT id, channel_id as channelId, title, agent_type as agentType,
-              reply_target as replyTarget,
-              thread_kind as threadKind, is_primary_thread as isPrimaryThread,
-              thread_root_id as threadRootId,
-              workspace_path as workspacePath, status, node_id as nodeId,
-              agent_id as agentId, created_at as createdAt, updated_at as updatedAt
-       FROM conversations
-       WHERE agent_id = ? AND is_primary_thread = 1
-       ORDER BY updated_at DESC
-       LIMIT 1`,
-    ).get(agentId) as ConversationInfo | undefined;
+    // Look for existing primary thread for this (agent, user) pair
+    const existing = userId
+      ? this.db.prepare(
+          `SELECT id, channel_id as channelId, title, agent_type as agentType,
+                  reply_target as replyTarget,
+                  thread_kind as threadKind, is_primary_thread as isPrimaryThread,
+                  thread_root_id as threadRootId,
+                  workspace_path as workspacePath, status, node_id as nodeId,
+                  agent_id as agentId, user_id as userId, created_at as createdAt, updated_at as updatedAt
+           FROM conversations
+           WHERE agent_id = ? AND user_id = ? AND is_primary_thread = 1
+           ORDER BY updated_at DESC
+           LIMIT 1`,
+        ).get(agentId, userId) as ConversationInfo | undefined
+      : this.db.prepare(
+          `SELECT id, channel_id as channelId, title, agent_type as agentType,
+                  reply_target as replyTarget,
+                  thread_kind as threadKind, is_primary_thread as isPrimaryThread,
+                  thread_root_id as threadRootId,
+                  workspace_path as workspacePath, status, node_id as nodeId,
+                  agent_id as agentId, user_id as userId, created_at as createdAt, updated_at as updatedAt
+           FROM conversations
+           WHERE agent_id = ? AND user_id IS NULL AND is_primary_thread = 1
+           ORDER BY updated_at DESC
+           LIMIT 1`,
+        ).get(agentId) as ConversationInfo | undefined;
+
     if (existing) {
-      return { ...existing, isPrimaryThread: !!existing.isPrimaryThread };
+      return { ...existing, isPrimaryThread: !!existing.isPrimaryThread, userId: existing.userId ?? null };
     }
 
-    const fallback = this.db.prepare(
-      `SELECT id, channel_id as channelId, title, agent_type as agentType,
-              reply_target as replyTarget,
-              thread_kind as threadKind, is_primary_thread as isPrimaryThread,
-              thread_root_id as threadRootId,
-              workspace_path as workspacePath, status, node_id as nodeId,
-              agent_id as agentId, created_at as createdAt, updated_at as updatedAt
-       FROM conversations
-       WHERE agent_id = ?
-       ORDER BY updated_at DESC, created_at DESC
-       LIMIT 1`,
-    ).get(agentId) as ConversationInfo | undefined;
-    if (fallback) {
-      this.db.prepare(
-        `UPDATE conversations
-         SET thread_kind = 'direct', is_primary_thread = 1, updated_at = ?
-         WHERE id = ?`,
-      ).run(Date.now(), fallback.id);
-      return { ...fallback, threadKind: 'direct', isPrimaryThread: true };
-    }
-
+    // Create new per-user primary thread
     return this.createConversation({
       agentId,
       agentType: agent.agentType,
@@ -403,6 +402,7 @@ export class ConversationManager {
       threadKind: 'direct',
       isPrimaryThread: true,
       title: '',
+      userId: userId ?? null,
     });
   }
 
@@ -453,18 +453,19 @@ export class ConversationManager {
     });
   }
 
-  listConversations(filter?: { channelId?: string; agentId?: string }): ConversationInfo[] {
+  listConversations(filter?: { channelId?: string; agentId?: string; userId?: string; isAdmin?: boolean }): ConversationInfo[] {
     const convSelect = `SELECT id, channel_id as channelId, reply_target as replyTarget, title, agent_type as agentType,
                 thread_kind as threadKind, is_primary_thread as isPrimaryThread,
                 thread_root_id as threadRootId,
                 workspace_path as workspacePath, status, node_id as nodeId,
-                agent_id as agentId, created_at as createdAt, updated_at as updatedAt
+                agent_id as agentId, user_id as userId, created_at as createdAt, updated_at as updatedAt
          FROM conversations`;
 
     const mapRows = (rows: ConversationInfo[]) => rows.map((row) => ({
       ...row,
       isPrimaryThread: !!row.isPrimaryThread,
       threadRootId: row.threadRootId ?? null,
+      userId: (row as ConversationInfo & { userId?: string | null }).userId ?? null,
     }));
 
     if (filter?.channelId && filter?.agentId) {
@@ -479,6 +480,30 @@ export class ConversationManager {
       return mapRows(this.db.prepare(`${convSelect} WHERE agent_id = ? ORDER BY is_primary_thread DESC, updated_at DESC`)
         .all(filter.agentId) as ConversationInfo[]);
     }
+
+    // Top-level list: apply per-user DM filter
+    // Real channel threads (branch in non-default channel) are shared; everything else is per-user
+    if (filter?.userId) {
+      if (filter.isAdmin) {
+        // Admin: real channel branches (shared) + their own DMs + legacy NULL-user DMs
+        return mapRows(this.db.prepare(
+          `${convSelect} WHERE (
+            (thread_kind = 'branch' AND channel_id != 'default')
+            OR user_id = ?
+            OR user_id IS NULL
+          ) ORDER BY updated_at DESC`,
+        ).all(filter.userId) as ConversationInfo[]);
+      } else {
+        // Regular user: real channel branches (shared) + their own DMs only
+        return mapRows(this.db.prepare(
+          `${convSelect} WHERE (
+            (thread_kind = 'branch' AND channel_id != 'default')
+            OR user_id = ?
+          ) ORDER BY updated_at DESC`,
+        ).all(filter.userId) as ConversationInfo[]);
+      }
+    }
+
     return mapRows(this.db.prepare(`${convSelect} ORDER BY updated_at DESC`).all() as ConversationInfo[]);
   }
 

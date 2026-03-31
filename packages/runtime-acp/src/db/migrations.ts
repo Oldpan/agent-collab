@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 40;
+const LATEST_VERSION = 41;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -756,5 +756,14 @@ export function migrate(db: Db): void {
       );
     `);
     db.exec(`UPDATE schema_version SET version = 40;`);
+  }
+
+  if (current < 41) {
+    // Per-user DM conversations: each (agent, user) pair gets its own conversation
+    db.exec(`
+      ALTER TABLE conversations ADD COLUMN user_id TEXT REFERENCES users(id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);
+    `);
+    db.exec(`UPDATE schema_version SET version = 41;`);
   }
 }

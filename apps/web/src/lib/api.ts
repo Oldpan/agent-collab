@@ -18,7 +18,10 @@ import type {
 const API_BASE = "/api";
 
 export async function listConversations(): Promise<ConversationInfo[]> {
-  const res = await fetch(`${API_BASE}/conversations`);
+  const token = localStorage.getItem('auth_token') ?? '';
+  const res = await fetch(`${API_BASE}/conversations`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
   if (!res.ok) throw new Error(`Failed to list conversations: ${res.statusText}`);
   return res.json();
 }
@@ -52,7 +55,10 @@ export type ConversationRunSummary = {
 };
 
 export async function getHistory(id: string): Promise<ConversationRunSummary[]> {
-  const res = await fetch(`${API_BASE}/conversations/${id}/history`);
+  const token = localStorage.getItem('auth_token') ?? '';
+  const res = await fetch(`${API_BASE}/conversations/${id}/history`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
   if (!res.ok) throw new Error(`Failed to get history: ${res.statusText}`);
   return res.json();
 }
@@ -61,7 +67,10 @@ export async function getConversationChannelMessages(
   id: string,
   limit = 100,
 ): Promise<{ messages: ChannelMessage[] }> {
-  const res = await fetch(`${API_BASE}/conversations/${id}/channel-messages?limit=${limit}`);
+  const token = localStorage.getItem('auth_token') ?? '';
+  const res = await fetch(`${API_BASE}/conversations/${id}/channel-messages?limit=${limit}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
   if (!res.ok) throw new Error(`Failed to get conversation channel messages: ${res.statusText}`);
   return res.json();
 }
@@ -411,8 +420,10 @@ export async function listAgentConversations(agentId: string): Promise<Conversat
 }
 
 export async function openAgentThread(agentId: string): Promise<ConversationInfo> {
+  const token = localStorage.getItem('auth_token') ?? '';
   const res = await fetch(`${API_BASE}/agents/${agentId}/open-thread`, {
     method: "POST",
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
   });
   if (!res.ok) throw new Error(`Failed to open agent thread: ${res.statusText}`);
   return res.json();

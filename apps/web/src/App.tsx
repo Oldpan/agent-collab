@@ -62,7 +62,7 @@ export function App() {
     loading,
     openAgentThread,
     selectConversation,
-  } = useConversations();
+  } = useConversations(user?.id);
 
   const { agents, createAgent, updateAgent, deleteAgent } = useAgents();
   const { machines, createMachine, deleteMachine } = useMachines();
