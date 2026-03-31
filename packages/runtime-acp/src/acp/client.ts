@@ -360,15 +360,20 @@ export class AcpClient {
             method: req.method,
             params,
           });
-          await this.withWorkspaceWriteLock(req.method, params, async () => {
-            const resolvedPath = resolveWorkspacePath(
-              this.workspaceRoot,
-              params.path,
-            );
+          const resolvedPath = resolveWorkspacePath(
+            this.workspaceRoot,
+            params.path,
+          );
+          const memoryWriteGuard = createMemoryWriteGuard(this.workspaceRoot, resolvedPath);
+          const lease = await this.acquireWorkspaceWriteLock(req.method, params);
+          try {
+            memoryWriteGuard?.assertLatest(lease.waited);
             fs.mkdirSync(path.dirname(resolvedPath), { recursive: true });
             fs.writeFileSync(resolvedPath, params.content, 'utf8');
             this.respond(req.id, {});
-          });
+          } finally {
+            lease.release();
+          }
 
           emitTool({
             phase: 'end',
@@ -972,6 +977,53 @@ function stringOrFallback(value: unknown, fallback: string): string {
   if (typeof value !== 'string') return fallback;
   const trimmed = value.trim();
   return trimmed || fallback;
+}
+
+type FileVersionSnapshot = {
+  exists: boolean;
+  size: number | null;
+  mtimeMs: number | null;
+};
+
+type MemoryWriteGuard = {
+  assertLatest: (waited: boolean) => void;
+};
+
+function createMemoryWriteGuard(
+  workspaceRoot: string,
+  resolvedPath: string,
+): MemoryWriteGuard | null {
+  const memoryPath = path.resolve(workspaceRoot, 'MEMORY.md');
+  if (path.resolve(resolvedPath) !== memoryPath) return null;
+
+  const before = snapshotFileVersion(memoryPath);
+  return {
+    assertLatest(waited: boolean) {
+      if (!waited) return;
+      const after = snapshotFileVersion(memoryPath);
+      if (
+        before.exists !== after.exists ||
+        before.size !== after.size ||
+        before.mtimeMs !== after.mtimeMs
+      ) {
+        throw new Error(
+          'MEMORY.md changed while waiting for workspace lock. Read the latest MEMORY.md and retry your update.',
+        );
+      }
+    },
+  };
+}
+
+function snapshotFileVersion(filePath: string): FileVersionSnapshot {
+  const stat = fs.statSync(filePath, { throwIfNoEntry: false });
+  if (!stat) {
+    return { exists: false, size: null, mtimeMs: null };
+  }
+  return {
+    exists: true,
+    size: stat.size,
+    mtimeMs: Math.floor(stat.mtimeMs),
+  };
 }
 
 function readTextFileWithLimit(

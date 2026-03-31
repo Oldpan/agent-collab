@@ -351,14 +351,14 @@ export function Sidebar({
                 {/* Machine row */}
                 <button
                   type="button"
-                  className="group flex w-full max-w-full items-start gap-1.5 rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-2.5 py-1.5 text-left shadow-[3px_3px_0_0_rgba(0,0,0,0.1)] transition-colors hover:bg-[#fff1a9] cursor-pointer"
+                  className="group flex w-full max-w-full items-center gap-1.5 rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-2.5 py-1.5 text-left shadow-[3px_3px_0_0_rgba(0,0,0,0.1)] transition-colors hover:bg-[#fff1a9] cursor-pointer"
                   onClick={() => toggleMachine(machine.nodeId)}
                 >
                   {isExpanded
-                    ? <ChevronDownIcon className="mt-0.5 size-3 shrink-0 text-zinc-500" />
-                    : <ChevronRightIcon className="mt-0.5 size-3 shrink-0 text-zinc-500" />
+                    ? <ChevronDownIcon className="size-3 shrink-0 text-zinc-500 self-start mt-0.5" />
+                    : <ChevronRightIcon className="size-3 shrink-0 text-zinc-500 self-start mt-0.5" />
                   }
-                  <StatusDot status={machine.status} />
+                  <span className="self-start mt-0.5"><StatusDot status={machine.status} /></span>
                   <span className="min-w-0 flex-1 break-words text-xs font-medium leading-tight">{machine.name}</span>
                   {isAdmin && (
                     <div className="flex shrink-0 items-center gap-1 opacity-0 group-hover:opacity-100">

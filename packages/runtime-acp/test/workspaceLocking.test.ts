@@ -164,6 +164,42 @@ describe('workspace locking', () => {
     runtime.close();
   });
 
+  it('等待 workspace 写锁期间若 MEMORY.md 已被更新，应要求重读后再重试', async () => {
+    const workspaceRoot = createWorkspace();
+    const lockManager = new WorkspaceLockManager();
+    const manualLease = await lockManager.acquire(workspaceRoot);
+
+    const rpc = new SingleToolRpc('fs/write_text_file', {
+      path: join(workspaceRoot, 'MEMORY.md'),
+      content: '# B update\n',
+    });
+    const runtime = createRuntime({
+      sessionKey: 'session-memory-retry',
+      workspaceRoot,
+      lockManager,
+      rpc,
+    });
+
+    const promptPromise = runtime.prompt({
+      runId: 'run-memory-retry',
+      promptText: 'update memory after wait',
+      sink: { sendText: async () => {} },
+      uiMode: 'summary',
+      actorUserId: 'node_user',
+    });
+
+    expect(await raceWithDelay(promptPromise, 40)).toBe('pending');
+    fs.writeFileSync(join(workspaceRoot, 'MEMORY.md'), '# A update\n', 'utf8');
+    manualLease.release();
+    await promptPromise;
+
+    expect(fs.readFileSync(join(workspaceRoot, 'MEMORY.md'), 'utf8')).toBe('# A update\n');
+    expect(rpc.toolErrors).toHaveLength(1);
+    expect(JSON.stringify(rpc.toolErrors[0])).toContain('Read the latest MEMORY.md and retry your update');
+
+    runtime.close();
+  });
+
   it('fs/read_text_file 不应被 workspace 写锁阻塞', async () => {
     const workspaceRoot = createWorkspace();
     const lockManager = new WorkspaceLockManager();

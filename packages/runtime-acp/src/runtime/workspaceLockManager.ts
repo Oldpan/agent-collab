@@ -2,6 +2,7 @@ import path from 'node:path';
 
 export type WorkspaceLockLease = {
   key: string;
+  waited: boolean;
   release: () => void;
 };
 
@@ -42,6 +43,7 @@ export class WorkspaceLockManager {
     let released = false;
     return {
       key,
+      waited,
       release: () => {
         if (released) return;
         released = true;
