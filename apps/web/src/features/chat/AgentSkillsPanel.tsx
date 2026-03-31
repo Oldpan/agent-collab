@@ -214,7 +214,7 @@ export function AgentSkillsPanel({ agent, isAdmin = false, onUpdate }: AgentSkil
             <div className="border-b border-border px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               Skills
             </div>
-            <ScrollArea className="flex-1">
+            <ScrollArea className="h-full flex-1">
               <div className="space-y-4 p-3">
                 <section className="space-y-2">
                   <div className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Roots</div>
@@ -298,7 +298,7 @@ export function AgentSkillsPanel({ agent, isAdmin = false, onUpdate }: AgentSkil
             <div className="border-b border-border px-4 py-3 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
               {selectedPath ?? "Preview"}
             </div>
-            <ScrollArea className="flex-1">
+            <ScrollArea className="h-full flex-1">
               <div className="p-4">
                 {selectedFile ? (
                   <MessageResponse>{selectedFile.content}</MessageResponse>

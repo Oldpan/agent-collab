@@ -31,7 +31,7 @@ export function AgentProfilePanel({ agent }: AgentProfilePanelProps) {
     : null;
 
   return (
-    <ScrollArea className="flex-1">
+    <ScrollArea className="h-full flex-1">
       <div className="space-y-4 px-4 py-4">
         <ProfileSection title="Identity">
           <InfoRow label="Name" value={agent.name} />

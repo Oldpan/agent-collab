@@ -33,6 +33,7 @@ import {
   upsertChannelSubscription,
 } from './channelSubscriptions.js';
 import { deleteTargetParticipantsForAgent, deleteTargetParticipantsForChannel } from './targetParticipants.js';
+import { buildDirectReplyTarget, resolveDirectUserName } from './directReplyTargets.js';
 
 function slugifyAgentName(name: string): string {
   return name
@@ -284,6 +285,7 @@ export class ConversationManager {
     userId?: string | null;
   }): ConversationInfo {
     const id = randomUUID();
+    const userId = params.userId ?? null;
 
     // If agentId provided, inherit agent's settings as defaults
     const agent = params.agentId ? this.getAgent(params.agentId) : null;
@@ -301,6 +303,7 @@ export class ConversationManager {
       threadKind,
       isPrimaryThread,
       threadRootId,
+      userId,
     });
     const envVarsJson = (() => {
       const ev = params.envVars ?? agent?.envVars;
@@ -327,8 +330,6 @@ export class ConversationManager {
       { platform: 'web', chatId: channelId, threadId: id, userId: agentType },
       sessionKey,
     );
-
-    const userId = params.userId ?? null;
 
     // Create conversations row
     this.db
@@ -389,6 +390,22 @@ export class ConversationManager {
         ).get(agentId) as ConversationInfo | undefined;
 
     if (existing) {
+      const canonicalReplyTarget = this.computeReplyTarget({
+        conversationId: existing.id,
+        channelId: existing.channelId,
+        threadKind: existing.threadKind,
+        isPrimaryThread: !!existing.isPrimaryThread,
+        threadRootId: existing.threadRootId ?? null,
+        userId: existing.userId ?? null,
+      });
+      if ((existing.replyTarget ?? '').trim() !== canonicalReplyTarget) {
+        this.db.prepare(
+          `UPDATE conversations
+           SET reply_target = ?, updated_at = ?
+           WHERE id = ?`,
+        ).run(canonicalReplyTarget, Date.now(), existing.id);
+        existing.replyTarget = canonicalReplyTarget;
+      }
       return { ...existing, isPrimaryThread: !!existing.isPrimaryThread, userId: existing.userId ?? null };
     }
 
@@ -861,11 +878,15 @@ export class ConversationManager {
     threadKind: ThreadKind;
     isPrimaryThread: boolean;
     threadRootId: string | null;
+    userId?: string | null;
   }): string {
     if (params.threadKind === 'direct') {
-      return params.isPrimaryThread
-        ? `dm:@${this.config.humanUserName}`
-        : `dm:@${this.config.humanUserName}:${params.conversationId.slice(0, 8)}`;
+      const userName = resolveDirectUserName(this.db, params.userId, this.config.humanUserName);
+      return buildDirectReplyTarget({
+        conversationId: params.conversationId,
+        isPrimaryThread: params.isPrimaryThread,
+        userName,
+      });
     }
 
     const channel = this.getChannel(params.channelId);
@@ -877,15 +898,18 @@ export class ConversationManager {
   private backfillConversationReplyTargets(): void {
     const rows = this.db.prepare(
       `SELECT id, channel_id as channelId, thread_kind as threadKind,
-              is_primary_thread as isPrimaryThread, thread_root_id as threadRootId
+              is_primary_thread as isPrimaryThread, thread_root_id as threadRootId,
+              user_id as userId, reply_target as replyTarget
        FROM conversations
-       WHERE reply_target IS NULL OR reply_target = ''`,
+       WHERE thread_kind = 'direct' OR reply_target IS NULL OR reply_target = ''`,
     ).all() as Array<{
       id: string;
       channelId: string;
       threadKind: ThreadKind;
       isPrimaryThread: number;
       threadRootId: string | null;
+      userId: string | null;
+      replyTarget: string | null;
     }>;
 
     if (rows.length === 0) return;
@@ -897,16 +921,16 @@ export class ConversationManager {
     );
 
     for (const row of rows) {
-      updateReplyTarget.run(
-        this.computeReplyTarget({
-          conversationId: row.id,
-          channelId: row.channelId,
-          threadKind: row.threadKind,
-          isPrimaryThread: row.isPrimaryThread !== 0,
-          threadRootId: row.threadRootId ?? null,
-        }),
-        row.id,
-      );
+      const canonicalReplyTarget = this.computeReplyTarget({
+        conversationId: row.id,
+        channelId: row.channelId,
+        threadKind: row.threadKind,
+        isPrimaryThread: row.isPrimaryThread !== 0,
+        threadRootId: row.threadRootId ?? null,
+        userId: row.userId ?? null,
+      });
+      if ((row.replyTarget ?? '').trim() === canonicalReplyTarget) continue;
+      updateReplyTarget.run(canonicalReplyTarget, row.id);
     }
   }
 

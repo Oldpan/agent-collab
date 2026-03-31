@@ -241,38 +241,48 @@ export function ChatPanel({
       </div>
 
       {activeTab === "workspace" ? (
-        <AgentWorkspacePanel agent={agent} />
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <AgentWorkspacePanel agent={agent} />
+        </div>
       ) : activeTab === "skills" ? (
         agent ? (
-          <AgentSkillsPanel
-            agent={agent}
-            isAdmin={isAdmin}
-            onUpdate={(req) => onUpdateAgent?.(agent.agentId, req) ?? Promise.resolve()}
-          />
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <AgentSkillsPanel
+              agent={agent}
+              isAdmin={isAdmin}
+              onUpdate={(req) => onUpdateAgent?.(agent.agentId, req) ?? Promise.resolve()}
+            />
+          </div>
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             Agent skills unavailable.
           </div>
         )
       ) : activeTab === "profile" ? (
-        <AgentProfilePanel agent={agent} />
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <AgentProfilePanel agent={agent} />
+        </div>
       ) : activeTab === "setting" ? (
         agent ? (
-          <AgentSettingsPanel
-            agent={agent}
-            isAdmin={isAdmin}
-            onUpdate={(req) => onUpdateAgent?.(agent.agentId, req) ?? Promise.resolve()}
-            onRestart={() => onRestartAgent?.(agent.agentId) ?? Promise.resolve()}
-            onClearChat={() => onClearAgentChat?.(agent.agentId) ?? Promise.resolve()}
-            onReset={() => onResetAgent?.(agent.agentId) ?? Promise.resolve()}
-          />
+          <div className="flex flex-1 flex-col overflow-hidden">
+            <AgentSettingsPanel
+              agent={agent}
+              isAdmin={isAdmin}
+              onUpdate={(req) => onUpdateAgent?.(agent.agentId, req) ?? Promise.resolve()}
+              onRestart={() => onRestartAgent?.(agent.agentId) ?? Promise.resolve()}
+              onClearChat={() => onClearAgentChat?.(agent.agentId) ?? Promise.resolve()}
+              onReset={() => onResetAgent?.(agent.agentId) ?? Promise.resolve()}
+            />
+          </div>
         ) : (
           <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
             Agent settings unavailable.
           </div>
         )
       ) : activeTab === "activity" ? (
-        <AgentActivityPanel runs={runs} />
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <AgentActivityPanel runs={runs} />
+        </div>
       ) : (
         <>
           <Conversation className="min-h-0 flex-1 bg-[#fff9d0]">

@@ -135,7 +135,7 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
 
   if (!isAdmin) {
     return (
-      <ScrollArea className="flex-1 bg-[#fff9d0]">
+      <ScrollArea className="h-full flex-1 bg-[#fff9d0]">
         <div className="space-y-4 px-4 py-4">
           <section className="rounded-sm border-2 border-zinc-900 bg-[#fff8d8] px-3 py-3 text-sm text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
             Agent settings are read-only for non-admin users. You can chat with this agent, but only admins can change its configuration or lifecycle.
@@ -154,7 +154,7 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
 
   return (
     <>
-      <ScrollArea className="flex-1 bg-[#fff9d0]">
+      <ScrollArea className="h-full flex-1 bg-[#fff9d0]">
         <div className="space-y-4 px-4 py-4">
           {/* Action Buttons */}
           <section className="space-y-3">

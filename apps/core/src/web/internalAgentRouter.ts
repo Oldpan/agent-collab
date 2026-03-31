@@ -15,6 +15,7 @@ import { buildTargetActivationContext } from './activationContext.js';
 import { recordAgentMentionNotification, shouldTriggerAgentMention } from './agentMentionCooldowns.js';
 import { buildChannelActivationContextText, buildChannelActivationPrompt } from './channelActivationPrompt.js';
 import { findMentionedAgents } from './channelMentions.js';
+import { resolveConversationReplyTarget } from './directReplyTargets.js';
 import { setTargetOwner, upsertTargetParticipant } from './targetParticipants.js';
 import { bindTaskToThread, getThreadBindingForTask } from './threadTaskBindings.js';
 
@@ -922,35 +923,7 @@ function resolveChannelFromTarget(target: string, db: Db): string | null {
 }
 
 function resolveDefaultReplyTarget(db: Db, conversationId: string, humanUserName: string): string | null {
-  const row = db.prepare(
-    `SELECT c.id as conversationId, c.channel_id as channelId, c.reply_target as replyTarget, c.thread_kind as threadKind,
-            c.is_primary_thread as isPrimaryThread, c.thread_root_id as threadRootId,
-            ch.name as channelName
-     FROM conversations c
-     LEFT JOIN channels ch ON ch.channel_id = c.channel_id
-     WHERE c.id = ?`,
-  ).get(conversationId) as {
-    conversationId: string;
-    channelId: string;
-    replyTarget: string | null;
-    threadKind: 'direct' | 'branch';
-    isPrimaryThread: number;
-    threadRootId: string | null;
-    channelName: string | null;
-  } | undefined;
-
-  if (!row) return null;
-  if (row.replyTarget?.trim()) return row.replyTarget;
-
-  if (row.threadKind === 'direct') {
-    return row.isPrimaryThread
-      ? `dm:@${humanUserName}`
-      : `dm:@${humanUserName}:${row.conversationId.slice(0, 8)}`;
-  }
-
-  const channelName = row.channelName ?? row.channelId;
-  const baseTarget = `#${channelName}`;
-  return row.threadRootId ? `${baseTarget}:${row.threadRootId}` : baseTarget;
+  return resolveConversationReplyTarget(db, conversationId, humanUserName);
 }
 
 function normalizeTargetForConversation(db: Db, conversationId: string, target: string): string {

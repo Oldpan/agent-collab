@@ -7,6 +7,7 @@ import type { NodeRegistry } from '../services/nodeRegistry.js';
 import type { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import type { AgentSkillsBroker } from '../services/agentSkillsBroker.js';
 import type { ConversationManager } from './conversationManager.js';
+import { resolveConversationReplyTarget } from './directReplyTargets.js';
 
 /** Persist a ServerEvent from a remote run into core DB as a node/event entry */
 function appendNodeEvent(db: Db, runId: string, seq: number, event: ServerEvent): void {
@@ -270,11 +271,8 @@ function getFallbackMessageContext(
   } | undefined;
   if (!row?.agentId) return null;
 
-  const target = row.threadKind === 'direct'
-    ? (row.isPrimaryThread
-      ? `dm:@${humanUserName}`
-      : `dm:@${humanUserName}:${row.conversationId.slice(0, 8)}`)
-    : `${`#${row.channelName ?? row.channelId}`}${row.threadRootId ? `:${row.threadRootId}` : ''}`;
+  const target = resolveConversationReplyTarget(db, conversationId, humanUserName)
+    ?? `${`#${row.channelName ?? row.channelId}`}${row.threadRootId ? `:${row.threadRootId}` : ''}`;
 
   return {
     agentId: row.agentId,

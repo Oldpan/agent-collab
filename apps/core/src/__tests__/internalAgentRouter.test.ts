@@ -196,6 +196,54 @@ describe('internalAgentRouter', () => {
     expect(row.target).toBe('dm:@oldpan');
   });
 
+  it('未提供 target 时应按当前 direct conversation 的 userId 回复，而不是全局 humanUserName', async () => {
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES(?, ?, ?, 0, ?, ?)`,
+    ).run('yanzong', 'yanzong', 'hash', now, now);
+    const agent = manager.createAgent({
+      name: 'Alice',
+      agentType: 'codex_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/alice-router',
+    });
+    const conv = manager.openAgentThread(agent.agentId, 'yanzong');
+    if (!conv) throw new Error('missing conversation');
+
+    db.prepare(
+      `UPDATE conversations
+       SET reply_target = ?
+       WHERE id = ?`,
+    ).run('dm:@oldpan', conv.id);
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-yanzong',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'reply to yanzong',
+    });
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'ack yanzong',
+        conversationId: conv.id,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { target?: string };
+    expect(body.target).toBe('dm:@yanzong');
+
+    const row = db.prepare(
+      'SELECT target FROM channel_messages WHERE sender_id = ? ORDER BY created_at DESC LIMIT 1',
+    ).get(agent.agentId) as { target: string };
+    expect(row.target).toBe('dm:@yanzong');
+  });
+
   it('send_message 应拒绝纯空白内容', async () => {
     const agent = manager.createAgent({
       name: 'WhitespaceBob',

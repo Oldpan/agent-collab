@@ -351,17 +351,17 @@ export function Sidebar({
                 {/* Machine row */}
                 <button
                   type="button"
-                  className="group flex w-fit max-w-full items-center gap-1.5 rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-2.5 py-1.5 text-left shadow-[3px_3px_0_0_rgba(0,0,0,0.1)] transition-colors hover:bg-[#fff1a9] cursor-pointer"
+                  className="group flex w-full max-w-full items-start gap-1.5 rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-2.5 py-1.5 text-left shadow-[3px_3px_0_0_rgba(0,0,0,0.1)] transition-colors hover:bg-[#fff1a9] cursor-pointer"
                   onClick={() => toggleMachine(machine.nodeId)}
                 >
                   {isExpanded
-                    ? <ChevronDownIcon className="size-3 shrink-0 text-zinc-500" />
-                    : <ChevronRightIcon className="size-3 shrink-0 text-zinc-500" />
+                    ? <ChevronDownIcon className="mt-0.5 size-3 shrink-0 text-zinc-500" />
+                    : <ChevronRightIcon className="mt-0.5 size-3 shrink-0 text-zinc-500" />
                   }
                   <StatusDot status={machine.status} />
-                  <span className="flex-1 truncate text-xs font-medium">{machine.name}</span>
+                  <span className="min-w-0 flex-1 break-words text-xs font-medium leading-tight">{machine.name}</span>
                   {isAdmin && (
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100">
+                    <div className="flex shrink-0 items-center gap-1 opacity-0 group-hover:opacity-100">
                       <button
                         type="button"
                         className="rounded-sm p-0.5 hover:bg-[#ffe27a] cursor-pointer"

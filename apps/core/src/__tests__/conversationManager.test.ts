@@ -69,6 +69,60 @@ describe('ConversationManager', () => {
       expect(conv?.replyTarget).toBe('dm:@oldpan');
     });
 
+    it('不同用户的 direct thread 应绑定到各自用户名的 DM reply target', () => {
+      const now = Date.now();
+      db.prepare(
+        `INSERT INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+         VALUES(?, ?, ?, 0, ?, ?)`,
+      ).run('oldpan', 'oldpan', 'hash', now, now);
+      db.prepare(
+        `INSERT INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+         VALUES(?, ?, ?, 0, ?, ?)`,
+      ).run('yanzong', 'yanzong', 'hash', now, now);
+      const agent = manager.createAgent({
+        name: 'PerUser Bob',
+        agentType: 'claude_acp',
+        nodeId: 'node-1',
+        workspacePath: '/tmp/per-user-bob',
+      });
+
+      const oldpanConv = manager.openAgentThread(agent.agentId, 'oldpan');
+      const yanzongConv = manager.openAgentThread(agent.agentId, 'yanzong');
+
+      expect(oldpanConv?.replyTarget).toBe('dm:@oldpan');
+      expect(yanzongConv?.replyTarget).toBe('dm:@yanzong');
+    });
+
+    it('重新打开已有 direct thread 时应修复错误的 reply_target', () => {
+      const now = Date.now();
+      db.prepare(
+        `INSERT INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+         VALUES(?, ?, ?, 0, ?, ?)`,
+      ).run('yanzong', 'yanzong', 'hash', now, now);
+      const agent = manager.createAgent({
+        name: 'Repair Bob',
+        agentType: 'claude_acp',
+        nodeId: 'node-1',
+        workspacePath: '/tmp/repair-bob',
+      });
+      const conv = manager.openAgentThread(agent.agentId, 'yanzong');
+      if (!conv) throw new Error('missing direct conversation');
+
+      db.prepare(
+        `UPDATE conversations
+         SET reply_target = ?
+         WHERE id = ?`,
+      ).run('dm:@oldpan', conv.id);
+
+      const reopened = manager.openAgentThread(agent.agentId, 'yanzong');
+      expect(reopened?.replyTarget).toBe('dm:@yanzong');
+
+      const row = db.prepare(
+        'SELECT reply_target as replyTarget FROM conversations WHERE id = ?',
+      ).get(conv.id) as { replyTarget: string };
+      expect(row.replyTarget).toBe('dm:@yanzong');
+    });
+
     it('channel branch thread 应绑定到稳定的 channel/thread reply target', () => {
       const agent = manager.createAgent({
         name: 'Channel Bob',

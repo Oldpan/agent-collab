@@ -9,6 +9,7 @@ import type { AppConfig } from '../config.js';
 import type { NodeRegistry } from '../services/nodeRegistry.js';
 import { bumpAgentMessageCheckpoint, getAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
 import { buildDirectActivationPrompt } from '../web/directActivationPrompt.js';
+import { resolveConversationReplyTarget } from '../web/directReplyTargets.js';
 
 const TURN_REPLY_CONTRACT = [
   '[Reply contract]',
@@ -105,7 +106,11 @@ export class ExecutionDispatcher {
           // even though the triggering message is also injected directly into this run prompt.
           const dmChannelId = `dm:${row.agentId}`;
           const humanUserName = options?.senderName ?? this.config.humanUserName;
-          const dmReplyTarget = row.replyTarget?.trim() || `dm:@${humanUserName}`;
+          const dmReplyTarget = resolveConversationReplyTarget(
+            this.db,
+            conversationId,
+            humanUserName,
+          ) ?? row.replyTarget?.trim() ?? `dm:@${humanUserName}`;
           const msgSeq = (() => {
             const r = this.db
               .prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?')
