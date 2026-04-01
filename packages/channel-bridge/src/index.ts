@@ -26,12 +26,14 @@ let agentId = '';
 let conversationId = '';
 let serverUrl = 'http://localhost:3100';
 let authToken = process.env.CHANNEL_BRIDGE_AUTH_TOKEN ?? '';
+let workspacePath = '';
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--agent-id' && args[i + 1]) agentId = args[++i];
   if (args[i] === '--conversation-id' && args[i + 1]) conversationId = args[++i];
   if (args[i] === '--server-url' && args[i + 1]) serverUrl = args[++i];
   if (args[i] === '--auth-token' && args[i + 1]) authToken = args[++i];
+  if (args[i] === '--workspace-path' && args[i + 1]) workspacePath = args[++i];
 }
 
 if (!agentId || !conversationId) {
@@ -536,7 +538,10 @@ server.tool(
     attachment_id: z.string().describe('Attachment UUID returned by upload_file or shown in a message'),
   },
   async ({ attachment_id }) => {
-    const cacheDir = join(tmpdir(), 'agent-collab-attachments');
+    // Store inside workspace so the agent can read it; fall back to /tmp if no workspace path
+    const cacheDir = workspacePath
+      ? join(workspacePath, '.agent-attachments')
+      : join(tmpdir(), 'agent-collab-attachments');
     mkdirSync(cacheDir, { recursive: true });
 
     // Return cached file if already downloaded

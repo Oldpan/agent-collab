@@ -133,6 +133,8 @@ export class Executor {
           conversationId,
           '--server-url',
           serverUrl,
+          '--workspace-path',
+          workspaceRoot,
         ];
         if (authToken) {
           args.push('--auth-token', authToken);
