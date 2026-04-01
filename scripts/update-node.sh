@@ -47,9 +47,6 @@ pnpm --filter @agent-collab/runtime-acp build
 echo "==> [update-node] build agent-node"
 pnpm --filter @agent-collab/agent-node build
 
-echo "==> [update-node] rebuild better-sqlite3"
-cd node_modules/.pnpm/better-sqlite3@12.8.0/node_modules/better-sqlite3
-npx node-gyp rebuild
-cd ../../../../..
+
 
 echo "==> [update-node] done"

@@ -281,6 +281,75 @@ describe('nodeWsHandler', () => {
     expect(dispatches).toHaveLength(0);
   });
 
+  it('仅输出较短私聊 delta 时也应落 delta_fallback 消息', () => {
+    const agent = manager.createAgent({
+      name: 'ShortReplyBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/short-reply-bob-contract',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const socket = new FakeSocket();
+    const events: any[] = [];
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(socket as any, registry as any, (_conversationId, event) => {
+      events.push(event);
+    }, db, manager);
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-short-dm-fallback-1',
+      sessionKey: sessionRow.sessionKey,
+      promptText: '你好',
+    });
+    db.prepare(
+      `INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, ?, 'node/event', ?, ?)`,
+    ).run(
+      'run-short-dm-fallback-1',
+      1,
+      JSON.stringify({
+        type: 'content.delta',
+        text: '你好，有什么需要我处理的？',
+      }),
+      1000,
+    );
+
+    socket.emit('message', JSON.stringify({
+      type: 'run.end',
+      runId: 'run-short-dm-fallback-1',
+      conversationId: conv.id,
+      stopReason: 'end_turn',
+    }));
+
+    const fallbackRow = db.prepare(
+      `SELECT channel_id as channelId, target, content, message_source as messageSource
+       FROM channel_messages
+       WHERE run_id = ? AND message_source = 'delta_fallback'
+       ORDER BY created_at DESC, seq DESC
+       LIMIT 1`,
+    ).get('run-short-dm-fallback-1') as {
+      channelId: string;
+      target: string;
+      content: string;
+      messageSource: string | null;
+    } | undefined;
+    expect(fallbackRow).toMatchObject({
+      channelId: `dm:${agent.agentId}`,
+      target: 'dm:@oldpan',
+      content: '你好，有什么需要我处理的？',
+      messageSource: 'delta_fallback',
+    });
+    expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
+  });
+
   it('私聊 run 已绑定 send_message 时应允许正常完成', () => {
     const agent = manager.createAgent({
       name: 'Alice',

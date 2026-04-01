@@ -150,7 +150,7 @@ function cleanFallbackText(text: string): string {
 }
 
 function hasSubstantiveFallbackText(text: string): boolean {
-  return text.replace(/\s+/g, '').length >= 16;
+  return text.trim().length > 0;
 }
 
 function listRunAgentMessages(db: Db, runId: string): RunAgentMessageRow[] {
