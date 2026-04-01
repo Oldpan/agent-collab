@@ -102,6 +102,10 @@ export type ChannelMessage = {
   replyCount?: number;
   /** Present only when the message was synthesized from raw deltas as a fallback. */
   messageSource?: string;
+  /** Present when this message IS a task thread root. */
+  taskNumber?: number;
+  taskStatus?: string;
+  taskAssigneeName?: string | null;
 };
 
 export type ChannelTask = TaskInfo & {
@@ -217,6 +221,23 @@ export async function createChannelTask(
     body: JSON.stringify({ title, ...(description ? { description } : {}) }),
   });
   if (!res.ok) throw new Error(`Failed to create channel task: ${res.statusText}`);
+  return res.json();
+}
+
+export async function claimMessageAsTask(
+  channelId: string,
+  messageId: string,
+  title?: string,
+): Promise<ChannelTask> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks/claim-message`, {
+    method: "POST",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ messageId, ...(title ? { title } : {}) }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Failed to claim message as task`);
+  }
   return res.json();
 }
 

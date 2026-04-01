@@ -160,6 +160,10 @@ export type ChannelMessageEvent = {
     threadRootId?: string;
     /** Present only when the message was synthesized from raw deltas as a fallback. */
     messageSource?: string;
+    /** Present when this message IS a task thread root. */
+    taskNumber?: number;
+    taskStatus?: string;
+    taskAssigneeName?: string | null;
   };
 };
 
@@ -630,6 +634,8 @@ export type TaskInfo = {
   assigneeName?: string | null;
   linkedThreadId?: string | null;
   linkedThreadShortId?: string | null;
+  /** The channel_messages.message_id that IS this task's thread root */
+  messageId?: string | null;
   createdAt: number;
   updatedAt: number;
 };

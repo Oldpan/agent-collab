@@ -902,7 +902,7 @@ describe('internalAgentRouter', () => {
 
     expect(res.status).toBe(200);
     const body = await res.json() as { results: Array<{ taskNumber: number; success: boolean }> };
-    expect(body.results).toEqual([{ taskNumber: 7, success: true }]);
+    expect(body.results).toEqual([{ taskNumber: 7, success: true, messageId: null }]);
 
     const binding = db.prepare(
       `SELECT channel_id as channelId, thread_root_id as threadRootId, task_id as taskId

@@ -1,10 +1,10 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon, Settings2Icon, MessageSquareOffIcon } from "lucide-react";
+import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon, Settings2Icon, MessageSquareOffIcon, ListTodoIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChannelInfo, AgentInfo } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
-import { clearChannelChat, subscribeChannelAgent, unsubscribeChannelAgent, updateChannel } from "@/lib/api";
+import { clearChannelChat, subscribeChannelAgent, unsubscribeChannelAgent, updateChannel, claimMessageAsTask } from "@/lib/api";
 import { useChannelStream, type ChannelNotice } from "@/hooks/useChannelStream";
 import { ThreadPanel } from "./ThreadPanel";
 import { Streamdown } from "streamdown";
@@ -59,18 +59,69 @@ function renderContent(content: string) {
 function MessageRow({
   message,
   onReply,
+  onMakeTask,
   agents,
 }: {
   message: ChannelMessage;
   onReply: (message: ChannelMessage) => void;
+  onMakeTask?: (message: ChannelMessage) => void;
   agents: AgentInfo[];
 }) {
   const isSystem = message.senderType === "system";
   const isUser = message.senderType === "user";
   const replyCount = message.replyCount ?? 0;
   const showFallbackBadge = message.messageSource === "delta_fallback" && !isUser;
+  const canMakeTask = !isSystem && message.taskNumber == null && onMakeTask != null;
 
   if (isSystem) {
+    // Task message — render as a task card in the chat flow
+    if (message.taskNumber != null) {
+      const statusColors: Record<string, string> = {
+        todo: 'bg-[#fff6b8] text-zinc-700 border-zinc-400',
+        in_progress: 'bg-[#d8efff] text-blue-800 border-blue-400',
+        in_review: 'bg-[#ffebd8] text-orange-800 border-orange-400',
+        done: 'bg-[#d8f8c8] text-green-800 border-green-400',
+      };
+      const statusLabel: Record<string, string> = {
+        todo: 'todo', in_progress: 'in progress', in_review: 'in review', done: 'done',
+      };
+      const status = message.taskStatus ?? 'todo';
+      return (
+        <div className="px-4 py-1.5">
+          <div className="group relative flex items-start gap-2 rounded-md border-2 border-zinc-900 bg-[#fffdf0] px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
+            {/* Task number chip */}
+            <span className="mt-0.5 shrink-0 rounded border border-zinc-400 bg-zinc-100 px-1.5 py-0.5 text-[10px] font-bold text-zinc-500">
+              #{message.taskNumber}
+            </span>
+            {/* Title */}
+            <span className="flex-1 text-sm font-medium text-zinc-800 leading-snug">
+              {message.content}
+            </span>
+            {/* Status badge */}
+            <span className={cn('shrink-0 rounded border px-1.5 py-0.5 text-[10px] font-semibold', statusColors[status] ?? statusColors.todo)}>
+              {statusLabel[status] ?? status}
+            </span>
+            {/* Assignee */}
+            {message.taskAssigneeName && (
+              <span className="shrink-0 text-[10px] text-zinc-500">@{message.taskAssigneeName}</span>
+            )}
+            {/* Reply button */}
+            <button
+              type="button"
+              onClick={() => onReply(message)}
+              className="absolute right-2 top-2 hidden items-center gap-1 rounded border border-zinc-300 bg-white/80 px-2 py-0.5 text-[10px] text-zinc-600 hover:bg-white group-hover:flex"
+              aria-label="Open task thread"
+            >
+              <MessageSquareIcon className="size-3" />
+              {replyCount > 0 ? `${replyCount} replies` : 'Thread'}
+            </button>
+            {/* Time */}
+            <span className="shrink-0 text-[10px] text-zinc-400">{formatTime(message.createdAt)}</span>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="px-4 py-2">
         <div className="rounded-md border border-zinc-300 bg-white/70 px-3 py-2 text-xs text-zinc-600 shadow-[2px_2px_0_0_rgba(0,0,0,0.06)]">
@@ -113,18 +164,34 @@ function MessageRow({
       {/* Content wrapper with relative positioning for reply button */}
       <div className={cn("relative min-w-0", isUser ? "flex items-end flex-col" : "flex items-start flex-col")}>
         {/* Reply button - positioned at the top of the bubble, away from avatar */}
-        <button
-          type="button"
-          onClick={() => onReply(message)}
+        <div
           className={cn(
-            "absolute top-0 z-10 hidden rounded border-2 border-zinc-900 bg-[#fff9d8] px-2 py-0.5 text-[11px] font-medium text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)] hover:bg-[#ffd54a] group-hover:flex items-center gap-1",
-            isUser ? "left-0 -translate-x-full mr-2" : "right-0 translate-x-full ml-2"
+            "absolute top-0 z-10 hidden group-hover:flex items-center gap-1",
+            isUser ? "left-0 -translate-x-full mr-2 flex-row-reverse" : "right-0 translate-x-full ml-2",
           )}
-          aria-label="Reply in thread"
         >
-          <MessageSquareIcon className="size-3" />
-          Reply
-        </button>
+          <button
+            type="button"
+            onClick={() => onReply(message)}
+            className="rounded border-2 border-zinc-900 bg-[#fff9d8] px-2 py-0.5 text-[11px] font-medium text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)] hover:bg-[#ffd54a] flex items-center gap-1"
+            aria-label="Reply in thread"
+          >
+            <MessageSquareIcon className="size-3" />
+            Reply
+          </button>
+          {canMakeTask && (
+            <button
+              type="button"
+              onClick={() => onMakeTask(message)}
+              className="rounded border-2 border-zinc-900 bg-[#d8f8c8] px-2 py-0.5 text-[11px] font-medium text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)] hover:bg-[#b8f0a8] flex items-center gap-1"
+              aria-label="Make task"
+              title="Convert to task"
+            >
+              <ListTodoIcon className="size-3" />
+              Task
+            </button>
+          )}
+        </div>
 
         <div className="flex items-baseline gap-1.5">
           <span className="text-[11px] font-semibold text-zinc-700">{message.senderName}</span>
@@ -169,6 +236,20 @@ function MessageRow({
             <MessageSquareIcon className="size-3" />
             {replyCount} {replyCount === 1 ? "reply" : "replies"}
           </button>
+        )}
+        {/* Task badge — shown when this message was promoted to a task */}
+        {message.taskNumber != null && (
+          <div className="mt-1 flex items-center gap-1 text-[10px] text-zinc-500">
+            <span className="rounded border border-zinc-300 bg-zinc-100 px-1.5 py-0.5 font-bold">
+              task #{message.taskNumber}
+            </span>
+            <span className="rounded border border-zinc-300 bg-zinc-50 px-1.5 py-0.5">
+              {message.taskStatus ?? 'todo'}
+            </span>
+            {message.taskAssigneeName && (
+              <span>@{message.taskAssigneeName}</span>
+            )}
+          </div>
         )}
       </div>
     </div>
@@ -671,6 +752,29 @@ export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq, onChan
     [agents, channel.channelId],
   );
   const [openThread, setOpenThread] = useState<ChannelMessage | null>(null);
+  // Local task overrides: messageId → partial fields added after claim-message
+  const [taskOverrides, setTaskOverrides] = useState<Map<string, Pick<ChannelMessage, 'taskNumber' | 'taskStatus'>>>(new Map());
+
+  const handleOpenTaskThread = useCallback((threadShortId: string) => {
+    const msg = messages.find((m) => m.id.slice(0, 8) === threadShortId);
+    if (msg) {
+      setOpenThread(msg);
+    }
+    setActiveTab("chat");
+  }, [messages]);
+
+  const handleMakeTask = useCallback(async (message: ChannelMessage) => {
+    try {
+      const task = await claimMessageAsTask(channel.channelId, message.id);
+      setTaskOverrides((prev) => {
+        const next = new Map(prev);
+        next.set(message.id, { taskNumber: task.taskNumber, taskStatus: task.status });
+        return next;
+      });
+    } catch (err) {
+      console.error('[make-task]', err);
+    }
+  }, [channel.channelId]);
 
   // Thread panel resize state
   const [threadPanelWidth, setThreadPanelWidth] = useState(320); // default 320px (w-80)
@@ -828,6 +932,7 @@ export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq, onChan
         <TasksTab
           channelId={channel.channelId}
           activeThreadShortId={openThread ? openThread.id.slice(0, 8) : undefined}
+          onOpenThread={handleOpenTaskThread}
         />
       ) : activeTab === "members" ? (
         <MembersTab members={channelMembers} />
@@ -839,11 +944,11 @@ export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq, onChan
           onChannelUpdated={onChannelUpdated}
         />
       ) : (
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex min-h-0 flex-1 overflow-hidden">
           {/* Main channel messages */}
-          <div className={cn("flex flex-col overflow-hidden", openThread ? "flex-1" : "w-full")}>
+          <div className={cn("flex min-h-0 flex-col overflow-hidden", openThread ? "flex-1" : "w-full")}>
             <ChannelStatusBar key={channel.channelId} notices={notices} />
-            <div ref={scrollRef} className="flex-1 overflow-y-auto py-2">
+            <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto py-2">
               {messages.length === 0 ? (
                 <div className="flex h-full items-center justify-center">
                   <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fff8d8] px-6 py-5 text-center shadow-[2px_2px_0_0_rgba(0,0,0,0.06)]">
@@ -867,14 +972,19 @@ export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq, onChan
                       </button>
                     </div>
                   )}
-                  {messages.map((message) => (
-                    <MessageRow
-                      key={message.id}
-                      message={message}
-                      onReply={setOpenThread}
-                      agents={channelMembers}
-                    />
-                  ))}
+                  {messages.map((message) => {
+                    const override = taskOverrides.get(message.id);
+                    const merged = override ? { ...message, ...override } : message;
+                    return (
+                      <MessageRow
+                        key={message.id}
+                        message={merged}
+                        onReply={setOpenThread}
+                        onMakeTask={handleMakeTask}
+                        agents={channelMembers}
+                      />
+                    );
+                  })}
                 </>
               )}
             </div>
@@ -883,7 +993,7 @@ export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq, onChan
 
           {/* Thread panel (slide-in from right) */}
           {openThread && (
-            <div className="flex shrink-0 overflow-hidden">
+            <div className="flex h-full shrink-0 overflow-hidden">
               {/* Resize handle */}
               <div
                 className={cn(
@@ -893,7 +1003,7 @@ export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq, onChan
                 onMouseDown={handleResizeStart}
                 title="Drag to resize"
               />
-              <div style={{ width: threadPanelWidth }}>
+              <div className="h-full" style={{ width: threadPanelWidth }}>
                 <ThreadPanel
                   channelId={channel.channelId}
                   channelName={channel.name}

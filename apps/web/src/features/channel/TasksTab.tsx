@@ -14,6 +14,7 @@ import { cn } from "@/lib/utils";
 type TasksTabProps = {
   channelId: string;
   activeThreadShortId?: string;
+  onOpenThread?: (threadShortId: string) => void;
 };
 
 const TASK_ORDER: TaskInfo["status"][] = ["todo", "in_progress", "in_review", "done"];
@@ -49,7 +50,7 @@ function statusClassName(status: TaskInfo["status"]): string {
   }
 }
 
-export function TasksTab({ channelId, activeThreadShortId }: TasksTabProps) {
+export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: TasksTabProps) {
   const [tasks, setTasks] = useState<ChannelTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -204,8 +205,8 @@ export function TasksTab({ channelId, activeThreadShortId }: TasksTabProps) {
         )}
         <div className="mt-3 rounded-sm border border-zinc-900/10 bg-white/60 px-3 py-2 text-xs text-zinc-600">
           {activeThreadShortId
-            ? <>Current thread: <span className="font-mono">{activeThreadShortId}</span>. You can bind eligible tasks to this thread below.</>
-            : "Open a thread from the chat tab to bind a task from the board."}
+            ? <>Current thread: <span className="font-mono">{activeThreadShortId}</span>. Tasks without a linked thread can be bound here.</>
+            : "New tasks automatically create a thread in Chat. Click a task's thread link to open it."}
         </div>
       </div>
 
@@ -283,9 +284,19 @@ export function TasksTab({ channelId, activeThreadShortId }: TasksTabProps) {
                                 </div>
                               )}
                               <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
-                                <span className="rounded-full border border-dashed border-zinc-300 bg-[#fffdf4] px-2 py-0.5">
-                                  {task.linkedThreadShortId ? `Thread ${task.linkedThreadShortId}` : "No linked thread"}
-                                </span>
+                                {task.linkedThreadShortId ? (
+                                  <button
+                                    type="button"
+                                    onClick={() => onOpenThread?.(task.linkedThreadShortId!)}
+                                    className="rounded-full border border-zinc-400 bg-[#d8efff] px-2 py-0.5 text-blue-700 hover:bg-[#b8e0ff] transition-colors"
+                                  >
+                                    Thread {task.linkedThreadShortId}
+                                  </button>
+                                ) : (
+                                  <span className="rounded-full border border-dashed border-zinc-300 bg-[#fffdf4] px-2 py-0.5">
+                                    No linked thread
+                                  </span>
+                                )}
                                 {!task.assigneeName && (
                                   <span className="rounded-full border border-dashed border-zinc-300 bg-[#fffdf4] px-2 py-0.5">
                                     Unassigned

@@ -268,10 +268,18 @@ server.tool(
       const formatted = d.tasks.map((t) => {
         const assignee = t.claimedByName ? ` → @${t.claimedByName}` : '';
         const creator = t.createdByName ? ` (by @${t.createdByName})` : '';
-        return `#t${t.taskNumber} [${t.status}] "${t.title}"${assignee}${creator}`;
+        const msgShort = t.messageId ? t.messageId.slice(0, 8) : null;
+        const msgTag = msgShort ? `  msg=${msgShort}` : '';
+        return `#t${t.taskNumber} [${t.status}] "${t.title}"${assignee}${creator}${msgTag}`;
       }).join('\n');
 
-      return toText(`## Task Board for ${channel} (${d.tasks.length} tasks)\n\n${formatted}`);
+      const threadHints = d.tasks
+        .filter((t) => t.messageId)
+        .map((t) => `#t${t.taskNumber} → send_message to "${channel}:${t.messageId!.slice(0, 8)}"`)
+        .join('\n');
+      const hint = threadHints ? `\n\nTo reply in a task's thread:\n${threadHints}` : '';
+
+      return toText(`## Task Board for ${channel} (${d.tasks.length} tasks)\n\n${formatted}${hint}`);
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }
@@ -294,9 +302,59 @@ server.tool(
       const { ok, data } = await apiFetch('/tasks', { method: 'POST', body: { channel, tasks } });
       if (!ok) return toText(`Error: ${errText(data, 'create tasks failed')}`);
 
-      const d = data as { tasks?: Array<{ taskNumber: number; title: string }> };
-      const created = d.tasks?.map((t) => `#t${t.taskNumber} "${t.title}"`).join('\n') ?? '';
-      return toText(`Created ${d.tasks?.length ?? 0} task(s) in ${channel}:\n${created}`);
+      const d = data as { tasks?: Array<{ taskNumber: number; title: string; messageId?: string }> };
+      const created = d.tasks?.map((t) => {
+        const msgShort = t.messageId ? t.messageId.slice(0, 8) : null;
+        return msgShort ? `#t${t.taskNumber} msg=${msgShort} "${t.title}"` : `#t${t.taskNumber} "${t.title}"`;
+      }).join('\n') ?? '';
+      const threadHints = d.tasks
+        ?.filter((t) => t.messageId)
+        .map((t) => `#t${t.taskNumber} → send_message to "${channel}:${t.messageId!.slice(0, 8)}"`)
+        .join('\n') ?? '';
+      const hint = threadHints ? `\n\nTo follow up in each task's thread:\n${threadHints}` : '';
+      return toText(`Created ${d.tasks?.length ?? 0} task(s) in ${channel}:\n${created}${hint}`);
+    } catch (err: unknown) {
+      return toText(`Error: ${(err as Error).message}`);
+    }
+  },
+);
+
+// ── claim_message ─────────────────────────────────────────────────────────────
+
+server.tool(
+  'claim_message',
+  `Convert one or more existing messages into tasks and claim them. Use the 8-character msg= ID from received messages or read_history. Each message becomes the thread root for that task — reply in its thread with send_message(target="${'#channel:msgid'}"). If a message is already a task, the claim fails.`,
+  {
+    channel: z.string().describe("The channel — e.g. '#engineering'"),
+    message_ids: z.array(z.string()).describe("8-char message IDs (the msg= value from check_messages or read_history, e.g. ['a1b2c3d4'])"),
+    title: z.string().optional().describe('Optional task title override. If omitted, uses the message content (truncated to 120 chars).'),
+  },
+  async ({ channel, message_ids, title }) => {
+    try {
+      const { ok, data } = await apiFetch('/tasks/claim-message', {
+        method: 'POST',
+        body: { channel, message_ids, title },
+      });
+      if (!ok) return toText(`Error: ${errText(data, 'claim-message failed')}`);
+
+      const d = data as { results?: Array<{ messageId: string; taskNumber?: number; success: boolean; reason?: string }> };
+      const lines = (d.results ?? []).map((r) => {
+        const msgShort = r.messageId.slice(0, 8);
+        if (r.success) return `msg:${msgShort} → #t${r.taskNumber}: claimed`;
+        return `msg:${msgShort}: FAILED — ${r.reason ?? 'unknown error'}`;
+      });
+      const succeeded = (d.results ?? []).filter((r) => r.success).length;
+      const failed = (d.results ?? []).length - succeeded;
+      let summary = `${succeeded} claimed`;
+      if (failed > 0) summary += `, ${failed} failed`;
+
+      const threadHints = (d.results ?? [])
+        .filter((r) => r.success)
+        .map((r) => `#t${r.taskNumber} → send_message to "${channel}:${r.messageId.slice(0, 8)}"`)
+        .join('\n');
+      const hint = threadHints ? `\n\nFollow up in each task's thread:\n${threadHints}` : '';
+
+      return toText(`Claim results (${summary}):\n${lines.join('\n')}${hint}`);
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }
@@ -320,7 +378,7 @@ server.tool(
       });
       if (!ok) return toText(`Error: ${errText(data, 'claim tasks failed')}`);
 
-      const d = data as { results?: Array<{ taskNumber: number; success: boolean; reason?: string }> };
+      const d = data as { results?: Array<{ taskNumber: number; success: boolean; reason?: string; messageId?: string | null }> };
       const lines = (d.results ?? []).map((r) =>
         r.success ? `#t${r.taskNumber}: claimed` : `#t${r.taskNumber}: FAILED — ${r.reason ?? 'already claimed'}`,
       );
@@ -328,7 +386,12 @@ server.tool(
       const failed = (d.results ?? []).length - succeeded;
       let summary = `${succeeded} claimed`;
       if (failed > 0) summary += `, ${failed} failed`;
-      return toText(`Claim results (${summary}):\n${lines.join('\n')}`);
+      const threadHints = (d.results ?? [])
+        .filter((r) => r.success && r.messageId)
+        .map((r) => `#t${r.taskNumber} → send_message to "${channel}:${r.messageId!.slice(0, 8)}"`)
+        .join('\n');
+      const hint = threadHints ? `\n\nFollow up in each task's thread:\n${threadHints}` : '';
+      return toText(`Claim results (${summary}):\n${lines.join('\n')}${hint}`);
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }
@@ -408,6 +471,9 @@ type HistoryMessage = {
   content: string;
   seq: number;
   createdAt: string;
+  taskNumber?: number | null;
+  taskStatus?: string | null;
+  taskAssigneeName?: string | null;
 };
 
 type ChannelItem = { name: string; joined: boolean; description?: string };
@@ -419,4 +485,5 @@ type TaskItem = {
   status: string;
   claimedByName: string | null;
   createdByName: string | null;
+  messageId?: string | null;
 };

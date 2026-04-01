@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 41;
+const LATEST_VERSION = 42;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -765,5 +765,14 @@ export function migrate(db: Db): void {
       CREATE INDEX IF NOT EXISTS idx_conversations_user_id ON conversations(user_id);
     `);
     db.exec(`UPDATE schema_version SET version = 41;`);
+  }
+
+  if (current < 42) {
+    // Task-Thread unified: each task links to the channel_messages row that IS its thread root
+    db.exec(`
+      ALTER TABLE tasks ADD COLUMN message_id TEXT REFERENCES channel_messages(message_id) ON DELETE SET NULL;
+      CREATE INDEX IF NOT EXISTS idx_tasks_message_id ON tasks(message_id);
+    `);
+    db.exec(`UPDATE schema_version SET version = 42;`);
   }
 }

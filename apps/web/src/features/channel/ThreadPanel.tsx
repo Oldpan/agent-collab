@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { XIcon, SendIcon, MessageSquareIcon } from "lucide-react";
+import { XIcon, SendIcon, MessageSquareIcon, ChevronDownIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentInfo } from "@agent-collab/protocol";
 import {
@@ -115,7 +115,7 @@ function ThreadSummaryCard({
   const hasBoundTask = Boolean(summary?.boundTask);
 
   return (
-    <div className="border-b-2 border-zinc-300 bg-[#fff7cc] px-4 py-3">
+    <div className="shrink-0 max-h-48 overflow-y-auto border-b-2 border-zinc-300 bg-[#fff7cc] px-4 py-3">
       <div className="grid gap-2 md:grid-cols-3">
         <div className="rounded-md border-2 border-zinc-900 bg-[#fffdf4] px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
           <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Bound task</div>
@@ -348,6 +348,7 @@ export function ThreadPanel({
   const { messages, summary, sendMessage, loadMore, hasMore } = useThreadStream(channelId, threadRootId);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isRootUser = rootMessage.senderType === "user";
+  const [showSummary, setShowSummary] = useState(false);
   const [summaryState, setSummaryState] = useState<ThreadCollaborationSummary | null>(null);
   const [availableTasks, setAvailableTasks] = useState<ChannelTask[]>([]);
   const [selectedTaskNumber, setSelectedTaskNumber] = useState("");
@@ -407,26 +408,38 @@ export function ThreadPanel({
   }, [channelId, threadRootId]);
 
   return (
-    <div className={cn("flex h-full flex-col border-l-2 border-zinc-900 bg-[#fefce8]", className)}>
+    <div className={cn("flex h-full min-h-0 flex-col border-l-2 border-zinc-900 bg-[#fefce8]", className)}>
       {/* Header */}
-      <div className="flex items-center justify-between border-b-2 border-zinc-900 bg-[#fffdf5] px-4 py-3 shadow-[0_2px_0_0_rgba(0,0,0,0.08)]">
+      <div className="flex shrink-0 items-center justify-between border-b-2 border-zinc-900 bg-[#fffdf5] px-4 py-3 shadow-[0_2px_0_0_rgba(0,0,0,0.08)]">
         <div className="flex items-center gap-2">
           <MessageSquareIcon className="size-4 text-zinc-600" />
           <span className="text-sm font-semibold text-zinc-900">Thread</span>
           <span className="text-xs text-zinc-400">in #{channelName}</span>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-md border-2 border-zinc-900 bg-[#fff9d8] p-1 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)] hover:bg-[#fff1a9] cursor-pointer"
-          aria-label="Close thread"
-        >
-          <XIcon className="size-3.5 text-zinc-700" />
-        </button>
+        <div className="flex items-center gap-1.5">
+          <button
+            type="button"
+            onClick={() => setShowSummary((v) => !v)}
+            className="flex items-center gap-1 rounded-md border-2 border-zinc-900 bg-[#fff9d8] px-2 py-1 text-[11px] text-zinc-600 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)] hover:bg-[#fff1a9] cursor-pointer"
+            aria-label="Toggle summary"
+            title="Toggle task/member summary"
+          >
+            Info
+            <ChevronDownIcon className={cn("size-3 transition-transform", showSummary && "rotate-180")} />
+          </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md border-2 border-zinc-900 bg-[#fff9d8] p-1 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)] hover:bg-[#fff1a9] cursor-pointer"
+            aria-label="Close thread"
+          >
+            <XIcon className="size-3.5 text-zinc-700" />
+          </button>
+        </div>
       </div>
 
       {/* Root message */}
-      <div className="border-b-2 border-dashed border-zinc-300 bg-[#fffdf5]">
+      <div className="shrink-0 border-b-2 border-dashed border-zinc-300 bg-[#fffdf5]">
         <div className="flex gap-2.5 px-4 py-3">
           <div
             className={cn(
@@ -441,8 +454,21 @@ export function ThreadPanel({
               <span className="text-[11px] font-semibold text-zinc-700">{rootMessage.senderName}</span>
               <span className="text-[10px] text-zinc-400">{formatTime(rootMessage.createdAt)}</span>
             </div>
-            <div className="mt-0.5 text-sm text-zinc-800" style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
-              {renderContent(rootMessage.content)}
+            <div className="mt-0.5 text-sm text-zinc-800">
+              {isRootUser ? (
+                <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
+                  {renderContent(rootMessage.content)}
+                </span>
+              ) : (
+                <Streamdown
+                  className={cn("text-sm [&>*:first-child]:mt-0 [&>*:last-child]:mb-0", streamdownRootClass)}
+                  components={streamdownComponents}
+                  rehypePlugins={safeRehypePlugins}
+                  remarkPlugins={safeRemarkPlugins}
+                >
+                  {escapeHtmlOutsideCodeBlocks(rootMessage.content)}
+                </Streamdown>
+              )}
             </div>
           </div>
         </div>
@@ -453,19 +479,21 @@ export function ThreadPanel({
         )}
       </div>
 
-      <ThreadSummaryCard
-        summary={summaryState}
-        availableTasks={availableTasks}
-        selectedTaskNumber={selectedTaskNumber}
-        binding={binding}
-        error={bindingError}
-        onSelectTask={setSelectedTaskNumber}
-        onBind={handleBind}
-        onUnbind={handleUnbind}
-      />
+      {showSummary && (
+        <ThreadSummaryCard
+          summary={summaryState}
+          availableTasks={availableTasks}
+          selectedTaskNumber={selectedTaskNumber}
+          binding={binding}
+          error={bindingError}
+          onSelectTask={setSelectedTaskNumber}
+          onBind={handleBind}
+          onUnbind={handleUnbind}
+        />
+      )}
 
       {/* Thread replies */}
-      <div ref={scrollRef} className="flex-1 overflow-y-auto py-2">
+      <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto py-2">
         {messages.length === 0 ? (
           <div className="px-4 py-6 text-center text-xs text-zinc-400">
             No replies yet. Be the first to reply!

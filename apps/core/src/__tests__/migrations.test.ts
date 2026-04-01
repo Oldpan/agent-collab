@@ -21,10 +21,10 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('schema_version 应为最新版本 41', () => {
+  it('schema_version 应为最新版本 42', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBeGreaterThanOrEqual(41);
+    expect(row.version).toBeGreaterThanOrEqual(42);
     db.close();
   });
 
@@ -156,6 +156,13 @@ describe('migrations', () => {
     const db = createTestDb();
     const cols = db.prepare("PRAGMA table_info('channel_messages')").all() as Array<{ name: string }>;
     expect(cols.map((c) => c.name)).toContain('message_source');
+    db.close();
+  });
+
+  it('tasks 表应包含 message_id 列', () => {
+    const db = createTestDb();
+    const cols = db.prepare("PRAGMA table_info('tasks')").all() as Array<{ name: string }>;
+    expect(cols.map((c) => c.name)).toContain('message_id');
     db.close();
   });
 });

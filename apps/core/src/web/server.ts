@@ -720,11 +720,14 @@ export async function startServer(params: {
         ? db.prepare(
             `SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
                     cm.content, cm.created_at as createdAt, cm.seq, cm.message_source as messageSource,
-                    COUNT(replies.message_id) as replyCount
+                    COUNT(replies.message_id) as replyCount,
+                    t.task_number as taskNumber, t.status as taskStatus,
+                    t.claimed_by_name as taskAssigneeName
              FROM channel_messages cm
              LEFT JOIN channel_messages replies
                ON replies.channel_id = cm.channel_id
                AND replies.thread_root_id = SUBSTR(cm.message_id, 1, 8)
+             LEFT JOIN tasks t ON t.message_id = cm.message_id
              WHERE cm.channel_id = ? AND cm.thread_root_id IS NULL AND cm.seq < ?
              GROUP BY cm.message_id
              ORDER BY cm.seq DESC LIMIT ?`,
@@ -732,16 +735,19 @@ export async function startServer(params: {
         : db.prepare(
             `SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
                     cm.content, cm.created_at as createdAt, cm.seq, cm.message_source as messageSource,
-                    COUNT(replies.message_id) as replyCount
+                    COUNT(replies.message_id) as replyCount,
+                    t.task_number as taskNumber, t.status as taskStatus,
+                    t.claimed_by_name as taskAssigneeName
              FROM channel_messages cm
              LEFT JOIN channel_messages replies
                ON replies.channel_id = cm.channel_id
                AND replies.thread_root_id = SUBSTR(cm.message_id, 1, 8)
+             LEFT JOIN tasks t ON t.message_id = cm.message_id
              WHERE cm.channel_id = ? AND cm.thread_root_id IS NULL
              GROUP BY cm.message_id
              ORDER BY cm.seq DESC LIMIT ?`,
           ).all(req.params.id, limit)
-      ) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; seq: number; replyCount: number; messageSource: string | null }>;
+      ) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; seq: number; replyCount: number; messageSource: string | null; taskNumber: number | null; taskStatus: string | null; taskAssigneeName: string | null }>;
       return {
         messages: rows.reverse().map((r) => ({
           id: r.id,
@@ -752,6 +758,7 @@ export async function startServer(params: {
           seq: r.seq,
           replyCount: r.replyCount,
           ...(r.messageSource ? { messageSource: r.messageSource } : {}),
+          ...(r.taskNumber != null ? { taskNumber: r.taskNumber, taskStatus: r.taskStatus, taskAssigneeName: r.taskAssigneeName } : {}),
         })),
       };
     },
@@ -1126,22 +1133,24 @@ export async function startServer(params: {
       const rows = req.query.status && req.query.status !== 'all'
         ? db.prepare(
             `SELECT t.task_id as taskId, t.channel_id as channelId, t.task_number as taskNumber,
-                    title, description, status,
-                    claimed_by_agent_id as assigneeId, claimed_by_name as assigneeName,
-                    created_at as createdAt, updated_at as updatedAt,
-                    b.thread_root_id as linkedThreadId,
-                    b.thread_root_id as linkedThreadShortId
+                    t.title, t.description, t.status,
+                    t.claimed_by_agent_id as assigneeId, t.claimed_by_name as assigneeName,
+                    t.created_at as createdAt, t.updated_at as updatedAt,
+                    t.message_id as messageId,
+                    COALESCE(SUBSTR(t.message_id, 1, 8), b.thread_root_id) as linkedThreadId,
+                    COALESCE(SUBSTR(t.message_id, 1, 8), b.thread_root_id) as linkedThreadShortId
              FROM tasks t
              LEFT JOIN thread_task_bindings b ON b.task_id = t.task_id
              WHERE t.channel_id = ? AND t.status = ? ORDER BY t.task_number ASC`,
           ).all(req.params.id, req.query.status)
         : db.prepare(
             `SELECT t.task_id as taskId, t.channel_id as channelId, t.task_number as taskNumber,
-                    title, description, status,
-                    claimed_by_agent_id as assigneeId, claimed_by_name as assigneeName,
-                    created_at as createdAt, updated_at as updatedAt,
-                    b.thread_root_id as linkedThreadId,
-                    b.thread_root_id as linkedThreadShortId
+                    t.title, t.description, t.status,
+                    t.claimed_by_agent_id as assigneeId, t.claimed_by_name as assigneeName,
+                    t.created_at as createdAt, t.updated_at as updatedAt,
+                    t.message_id as messageId,
+                    COALESCE(SUBSTR(t.message_id, 1, 8), b.thread_root_id) as linkedThreadId,
+                    COALESCE(SUBSTR(t.message_id, 1, 8), b.thread_root_id) as linkedThreadShortId
              FROM tasks t
              LEFT JOIN thread_task_bindings b ON b.task_id = t.task_id
              WHERE t.channel_id = ? ORDER BY t.task_number ASC`,
@@ -1160,14 +1169,72 @@ export async function startServer(params: {
       if (!title) { reply.code(400); return { error: 'title is required' }; }
       const now = Date.now();
       const taskId = randomUUID();
+      const messageId = randomUUID();
       const seqRow = db.prepare('SELECT MAX(task_number) as maxNum FROM tasks WHERE channel_id = ?').get(req.params.id) as { maxNum: number | null };
       const taskNumber = (seqRow.maxNum ?? 0) + 1;
+      const msgSeqRow = db.prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?').get(req.params.id) as { maxSeq: number | null };
+      const seq = (msgSeqRow.maxSeq ?? 0) + 1;
+      const target = `#${channel.name}`;
+
+      // Insert the task message (becomes the thread root)
       db.prepare(
-        `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, 'todo', ?, ?)`,
-      ).run(taskId, req.params.id, taskNumber, title, description ?? null, now, now);
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
+         VALUES(?, ?, 'system', 'system', 'system', ?, ?, ?, ?, NULL, NULL, 'task')`,
+      ).run(messageId, req.params.id, target, title, seq, now);
+
+      // Insert the task, linking it to the message
+      db.prepare(
+        `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, 'todo', ?, ?, ?)`,
+      ).run(taskId, req.params.id, taskNumber, title, description ?? null, messageId, now, now);
+
+      const shortId = messageId.slice(0, 8);
+      // Broadcast the task message to channel subscribers
+      broadcastToChannel(req.params.id, {
+        type: 'channel.message',
+        message: {
+          id: messageId, senderName: 'system', senderType: 'agent', content: title,
+          createdAt: new Date(now).toISOString(), seq,
+          taskNumber, taskStatus: 'todo', taskAssigneeName: null,
+        },
+      });
+
       reply.code(201);
-      return { taskId, channelId: req.params.id, taskNumber, title, description, status: 'todo', assigneeId: null, assigneeName: null, createdAt: now, updatedAt: now };
+      return { taskId, channelId: req.params.id, taskNumber, title, description, status: 'todo', assigneeId: null, assigneeName: null, messageId, linkedThreadId: shortId, linkedThreadShortId: shortId, createdAt: now, updatedAt: now };
+    },
+  );
+
+  // POST /api/channels/:id/tasks/claim-message — promote a message to a task
+  app.post<{ Params: { id: string }; Body: { messageId: string; title?: string } }>(
+    '/api/channels/:id/tasks/claim-message',
+    async (req, reply) => {
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const { messageId, title } = req.body ?? {};
+      if (!messageId) { reply.code(400); return { error: 'messageId is required' }; }
+      // Check message exists and belongs to this channel
+      const msg = db.prepare(
+        `SELECT message_id, content, thread_root_id FROM channel_messages WHERE message_id LIKE ? AND channel_id = ?`,
+      ).get(`${messageId}%`, req.params.id) as { message_id: string; content: string; thread_root_id: string | null } | undefined;
+      if (!msg) { reply.code(404); return { error: 'Message not found' }; }
+      if (msg.thread_root_id) { reply.code(400); return { error: 'Cannot promote a thread reply to task' }; }
+      // Check not already a task
+      const existing = db.prepare(`SELECT task_id FROM tasks WHERE message_id = ?`).get(msg.message_id) as { task_id: string } | undefined;
+      if (existing) { reply.code(409); return { error: 'Message is already a task' }; }
+      const now = Date.now();
+      const taskId = randomUUID();
+      const seqRow = db.prepare('SELECT MAX(task_number) as maxNum FROM tasks WHERE channel_id = ?').get(req.params.id) as { maxNum: number | null };
+      const taskNumber = (seqRow.maxNum ?? 0) + 1;
+      const taskTitle = title?.trim() || msg.content.slice(0, 120);
+      db.prepare(
+        `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
+         VALUES(?, ?, ?, ?, 'todo', ?, ?, ?)`,
+      ).run(taskId, req.params.id, taskNumber, taskTitle, msg.message_id, now, now);
+      // Update the message kind to 'task'
+      db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.message_id);
+      const shortId = msg.message_id.slice(0, 8);
+      reply.code(201);
+      return { taskId, channelId: req.params.id, taskNumber, title: taskTitle, status: 'todo', messageId: msg.message_id, linkedThreadId: shortId, linkedThreadShortId: shortId, assigneeId: null, assigneeName: null, createdAt: now, updatedAt: now };
     },
   );
 
@@ -1189,7 +1256,10 @@ export async function startServer(params: {
       const row = db.prepare(
         `SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
                 title, description, status, claimed_by_agent_id as assigneeId,
-                claimed_by_name as assigneeName, created_at as createdAt, updated_at as updatedAt
+                claimed_by_name as assigneeName, message_id as messageId,
+                SUBSTR(message_id, 1, 8) as linkedThreadShortId,
+                SUBSTR(message_id, 1, 8) as linkedThreadId,
+                created_at as createdAt, updated_at as updatedAt
          FROM tasks WHERE channel_id = ? AND task_number = ?`,
       ).get(req.params.id, taskNumber);
       return row;

@@ -33,6 +33,28 @@ export function getBoundTaskForThread(
 ): BoundThreadTask | undefined {
   const threadRootId = normalizeThreadRootId(params.threadRootId);
   if (!threadRootId) return undefined;
+
+  // New design: task IS the thread root (message_id short prefix matches)
+  const byMessageId = db.prepare(
+    `SELECT t.task_id as taskId,
+            t.channel_id as channelId,
+            SUBSTR(t.message_id, 1, 8) as threadRootId,
+            SUBSTR(t.message_id, 1, 8) as linkedThreadId,
+            SUBSTR(t.message_id, 1, 8) as linkedThreadShortId,
+            t.task_number as taskNumber,
+            t.title as title,
+            t.description as description,
+            t.status as status,
+            t.claimed_by_agent_id as assigneeId,
+            t.claimed_by_name as assigneeName,
+            t.created_at as boundAt
+     FROM tasks t
+     WHERE t.channel_id = ? AND SUBSTR(t.message_id, 1, 8) = ?
+     LIMIT 1`,
+  ).get(params.channelId, threadRootId) as BoundThreadTask | undefined;
+  if (byMessageId) return byMessageId;
+
+  // Legacy design: explicit thread_task_bindings table
   return db.prepare(
     `SELECT t.task_id as taskId,
             t.channel_id as channelId,
