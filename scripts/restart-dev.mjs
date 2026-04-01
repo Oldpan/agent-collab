@@ -1,20 +1,23 @@
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { execFileSync, spawnSync } from "node:child_process";
 
 const session = process.env.AGENT_COLLAB_TMUX_SESSION ?? "agent-collab";
 const target = process.argv[2];
+const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 const SERVICES = {
   core: {
     window: "0",
-    command: "cd /ai/code/agi/agent-collab && pnpm --filter @agent-collab/core dev",
+    command: `cd ${shellQuote(repoRoot)} && pnpm --filter @agent-collab/core run dev`,
   },
   web: {
     window: "1",
-    command: "cd /ai/code/agi/agent-collab && pnpm --filter @agent-collab/web dev",
+    command: `cd ${shellQuote(repoRoot)} && pnpm --filter @agent-collab/web run dev`,
   },
   node: {
     window: "2",
-    command: "cd /ai/code/agi/agent-collab && pnpm --filter @agent-collab/agent-node dev",
+    command: `cd ${shellQuote(repoRoot)} && pnpm --filter @agent-collab/agent-node run dev`,
   },
 };
 
@@ -77,4 +80,9 @@ function execTmux(args) {
 
 function sleep(ms) {
   return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function shellQuote(value) {
+  if (/^[A-Za-z0-9_./:-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
 }

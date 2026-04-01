@@ -14,7 +14,6 @@ function buildLocalMemoryGuide(workspacePath: string): string {
     'Use normal file read/edit tools against these paths when you need to inspect or update memory:',
     '- `MEMORY.md`',
     '- `notes/*.md`',
-    'Do not use MCP resource-reading tools such as `ReadMcpResourceTool` for local memory files.',
     'If a memory read/write attempt fails, do not loop on the same failing tool call. Switch to normal workspace file tools or explain the concrete blocker.',
   ].join('\n');
 }

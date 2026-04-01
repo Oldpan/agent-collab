@@ -12,6 +12,7 @@ import * as api from "@/lib/api";
 
 let nextId = 1;
 const createId = () => `msg-${nextId++}`;
+const ACTIVE_CONVERSATION_SYNC_INTERVAL_MS = 1500;
 
 function getDisplayRunId(turnId: string): string {
   return turnId.startsWith("replay-") ? turnId.slice("replay-".length) : turnId;
@@ -70,6 +71,33 @@ function appendActivityItem(
   return [...items, item].sort((a, b) => a.createdAt - b.createdAt);
 }
 
+function mergeMessagesById(
+  current: LiveMessage[],
+  incoming: LiveMessage[],
+): LiveMessage[] {
+  if (incoming.length === 0) return current;
+  const byId = new Map(current.map((message) => [message.id, message]));
+  for (const message of incoming) {
+    const existing = byId.get(message.id);
+    byId.set(message.id, existing ? { ...existing, ...message } : message);
+  }
+  return [...byId.values()].sort((a, b) => {
+    if (a.createdAt !== b.createdAt) return a.createdAt - b.createdAt;
+    return a.id.localeCompare(b.id);
+  });
+}
+
+function toLiveChannelMessage(message: Awaited<ReturnType<typeof api.getConversationChannelMessages>>["messages"][number]): LiveMessage {
+  return {
+    id: message.id,
+    role: message.senderType === "user" ? "user" : "assistant",
+    text: message.content,
+    createdAt: new Date(message.createdAt).getTime(),
+    isStreaming: false,
+    ...(message.messageSource ? { messageSource: message.messageSource } : {}),
+  };
+}
+
 type UseConversationStreamOptions = {
   conversationId: string | null;
   /** When set (agent conversation), use channel-based message model instead of ACP streaming */
@@ -117,10 +145,32 @@ export function useConversationStream(
   const pendingClientEventsRef = useRef<ClientEvent[]>([]);
   const connectionReadyRef = useRef(false);
   const terminalWsErrorRef = useRef<string | null>(null);
+  const syncInFlightRef = useRef(false);
 
   useEffect(() => {
     onSeenSeqRef.current = onSeenSeq;
   }, [onSeenSeq]);
+
+  const syncChannelMessages = useCallback(async () => {
+    if (!conversationId || !isChannelMode || syncInFlightRef.current) return;
+    syncInFlightRef.current = true;
+    try {
+      const data = await api.getConversationChannelMessages(conversationId, 100);
+      if (!data.messages?.length) return;
+      const latestSeq = data.messages.reduce(
+        (max, message) => Math.max(max, Number(message.seq ?? 0)),
+        0,
+      );
+      if (latestSeq > 0 && canMarkSeen()) {
+        onSeenSeqRef.current?.(latestSeq);
+      }
+      setMessages((prev) => mergeMessagesById(prev, data.messages.map(toLiveChannelMessage)));
+    } catch {
+      // Ignore background sync failures; realtime WS remains primary.
+    } finally {
+      syncInFlightRef.current = false;
+    }
+  }, [conversationId, isChannelMode]);
 
   // Helper: update the latest assistant message in-place
   const updateCurrentMessage = useCallback(() => {
@@ -665,8 +715,7 @@ export function useConversationStream(
       api
         .getConversationChannelMessages(conversationId, 100)
         .then((data) => {
-          if (cancelled) return;
-          if (!data.messages) return;
+          if (cancelled || !data.messages) return;
           const latestSeq = data.messages.reduce(
             (max, message) => Math.max(max, Number(message.seq ?? 0)),
             0,
@@ -674,16 +723,7 @@ export function useConversationStream(
           if (latestSeq > 0 && canMarkSeen()) {
             onSeenSeqRef.current?.(latestSeq);
           }
-          setMessages(
-            data.messages.map((m) => ({
-              id: m.id,
-              role: m.senderType === "user" ? "user" : "assistant",
-              text: m.content,
-              createdAt: new Date(m.createdAt).getTime(),
-              isStreaming: false,
-              ...(m.messageSource ? { messageSource: m.messageSource } : {}),
-            })),
-          );
+          setMessages((prev) => mergeMessagesById(prev, data.messages.map(toLiveChannelMessage)));
         })
         .catch(() => {/* ignore */});
     }
@@ -788,6 +828,17 @@ export function useConversationStream(
       }
     };
   }, [conversationId, isChannelMode, finalizeCurrentToolCalls, processEvent]);
+
+  useEffect(() => {
+    if (!conversationId || !isChannelMode) return;
+
+    const intervalId = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.visibilityState !== "visible") return;
+      void syncChannelMessages();
+    }, ACTIVE_CONVERSATION_SYNC_INTERVAL_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [conversationId, isChannelMode, syncChannelMessages]);
 
   // Send helpers
   const sendEvent = useCallback((event: ClientEvent) => {

@@ -211,8 +211,12 @@ export function App() {
     agents,
     conversations: visibleConversations,
     channels,
-    agentUnreadCounts,
-    channelUnreadCounts,
+    agentUnreadCounts: viewMode === "chat" && selectedAgent?.agentId
+      ? { ...agentUnreadCounts, [selectedAgent.agentId]: 0 }
+      : agentUnreadCounts,
+    channelUnreadCounts: viewMode === "chat" && selectedChannelId
+      ? { ...channelUnreadCounts, [selectedChannelId]: 0 }
+      : channelUnreadCounts,
     selectedId,
     selectedChannelId,
     selectedView: viewMode,

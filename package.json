@@ -11,6 +11,7 @@
     "dev:core": "pnpm --filter @agent-collab/core run dev",
     "dev:web": "pnpm --filter @agent-collab/web run dev",
     "dev:node": "pnpm --filter @agent-collab/agent-node run dev",
+    "dev:tmux": "bash scripts/start-tmux.sh",
     "dev:restart:core": "node scripts/restart-dev.mjs core",
     "dev:restart:node": "node scripts/restart-dev.mjs node",
     "dev:restart:web": "node scripts/restart-dev.mjs web",

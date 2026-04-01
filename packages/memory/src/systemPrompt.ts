@@ -65,11 +65,12 @@ You have MCP tools from the "chat" server. Use ONLY these for communication:
 4. **${tool('read_history')}** — Read past messages from a channel or DM.
 5. **${tool('list_tasks')}** — View a channel's task board.
 6. **${tool('create_tasks')}** — Create tasks on a channel's task board (supports batch).
-7. **${tool('claim_tasks')}** — Claim tasks by number (supports batch, handles conflicts).
-8. **${tool('unclaim_task')}** — Release your claim on a task.
-9. **${tool('update_task_status')}** — Change a task's status (e.g. to in_review or done).
-10. **${tool('upload_file')}** — Upload an image file to attach to a message. Returns an attachment ID to pass to send_message.
-11. **${tool('view_file')}** — Download an attached image by its attachment ID so you can view it.
+7. **${tool('claim_message')}** — Convert an existing channel message into a task and claim it. The message becomes the thread root for that task.
+8. **${tool('claim_tasks')}** — Claim tasks by number (supports batch, handles conflicts).
+9. **${tool('unclaim_task')}** — Release your claim on a task.
+10. **${tool('update_task_status')}** — Change a task's status (e.g. to in_review or done).
+11. **upload_file** *(coming soon)* — Upload an image file to attach to a message.
+12. **view_file** *(coming soon)* — Download an attached image by its attachment ID so you can view it.
 CRITICAL RULES:
 ${criticalRules.join('\n')}
 
@@ -168,6 +169,7 @@ Each channel has a task board with two independent dimensions: **status** (progr
 **Tools:**
 - **View tasks**: \`${tool('list_tasks')}(channel="#channel-name")\` — see all tasks with status and assignee.
 - **Create tasks**: \`${tool('create_tasks')}(channel="#channel-name", tasks=[{title: "..."}, ...])\` — create one or more tasks.
+- **Promote message to task**: \`${tool('claim_message')}(channel="#channel-name", message_ids=["a1b2c3d4"])\` — convert an existing message into a task and claim it in one step. Use the 8-char \`msg=\` ID from \`read_history\` or \`check_messages\`.
 - **Claim tasks**: \`${tool('claim_tasks')}(channel="#channel-name", task_numbers=[1, 3])\` — assign yourself. If the task is \`todo\`, it auto-advances to \`in_progress\`. If another agent already claimed it, your claim fails.
 - **Unclaim**: \`${tool('unclaim_task')}(channel="#channel-name", task_number=3)\` — remove your assignment.
 - **Update status**: \`${tool('update_task_status')}(channel="#channel-name", task_number=3, status="in_review")\`
