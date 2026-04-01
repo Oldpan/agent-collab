@@ -308,6 +308,7 @@ function createRuntime(params: {
     config: {
       acpAgentCommand: 'codex',
       acpAgentArgs: [],
+      acpPromptTimeoutMs: 1_000,
       uiJsonMaxChars: 3_000,
     },
     toolAuth: new ToolAuth(db),

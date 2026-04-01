@@ -6,12 +6,13 @@ import type { ChatStatus } from "@/hooks/types";
 
 export type PromptComposerProps = {
   status: ChatStatus;
-  onSend: (text: string) => void;
+  ready?: boolean;
+  onSend: (text: string) => boolean;
   onCancel: () => void;
 };
 
 /** Auto-resizing textarea with send/cancel buttons */
-export function PromptComposer({ status, onSend, onCancel }: PromptComposerProps) {
+export function PromptComposer({ status, ready = true, onSend, onCancel }: PromptComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const handleSubmit = useCallback(() => {
@@ -19,7 +20,8 @@ export function PromptComposer({ status, onSend, onCancel }: PromptComposerProps
     if (!textarea) return;
     const text = textarea.value.trim();
     if (!text) return;
-    onSend(text);
+    const accepted = onSend(text);
+    if (!accepted) return;
     textarea.value = "";
     // Reset textarea height
     textarea.style.height = "auto";
@@ -64,7 +66,11 @@ export function PromptComposer({ status, onSend, onCancel }: PromptComposerProps
           "focus:outline-none",
           "disabled:cursor-not-allowed disabled:opacity-50",
         )}
-        placeholder="Send a message... (Shift+Enter for newline)"
+        placeholder={
+          ready
+            ? "Send a message... (Shift+Enter for newline)"
+            : "Connection is reconnecting... You can still type."
+        }
         disabled={isBusy}
         onKeyDown={handleKeyDown}
         onInput={handleInput}

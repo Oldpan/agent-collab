@@ -28,6 +28,7 @@ export function createTestConfig(): AgentNodeConfig {
     hostSweepIntervalMs: 50,
     acpAgentCommand: 'npx',
     acpAgentArgs: ['-y', '@zed-industries/claude-code-acp@latest'],
+    acpPromptTimeoutMs: 120_000,
     uiJsonMaxChars: 3_000,
   };
 }

@@ -81,8 +81,9 @@ type UseConversationStreamReturn = {
   messages: LiveMessage[];
   runs: LiveRun[];
   status: ChatStatus;
+  connectionReady: boolean;
   pendingApproval: PendingApproval | null;
-  sendPrompt: (text: string) => void;
+  sendPrompt: (text: string) => boolean;
   respondApproval: (requestId: string, decision: "allow" | "deny") => void;
   cancel: () => void;
 };
@@ -102,6 +103,7 @@ export function useConversationStream(
   const [messages, setMessages] = useState<LiveMessage[]>([]);
   const [runs, setRuns] = useState<LiveRun[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
+  const [connectionReady, setConnectionReady] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
 
   // Refs for streaming accumulators
@@ -113,6 +115,8 @@ export function useConversationStream(
   const currentMsgIdRef = useRef<string | null>(null);
   const currentRunIdRef = useRef<string | null>(null);
   const pendingClientEventsRef = useRef<ClientEvent[]>([]);
+  const connectionReadyRef = useRef(false);
+  const terminalWsErrorRef = useRef<string | null>(null);
 
   useEffect(() => {
     onSeenSeqRef.current = onSeenSeq;
@@ -179,6 +183,13 @@ export function useConversationStream(
             typeof (event as { message?: unknown }).message === "string"
               ? (event as { message: string }).message
               : "Conversation connection failed.";
+          if (
+            message === "Unauthorized" ||
+            message === "Access denied" ||
+            message === "Conversation not found"
+          ) {
+            terminalWsErrorRef.current = message;
+          }
           finalizeCurrentToolCalls();
           setStatus("error");
           setMessages((prev) => [
@@ -218,6 +229,7 @@ export function useConversationStream(
         }
 
         case "turn.begin": {
+          const isReplay = event.turnId.startsWith("replay-");
           if (isChannelMode) {
             // Channel mode: create a run entry for Activity tab; no message bubble.
             // Replay turns (history) are included but don't change streaming status.
@@ -260,10 +272,19 @@ export function useConversationStream(
           textRef.current = "";
           thinkingRef.current = "";
           currentToolCallsRef.current = [];
-          setStatus("streaming");
+          if (!isReplay) {
+            setStatus("streaming");
+          }
+          currentRunIdRef.current = event.turnId;
           setMessages((prev) => [
             ...prev,
-            { id, role: "assistant", text: "", createdAt: Date.now(), isStreaming: true },
+            {
+              id,
+              role: "assistant",
+              text: "",
+              createdAt: Date.now(),
+              isStreaming: !isReplay,
+            },
           ]);
           break;
         }
@@ -545,6 +566,22 @@ export function useConversationStream(
 
         case "history.complete": {
           // History replay done, ready for interaction
+          const replayRunActive =
+            currentRunIdRef.current?.startsWith("replay-") ?? false;
+          if (replayRunActive) {
+            finalizeCurrentToolCalls();
+            const msgId = currentMsgIdRef.current;
+            if (msgId) {
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id === msgId ? { ...m, isStreaming: false } : m,
+                ),
+              );
+            }
+            currentRunIdRef.current = null;
+            currentMsgIdRef.current = null;
+            setStatus("idle");
+          }
           break;
         }
 
@@ -575,6 +612,7 @@ export function useConversationStream(
     setMessages([]);
     setRuns([]);
     setStatus("idle");
+    setConnectionReady(false);
     setPendingApproval(null);
     textRef.current = "";
     thinkingRef.current = "";
@@ -582,6 +620,8 @@ export function useConversationStream(
     currentMsgIdRef.current = null;
     currentRunIdRef.current = null;
     pendingClientEventsRef.current = [];
+    connectionReadyRef.current = false;
+    terminalWsErrorRef.current = null;
 
     if (!conversationId) {
       wsRef.current = null;
@@ -648,65 +688,101 @@ export function useConversationStream(
         .catch(() => {/* ignore */});
     }
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const token = localStorage.getItem('auth_token') ?? '';
-    const wsUrl = `${protocol}//${window.location.host}/api/conversations/${conversationId}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
-    const ws = new WebSocket(wsUrl);
-    wsRef.current = ws;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectAttempt = 0;
 
-    ws.onopen = () => {
-      if (wsRef.current !== ws) return;
-      if (pendingClientEventsRef.current.length === 0) return;
-      for (const pendingEvent of pendingClientEventsRef.current) {
-        ws.send(JSON.stringify(pendingEvent));
-      }
-      pendingClientEventsRef.current = [];
-    };
+    const connect = () => {
+      if (cancelled || !conversationId) return;
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const token = localStorage.getItem('auth_token') ?? '';
+      const wsUrl = `${protocol}//${window.location.host}/api/conversations/${conversationId}/stream${token ? `?token=${encodeURIComponent(token)}` : ''}`;
+      const ws = new WebSocket(wsUrl);
+      wsRef.current = ws;
+      const openTimeout = setTimeout(() => {
+        if (wsRef.current !== ws) return;
+        if (ws.readyState === WebSocket.CONNECTING) {
+          ws.close();
+        }
+      }, 8_000);
 
-    ws.onmessage = (evt) => {
-      try {
-        const event: ServerEvent = JSON.parse(evt.data);
-        processEvent(event, ws);
-      } catch {
-        // Ignore malformed messages
-      }
-    };
-
-    ws.onerror = () => {
-      if (wsRef.current !== ws) return;
-      setStatus("error");
-    };
-
-    ws.onclose = () => {
-      if (wsRef.current !== ws) return;
-      finalizeCurrentToolCalls();
-      if (pendingClientEventsRef.current.length > 0) {
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: createId(),
-            role: "system",
-            text: "Message delivery failed before the conversation connection was ready. Please resend.",
-            createdAt: Date.now(),
-            isStreaming: false,
-          },
-        ]);
+      ws.onopen = () => {
+        if (wsRef.current !== ws) return;
+        clearTimeout(openTimeout);
+        reconnectAttempt = 0;
+        connectionReadyRef.current = true;
+        setConnectionReady(true);
+        setStatus((prev) => (prev === "error" ? "idle" : prev));
+        if (pendingClientEventsRef.current.length === 0) return;
+        for (const pendingEvent of pendingClientEventsRef.current) {
+          ws.send(JSON.stringify(pendingEvent));
+        }
         pendingClientEventsRef.current = [];
-      }
-      // Mark any streaming message as done
-      const msgId = currentMsgIdRef.current;
-      if (msgId) {
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === msgId ? { ...m, isStreaming: false } : m,
-          ),
-        );
-      }
+      };
+
+      ws.onmessage = (evt) => {
+        try {
+          const event: ServerEvent = JSON.parse(evt.data);
+          processEvent(event, ws);
+        } catch {
+          // Ignore malformed messages
+        }
+      };
+
+      ws.onerror = () => {
+        if (wsRef.current !== ws) return;
+        connectionReadyRef.current = false;
+        setConnectionReady(false);
+      };
+
+      ws.onclose = () => {
+        if (wsRef.current !== ws) return;
+        clearTimeout(openTimeout);
+        connectionReadyRef.current = false;
+        setConnectionReady(false);
+        finalizeCurrentToolCalls();
+        if (pendingClientEventsRef.current.length > 0) {
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: createId(),
+              role: "system",
+              text: "Message delivery failed before the conversation connection was ready. Please resend.",
+              createdAt: Date.now(),
+              isStreaming: false,
+            },
+          ]);
+          pendingClientEventsRef.current = [];
+        }
+        const msgId = currentMsgIdRef.current;
+        if (msgId) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === msgId ? { ...m, isStreaming: false } : m,
+            ),
+          );
+        }
+        if (cancelled || terminalWsErrorRef.current) {
+          setStatus("error");
+          return;
+        }
+        reconnectAttempt += 1;
+        const delayMs = Math.min(5_000, 500 * reconnectAttempt);
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connect();
+        }, delayMs);
+      };
     };
+
+    connect();
 
     return () => {
       cancelled = true;
-      ws.close();
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+      }
+      const ws = wsRef.current;
+      ws?.close();
       if (wsRef.current === ws) {
         wsRef.current = null;
       }
@@ -729,30 +805,56 @@ export function useConversationStream(
 
   const sendPrompt = useCallback(
     (text: string) => {
-      const delivered = sendEvent({ type: "prompt", text });
-      if (!delivered) {
-        setStatus("error");
-        setMessages((prev) => [
-          ...prev,
-          {
-            id: createId(),
-            role: "system",
-            text: "Conversation connection is unavailable. Please wait a moment and resend.",
-            createdAt: Date.now(),
-            isStreaming: false,
-          },
-        ]);
-        return;
-      }
-      // Add user message to timeline
+      const ws = wsRef.current;
+      const readyState = ws?.readyState;
       const id = createId();
       setMessages((prev) => [
         ...prev,
         { id, role: "user", text, createdAt: Date.now(), isStreaming: false },
       ]);
+      const rollback = () =>
+        setMessages((prev) => prev.filter((message) => message.id !== id));
+
+      if (readyState === WebSocket.OPEN) {
+        const delivered = sendEvent({ type: "prompt", text });
+        if (!delivered) {
+          rollback();
+          return false;
+        }
+        setStatus("submitted");
+        return true;
+      }
+
+      if (!conversationId) {
+        rollback();
+        setStatus("error");
+        return false;
+      }
+
       setStatus("submitted");
+      void api
+        .sendConversationPrompt(conversationId, text)
+        .then((result) => {
+          setStatus(result.queued ? "queued" : "submitted");
+        })
+        .catch((error) => {
+          rollback();
+          setStatus("error");
+          setMessages((prev) => [
+            ...prev,
+            {
+              id: createId(),
+              role: "system",
+              text: String(error?.message ?? error),
+              createdAt: Date.now(),
+              isStreaming: false,
+            },
+          ]);
+        });
+
+      return true;
     },
-    [sendEvent],
+    [conversationId, sendEvent],
   );
 
   const respondApproval = useCallback(
@@ -776,6 +878,7 @@ export function useConversationStream(
     messages,
     runs,
     status,
+    connectionReady,
     pendingApproval,
     sendPrompt,
     respondApproval,

@@ -207,7 +207,11 @@ export class AcpClient {
     );
   }
 
-  async prompt(run: AcpRun, params: PromptParams): Promise<PromptResult> {
+  async prompt(
+    run: AcpRun,
+    params: PromptParams,
+    timeoutMs?: number,
+  ): Promise<PromptResult> {
     this.currentRun = run;
     this.runSeq.set(run.runId, 0);
 
@@ -215,6 +219,7 @@ export class AcpClient {
       const result = await this.request<PromptParams, PromptResult>(
         'session/prompt',
         params,
+        timeoutMs,
       );
       return result;
     } finally {

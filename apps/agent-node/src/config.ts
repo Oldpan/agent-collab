@@ -11,6 +11,7 @@ export type AgentNodeConfig = RuntimeConfig & {
   coreUrl: string;
   agentTypes: string[];
   version: string;
+  acpPromptTimeoutMs: number;
   workspaceRoot: string;
   dbPath: string;
   heartbeatIntervalMs: number;
@@ -41,6 +42,7 @@ export function loadConfig(): AgentNodeConfig {
     acpAgentArgs: process.env.ACP_AGENT_ARGS
       ? JSON.parse(process.env.ACP_AGENT_ARGS)
       : ['-y', '@zed-industries/claude-code-acp@latest'],
+    acpPromptTimeoutMs: Number(process.env.ACP_PROMPT_TIMEOUT_MS ?? 120_000),
     uiJsonMaxChars: Number(process.env.UI_JSON_MAX_CHARS ?? 3000),
     heartbeatIntervalMs: Number(process.env.HEARTBEAT_INTERVAL_MS ?? 15_000),
     reconnectInitialDelayMs: Number(process.env.RECONNECT_INITIAL_DELAY_MS ?? 1_000),

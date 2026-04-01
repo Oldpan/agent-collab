@@ -92,6 +92,7 @@ export function ChatPanel({
     messages,
     runs,
     status,
+    connectionReady,
     pendingApproval,
     sendPrompt,
     respondApproval,
@@ -331,7 +332,7 @@ export function ChatPanel({
             <ConversationScrollButton />
           </Conversation>
 
-          <PromptComposer status={status} onSend={sendPrompt} onCancel={cancel} />
+          <PromptComposer status={status} ready={connectionReady} onSend={sendPrompt} onCancel={cancel} />
         </>
       )}
     </div>

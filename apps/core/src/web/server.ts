@@ -347,6 +347,49 @@ export async function startServer(params: {
     return;
   });
 
+  app.post<{ Params: { id: string }; Body: { text?: string } }>(
+    '/api/conversations/:id/prompt',
+    async (req, reply) => {
+      const user = requireUser(req, reply);
+      if (!user) return { error: 'Unauthorized' };
+
+      const conv = conversationManager.getConversation(req.params.id);
+      if (!conv) {
+        reply.code(404);
+        return { error: 'Not found' };
+      }
+
+      const isDirectThread = conv.threadKind === 'direct';
+      const isOwner = conv.userId === user.id;
+      const isAdmin = user.isAdmin;
+      if (isDirectThread && !isOwner && !isAdmin) {
+        reply.code(403);
+        return { error: 'Access denied' };
+      }
+
+      const text = req.body?.text?.trim();
+      if (!text) {
+        reply.code(400);
+        return { error: 'Prompt text is required' };
+      }
+
+      if (!conv.nodeId) {
+        reply.code(409);
+        return { error: 'No agent node assigned. Connect an agent-node first.' };
+      }
+
+      try {
+        const result = await conversationManager.submitPrompt(req.params.id, text, {
+          senderName: user.username,
+        });
+        return result;
+      } catch (error: any) {
+        reply.code(500);
+        return { error: String(error?.message ?? error) };
+      }
+    },
+  );
+
   // Get conversation history (stored events from DB)
   app.get<{ Params: { id: string } }>('/api/conversations/:id/history', async (req, reply) => {
     const user = requireUser(req, reply);

@@ -5,6 +5,7 @@ import type { OutboundSink, ToolUiStage, UiMode } from './types.js';
 export interface RuntimeConfig {
   acpAgentCommand: string;
   acpAgentArgs: string[];
+  acpPromptTimeoutMs: number;
   uiJsonMaxChars: number;
 }
 import { AcpClient, type PermissionRequest } from '../acp/client.js';
@@ -629,7 +630,7 @@ export class BindingRuntime {
     const result = await this.client.prompt(run, {
       sessionId,
       prompt: blocks,
-    });
+    }, this.config.acpPromptTimeoutMs);
 
     await this.flushSinkWriteQueue();
     return {
@@ -806,6 +807,7 @@ function isRecoverableResumeError(error: unknown): boolean {
     message.includes('session not found') ||
     message.includes('unknown session') ||
     message.includes('invalid session') ||
+    message.includes('acp request timed out: session/prompt') ||
     message.includes('internal error (code -32603)') ||
     message.includes('acp agent exited') ||
     message.includes('acp client closed') ||

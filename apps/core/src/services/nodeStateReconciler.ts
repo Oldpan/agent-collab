@@ -1,10 +1,11 @@
 import type { Db } from '@agent-collab/runtime-acp';
-import { log } from '@agent-collab/runtime-acp';
+import { finishRun, log } from '@agent-collab/runtime-acp';
 
 export function reconcileNodeStateOnStartup(db: Db): {
   offlinedNodes: number;
   failedConversations: number;
   backfilledConversationAgents: number;
+  finishedRuns: number;
 } {
   const now = Date.now();
   const offlineResult = db
@@ -16,9 +17,21 @@ export function reconcileNodeStateOnStartup(db: Db): {
       `UPDATE conversations
           SET status = 'failed', updated_at = ?
         WHERE node_id IS NOT NULL
-          AND status IN ('active', 'awaiting_approval')`,
+          AND status IN ('active', 'recovering', 'awaiting_approval')`,
       )
     .run(now);
+
+  const openRuns = db.prepare(
+    `SELECT run_id as runId
+       FROM runs
+      WHERE ended_at IS NULL`,
+  ).all() as Array<{ runId: string }>;
+  for (const run of openRuns) {
+    finishRun(db, {
+      runId: run.runId,
+      error: 'Core restarted before run completed',
+    });
+  }
 
   const backfilledAgentResult = db
     .prepare(
@@ -59,6 +72,7 @@ export function reconcileNodeStateOnStartup(db: Db): {
     offlinedNodes: offlineResult.changes,
     failedConversations: failedResult.changes,
     backfilledConversationAgents: backfilledAgentResult.changes,
+    finishedRuns: openRuns.length,
   };
 
   if (

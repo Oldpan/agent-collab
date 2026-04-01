@@ -111,6 +111,7 @@ export function createTestConfig(overrides?: Partial<AppConfig>): AppConfig {
     webHost: '127.0.0.1',
     acpAgentCommand: 'echo',
     acpAgentArgs: ['noop'],
+    acpPromptTimeoutMs: 120_000,
     workspaceRoot: '/tmp',
     dbPath: ':memory:',
     runtimeIdleTtlSeconds: 900,

@@ -196,6 +196,74 @@ class FakePermissionRpc implements StdioProcess {
   }
 }
 
+class FakeTimeoutRecoveryRpc implements StdioProcess {
+  readonly promptCalls: Array<{ sessionId: string; prompt: unknown[] }> = [];
+  readonly createdSessions: string[] = [];
+
+  private readonly messageHandlers: Array<(message: JsonRpcMessage) => void> = [];
+  private readonly stderrHandlers: Array<(line: string) => void> = [];
+  private readonly exitHandlers: Array<
+    (info: { code: number | null; signal: NodeJS.Signals | null }) => void
+  > = [];
+
+  write(message: JsonRpcMessage): void {
+    if ('method' in message && 'id' in message) {
+      const req = message as JsonRpcRequest;
+      switch (req.method) {
+        case 'initialize':
+          this.respond(req.id, {
+            protocolVersion: 1,
+            agentCapabilities: { loadSession: true },
+          });
+          return;
+        case 'session/new': {
+          const sessionId = `fresh-timeout-session-${this.createdSessions.length + 1}`;
+          this.createdSessions.push(sessionId);
+          this.respond(req.id, { sessionId });
+          return;
+        }
+        case 'session/prompt': {
+          const params = req.params as { sessionId: string; prompt: unknown[] };
+          this.promptCalls.push({ sessionId: params.sessionId, prompt: params.prompt });
+          if (params.sessionId === 'hung-session') {
+            return;
+          }
+          this.respond(req.id, { stopReason: 'end_turn' });
+          return;
+        }
+        default:
+          throw new Error(`Unhandled method in fake timeout rpc: ${req.method}`);
+      }
+    }
+  }
+
+  onMessage(cb: (message: JsonRpcMessage) => void): void {
+    this.messageHandlers.push(cb);
+  }
+
+  onStderr(cb: (line: string) => void): void {
+    this.stderrHandlers.push(cb);
+  }
+
+  onExit(
+    cb: (info: { code: number | null; signal: NodeJS.Signals | null }) => void,
+  ): void {
+    this.exitHandlers.push(cb);
+  }
+
+  kill(): void {
+    this.exitHandlers.forEach((handler) => handler({ code: 0, signal: null }));
+  }
+
+  private respond(id: JsonRpcRequest['id'], result: unknown): void {
+    queueMicrotask(() => {
+      this.messageHandlers.forEach((handler) =>
+        handler({ jsonrpc: '2.0', id, result }),
+      );
+    });
+  }
+}
+
 describe('BindingRuntime stale session recovery', () => {
   const openDbs: Db[] = [];
 
@@ -226,6 +294,7 @@ describe('BindingRuntime stale session recovery', () => {
       config: {
         acpAgentCommand: 'codex',
         acpAgentArgs: ['exec'],
+        acpPromptTimeoutMs: 1_000,
         uiJsonMaxChars: 3_000,
       },
       toolAuth: new ToolAuth(db),
@@ -287,6 +356,7 @@ describe('BindingRuntime stale session recovery', () => {
       config: {
         acpAgentCommand: 'claude',
         acpAgentArgs: [],
+        acpPromptTimeoutMs: 1_000,
         uiJsonMaxChars: 3_000,
       },
       toolAuth: new ToolAuth(db),
@@ -333,6 +403,7 @@ describe('BindingRuntime stale session recovery', () => {
       config: {
         acpAgentCommand: 'claude',
         acpAgentArgs: [],
+        acpPromptTimeoutMs: 1_000,
         uiJsonMaxChars: 3_000,
       },
       toolAuth: new ToolAuth(db),
@@ -354,6 +425,56 @@ describe('BindingRuntime stale session recovery', () => {
     expect(rpc.readResults).toHaveLength(0);
     expect(rpc.readErrors).toHaveLength(1);
     expect(rpc.permissionRequests).toHaveLength(0);
+
+    runtime.close();
+  });
+
+  it('should reset a hung ACP session and retry once after prompt timeout on resume', async () => {
+    const dbPath = join(tmpdir(), `runtime-acp-test-${randomUUID()}.db`);
+    const db = openDb(dbPath);
+    migrate(db);
+    openDbs.push(db);
+
+    createSession(db, {
+      sessionKey: 'session-timeout',
+      agentCommand: 'codex',
+      agentArgs: ['exec'],
+      cwd: '/tmp',
+      loadSupported: true,
+    });
+    updateAcpSessionId(db, 'session-timeout', 'hung-session');
+
+    const rpc = new FakeTimeoutRecoveryRpc();
+    const runtime = new BindingRuntime({
+      db,
+      config: {
+        acpAgentCommand: 'codex',
+        acpAgentArgs: ['exec'],
+        acpPromptTimeoutMs: 25,
+        uiJsonMaxChars: 3_000,
+      },
+      toolAuth: new ToolAuth(db),
+      sessionKey: 'session-timeout',
+      bindingKey: 'node:conv-timeout:-:node_user',
+      workspaceRoot: '/tmp',
+      acpRpc: rpc,
+    });
+
+    (runtime as any).acpSessionId = 'hung-session';
+
+    const result = await runtime.prompt({
+      runId: 'run-timeout',
+      promptText: '继续',
+      sink: { sendText: async () => {} },
+      uiMode: 'summary',
+      actorUserId: 'node_user',
+    });
+
+    expect(result.stopReason).toBe('end_turn');
+    expect(rpc.promptCalls).toHaveLength(2);
+    expect(rpc.promptCalls[0]?.sessionId).toBe('hung-session');
+    expect(rpc.promptCalls[1]?.sessionId).toBe('fresh-timeout-session-1');
+    expect(getSession(db, 'session-timeout')?.acpSessionId).toBe('fresh-timeout-session-1');
 
     runtime.close();
   });
