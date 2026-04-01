@@ -111,7 +111,7 @@ type UseConversationStreamReturn = {
   status: ChatStatus;
   connectionReady: boolean;
   pendingApproval: PendingApproval | null;
-  sendPrompt: (text: string) => boolean;
+  sendPrompt: (text: string, attachmentIds?: string[]) => boolean;
   respondApproval: (requestId: string, decision: "allow" | "deny") => void;
   cancel: () => void;
 };
@@ -855,11 +855,18 @@ export function useConversationStream(
   }, []);
 
   const sendPrompt = useCallback(
-    (text: string) => {
+    (text: string, attachmentIds?: string[]) => {
       const id = createId();
+      // Append attachment references to prompt so the agent can use view_file
+      const attachmentNote = attachmentIds?.length
+        ? `\n\n[Attached image${attachmentIds.length > 1 ? 's' : ''}]\n` +
+          attachmentIds.map((aid) => `ID: ${aid}\nUse view_file(attachment_id="${aid}") to view it.`).join('\n')
+        : '';
+      const promptText = text + attachmentNote;
       setMessages((prev) => [
         ...prev,
-        { id, role: "user", text, createdAt: Date.now(), isStreaming: false },
+        { id, role: "user", text, createdAt: Date.now(), isStreaming: false,
+          ...(attachmentIds?.length ? { attachmentIds } : {}) },
       ]);
       const rollback = () =>
         setMessages((prev) => prev.filter((message) => message.id !== id));
@@ -872,7 +879,7 @@ export function useConversationStream(
 
       setStatus("submitted");
       void api
-        .sendConversationPrompt(conversationId, text)
+        .sendConversationPrompt(conversationId, promptText)
         .then((result) => {
           setStatus(result.queued ? "queued" : "submitted");
         })

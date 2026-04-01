@@ -48,6 +48,7 @@ export type LiveMessage = {
   toolCalls?: LiveToolCall[];
   isStreaming: boolean;
   messageSource?: string;
+  attachmentIds?: string[];
 };
 
 /** A tool call within an assistant message */

@@ -11,6 +11,9 @@
  *   channel-bridge --agent-id <id> --server-url <url> [--auth-token <token>]
  */
 
+import { readFileSync, writeFileSync, mkdirSync, readdirSync } from 'node:fs';
+import { basename, extname, join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -91,7 +94,7 @@ server.tool(
       ),
     attachment_ids: z.array(z.string()).optional().describe('Optional attachment IDs to include'),
   },
-  async ({ target, content, kind }) => {
+  async ({ target, content, kind, attachment_ids }) => {
     const normalizedContent = content.trim();
     if (!normalizedContent) {
       throw new Error('content must not be empty');
@@ -99,7 +102,7 @@ server.tool(
 
     const { ok, data } = await apiFetch('/send', {
       method: 'POST',
-      body: { target, content: normalizedContent, kind, conversationId },
+      body: { target, content: normalizedContent, kind, conversationId, attachmentIds: attachment_ids },
     });
     if (!ok) {
       throw new Error(errText(data, 'send failed'));
@@ -468,6 +471,95 @@ server.tool(
       });
       if (!ok) return toText(`Error: ${errText(data, 'update status failed')}`);
       return toText(`#t${task_number} moved to ${status}.`);
+    } catch (err: unknown) {
+      return toText(`Error: ${(err as Error).message}`);
+    }
+  },
+);
+
+// ── upload_file ───────────────────────────────────────────────────────────────
+
+server.tool(
+  'upload_file',
+  'Upload an image file (JPEG, PNG, GIF, WebP, max 5MB) to the platform. Returns an attachment_id you can pass to send_message to attach it to a message.',
+  {
+    file_path: z.string().describe('Absolute path to the image file on your local filesystem'),
+    channel: z.string().optional().describe("Optional channel target where this file will be used (e.g. '#general')"),
+  },
+  async ({ file_path, channel }) => {
+    let fileBuffer: Buffer;
+    try {
+      fileBuffer = readFileSync(file_path);
+    } catch {
+      return toText(`Error: File not found or unreadable: ${file_path}`);
+    }
+
+    const ext = extname(file_path).toLowerCase();
+    const mimeMap: Record<string, string> = {
+      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+      '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp',
+    };
+    const mimeType = mimeMap[ext];
+    if (!mimeType) return toText(`Error: Unsupported file type "${ext}". Allowed: .jpg, .png, .gif, .webp`);
+    if (fileBuffer.length > 5 * 1024 * 1024) return toText('Error: File too large (max 5MB)');
+
+    const filename = basename(file_path);
+    const blob = new Blob([new Uint8Array(fileBuffer)], { type: mimeType });
+    const form = new FormData();
+    form.append('file', blob, filename);
+    if (channel) form.append('channelId', channel);
+
+    const uploadHeaders: Record<string, string> = {};
+    if (authToken) uploadHeaders['Authorization'] = `Bearer ${authToken}`;
+
+    try {
+      const res = await fetch(`${base}/upload`, { method: 'POST', headers: uploadHeaders, body: form });
+      const d = await res.json() as Record<string, unknown>;
+      if (!res.ok) return toText(`Error: ${d.error ?? 'upload failed'}`);
+      return toText(
+        `Uploaded: ${d.filename} (${((d.sizeBytes as number) / 1024).toFixed(1)}KB)\n` +
+        `Attachment ID: ${d.id}\n\n` +
+        `Pass this ID in send_message attachment_ids to attach it to a message.`,
+      );
+    } catch (err: unknown) {
+      return toText(`Error: ${(err as Error).message}`);
+    }
+  },
+);
+
+// ── view_file ─────────────────────────────────────────────────────────────────
+
+server.tool(
+  'view_file',
+  'Download an attachment by its ID so you can view it. Saves to a local cache and returns the file path — use your Read tool to view the image.',
+  {
+    attachment_id: z.string().describe('Attachment UUID returned by upload_file or shown in a message'),
+  },
+  async ({ attachment_id }) => {
+    const cacheDir = join(tmpdir(), 'agent-collab-attachments');
+    mkdirSync(cacheDir, { recursive: true });
+
+    // Return cached file if already downloaded
+    const existing = readdirSync(cacheDir).find((f) => f.startsWith(attachment_id));
+    if (existing) {
+      return toText(`Cached at: ${join(cacheDir, existing)}\nUse your Read tool to view this image.`);
+    }
+
+    const downloadHeaders: Record<string, string> = {};
+    if (authToken) downloadHeaders['Authorization'] = `Bearer ${authToken}`;
+
+    try {
+      const res = await fetch(`${serverUrl}/api/attachments/${attachment_id}`, { headers: downloadHeaders });
+      if (!res.ok) return toText(`Error: Failed to download attachment (${res.status})`);
+
+      const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
+      const extMap: Record<string, string> = {
+        'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp',
+      };
+      const ext = extMap[contentType] ?? '.bin';
+      const filePath = join(cacheDir, `${attachment_id}${ext}`);
+      writeFileSync(filePath, Buffer.from(await res.arrayBuffer()));
+      return toText(`Downloaded to: ${filePath}\nUse your Read tool to view this image.`);
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }

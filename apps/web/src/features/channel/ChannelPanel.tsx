@@ -1,10 +1,10 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon, Settings2Icon, MessageSquareOffIcon, ListTodoIcon } from "lucide-react";
+import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon, Settings2Icon, MessageSquareOffIcon, ListTodoIcon, PaperclipIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChannelInfo, AgentInfo } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
-import { clearChannelChat, subscribeChannelAgent, unsubscribeChannelAgent, updateChannel, claimMessageAsTask } from "@/lib/api";
+import { clearChannelChat, subscribeChannelAgent, unsubscribeChannelAgent, updateChannel, claimMessageAsTask, uploadAttachment } from "@/lib/api";
 import { useChannelStream, type ChannelNotice } from "@/hooks/useChannelStream";
 import { ThreadPanel } from "./ThreadPanel";
 import { Streamdown } from "streamdown";
@@ -53,6 +53,46 @@ function renderContent(content: string) {
     ) : (
       part
     ),
+  );
+}
+
+/** Fetches an attachment with auth and renders it as an inline image. */
+function AttachmentImage({ attachmentId }: { attachmentId: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    const token = localStorage.getItem("auth_token") ?? "";
+    let objectUrl: string | null = null;
+    fetch(`/api/attachments/${attachmentId}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`${res.status}`);
+        return res.blob();
+      })
+      .then((blob) => {
+        objectUrl = URL.createObjectURL(blob);
+        setSrc(objectUrl);
+      })
+      .catch(() => setError(true));
+    return () => { if (objectUrl) URL.revokeObjectURL(objectUrl); };
+  }, [attachmentId]);
+
+  if (error) return (
+    <span className="rounded border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-500">
+      Failed to load image
+    </span>
+  );
+  if (!src) return (
+    <span className="inline-block h-24 w-24 animate-pulse rounded border-2 border-zinc-200 bg-zinc-100" />
+  );
+  return (
+    <img
+      src={src}
+      alt="attachment"
+      className="max-h-64 max-w-xs rounded border-2 border-zinc-900 object-contain shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]"
+    />
   );
 }
 
@@ -226,6 +266,15 @@ function MessageRow({
           )}
         </div>
 
+        {/* Attachment images */}
+        {message.attachmentIds && message.attachmentIds.length > 0 && (
+          <div className="mt-2 flex flex-wrap gap-2">
+            {message.attachmentIds.map((id) => (
+              <AttachmentImage key={id} attachmentId={id} />
+            ))}
+          </div>
+        )}
+
         {/* Thread reply count badge */}
         {replyCount > 0 && (
           <button
@@ -260,11 +309,14 @@ function ChannelComposer({
   onSend,
   channelMembers,
 }: {
-  onSend: (text: string) => void;
+  onSend: (text: string, attachmentIds?: string[]) => void;
   channelMembers: AgentInfo[];
 }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [pendingFiles, setPendingFiles] = useState<Array<{ id: string; name: string }>>([]);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -316,20 +368,41 @@ function ChannelComposer({
     }
   }, []);
 
+  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    e.target.value = "";
+    setUploading(true);
+    try {
+      const results = await Promise.all(files.map((f) => uploadAttachment(f)));
+      setPendingFiles((prev) => [...prev, ...results.map((r) => ({ id: r.id, name: r.filename }))]);
+    } catch (err) {
+      alert(`Upload failed: ${(err as Error).message}`);
+    } finally {
+      setUploading(false);
+    }
+  }, []);
+
+  const removeFile = useCallback((id: string) => {
+    setPendingFiles((prev) => prev.filter((f) => f.id !== id));
+  }, []);
+
   const handleSubmit = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending) return;
+    if ((!trimmed && pendingFiles.length === 0) || sending) return;
     setSending(true);
+    const ids = pendingFiles.map((f) => f.id);
     setText("");
+    setPendingFiles([]);
     setMentionQuery(null);
     const ta = textareaRef.current;
     if (ta) ta.style.height = "auto";
     try {
-      await onSend(trimmed);
+      await onSend(trimmed, ids.length ? ids : undefined);
     } finally {
       setSending(false);
     }
-  }, [text, onSend, sending]);
+  }, [text, pendingFiles, onSend, sending]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -393,7 +466,48 @@ function ChannelComposer({
         </div>
       )}
 
+      {/* Pending attachment chips */}
+      {pendingFiles.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {pendingFiles.map((f) => (
+            <span
+              key={f.id}
+              className="flex items-center gap-1 rounded-full border border-zinc-400 bg-[#d8efff] px-2 py-0.5 text-xs text-zinc-700"
+            >
+              <PaperclipIcon className="size-3 shrink-0" />
+              <span className="max-w-[120px] truncate">{f.name}</span>
+              <button
+                type="button"
+                onClick={() => removeFile(f.id)}
+                className="ml-0.5 text-zinc-500 hover:text-zinc-900"
+                aria-label="Remove"
+              >
+                <XIcon className="size-3" />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+
       <div className="flex items-end gap-2 rounded-sm border-2 border-black bg-[#fffdf4] p-2 shadow-[4px_4px_0_0_rgba(0,0,0,0.2)]">
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/gif,image/webp"
+          multiple
+          className="hidden"
+          onChange={(e) => void handleFileChange(e)}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={sending || uploading}
+          className="shrink-0 rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40"
+          title="Attach image"
+        >
+          <PaperclipIcon className="size-4" />
+        </button>
         <textarea
           ref={textareaRef}
           value={text}
@@ -412,7 +526,7 @@ function ChannelComposer({
           onClick={() => void handleSubmit()}
           className="shrink-0 rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
           title="Send"
-          disabled={sending}
+          disabled={sending || uploading}
         >
           <SendIcon className="size-4" />
         </Button>

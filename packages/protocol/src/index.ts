@@ -164,6 +164,8 @@ export type ChannelMessageEvent = {
     taskNumber?: number;
     taskStatus?: string;
     taskAssigneeName?: string | null;
+    /** Attachment UUIDs uploaded with this message. */
+    attachmentIds?: string[];
   };
 };
 

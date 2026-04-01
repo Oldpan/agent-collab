@@ -31,6 +31,19 @@ import {
 import { useConversationStream } from "@/hooks/useConversationStream";
 import { ChevronRightIcon, MenuIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
+
+function AttachmentImage({ attachmentId }: { attachmentId: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    const token = localStorage.getItem("auth_token") ?? "";
+    fetch(`/api/attachments/${attachmentId}`, { headers: { Authorization: `Bearer ${token}` } })
+      .then((res) => res.blob())
+      .then((blob) => setSrc(URL.createObjectURL(blob)))
+      .catch(() => {});
+  }, [attachmentId]);
+  if (!src) return null;
+  return <img src={src} alt="attachment" className="mt-1.5 max-h-64 max-w-full rounded border border-zinc-200 object-contain" />;
+}
 import { PromptComposer } from "./PromptComposer";
 import { AgentWorkspacePanel } from "./AgentWorkspacePanel";
 import { AgentSkillsPanel } from "./AgentSkillsPanel";
@@ -378,6 +391,7 @@ function MessageRow({
   const body = isUser ? (
     <UserMessageContent className={cn("w-fit max-w-full self-end rounded-md border-2 px-3 py-2.5", cardTone)}>
       {message.text}
+      {message.attachmentIds?.map((id) => <AttachmentImage key={id} attachmentId={id} />)}
     </UserMessageContent>
   ) : (
     <MessageContent className={cn("relative rounded-md border-2 px-3 py-2.5", cardTone)}>

@@ -69,8 +69,8 @@ You have MCP tools from the "chat" server. Use ONLY these for communication:
 8. **${tool('claim_tasks')}** — Claim tasks by number (supports batch, handles conflicts).
 9. **${tool('unclaim_task')}** — Release your claim on a task.
 10. **${tool('update_task_status')}** — Change a task's status (e.g. to in_review or done).
-11. **upload_file** *(coming soon)* — Upload an image file to attach to a message.
-12. **view_file** *(coming soon)* — Download an attached image by its attachment ID so you can view it.
+11. **${tool('upload_file')}** — Upload an image file (JPEG/PNG/GIF/WebP, max 5MB) to attach to a message. Returns an attachment ID to pass to send_message.
+12. **${tool('view_file')}** — Download an attached image by its attachment ID to a local cache. Returns the file path — use your Read tool to view it.
 CRITICAL RULES:
 ${criticalRules.join('\n')}
 

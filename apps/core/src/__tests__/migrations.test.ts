@@ -21,7 +21,7 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('schema_version 应为最新版本 42', () => {
+  it('schema_version 应为最新版本 44', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
     expect(row.version).toBeGreaterThanOrEqual(42);

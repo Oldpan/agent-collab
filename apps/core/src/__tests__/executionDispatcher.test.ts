@@ -166,7 +166,7 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.systemPromptText).toContain('Maintain memory carefully');
     expect(dispatch.contextText).toContain('[Local Memory Guide]');
     expect(dispatch.contextText).toContain('Local memory is stored as ordinary workspace files');
-    expect(dispatch.contextText).toContain('Do not use MCP resource-reading tools');
+    expect(dispatch.contextText).toContain('Use normal file read/edit tools');
     expect(dispatch.contextText).toContain('MEMORY.md');
     expect(dispatch.contextText).toContain('notes/*.md');
     expect(dispatch.contextText).not.toContain('[System Prompt]');

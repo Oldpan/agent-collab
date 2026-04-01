@@ -1,31 +1,55 @@
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
-import { SendIcon, SquareIcon } from "lucide-react";
-import { useCallback, useRef, type KeyboardEvent } from "react";
+import { SendIcon, SquareIcon, PaperclipIcon, XIcon } from "lucide-react";
+import { useCallback, useRef, useState, type KeyboardEvent } from "react";
 import type { ChatStatus } from "@/hooks/types";
+import { uploadAttachment } from "@/lib/api";
 
 export type PromptComposerProps = {
   status: ChatStatus;
   ready?: boolean;
-  onSend: (text: string) => boolean;
+  onSend: (text: string, attachmentIds?: string[]) => boolean;
   onCancel: () => void;
 };
 
-/** Auto-resizing textarea with send/cancel buttons */
+/** Auto-resizing textarea with send/cancel and file upload buttons */
 export function PromptComposer({ status, ready = true, onSend, onCancel }: PromptComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [pendingFiles, setPendingFiles] = useState<Array<{ id: string; name: string }>>([]);
+  const [uploading, setUploading] = useState(false);
+
+  const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    if (!files.length) return;
+    e.target.value = "";
+    setUploading(true);
+    try {
+      const results = await Promise.all(files.map((f) => uploadAttachment(f)));
+      setPendingFiles((prev) => [...prev, ...results.map((r) => ({ id: r.id, name: r.filename }))]);
+    } catch (err) {
+      alert(`Upload failed: ${(err as Error).message}`);
+    } finally {
+      setUploading(false);
+    }
+  }, []);
+
+  const removeFile = useCallback((id: string) => {
+    setPendingFiles((prev) => prev.filter((f) => f.id !== id));
+  }, []);
 
   const handleSubmit = useCallback(() => {
     const textarea = textareaRef.current;
     if (!textarea) return;
     const text = textarea.value.trim();
-    if (!text) return;
-    const accepted = onSend(text);
+    if (!text && pendingFiles.length === 0) return;
+    const ids = pendingFiles.map((f) => f.id);
+    const accepted = onSend(text, ids.length ? ids : undefined);
     if (!accepted) return;
     textarea.value = "";
-    // Reset textarea height
     textarea.style.height = "auto";
-  }, [onSend]);
+    setPendingFiles([]);
+  }, [onSend, pendingFiles]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -57,47 +81,88 @@ export function PromptComposer({ status, ready = true, onSend, onCancel }: Promp
 
   return (
     <div className="border-t-2 border-black bg-[#fff5c2] px-4 py-3 shadow-[0_-2px_0_0_rgba(0,0,0,0.08)]">
-      <div className="flex items-end gap-2 rounded-sm border-2 border-black bg-[#fffdf4] p-2 shadow-[4px_4px_0_0_rgba(0,0,0,0.2)]">
-      <textarea
-        ref={textareaRef}
-        className={cn(
-          "min-h-[40px] max-h-[200px] flex-1 resize-none rounded-sm border border-transparent bg-transparent px-3 py-2 text-sm text-zinc-900",
-          "placeholder:text-zinc-400",
-          "focus:outline-none",
-          "disabled:cursor-not-allowed disabled:opacity-50",
-        )}
-        placeholder={
-          ready
-            ? "Send a message... (Shift+Enter for newline)"
-            : "Connection is reconnecting... You can still type."
-        }
-        disabled={isBusy}
-        onKeyDown={handleKeyDown}
-        onInput={handleInput}
-        rows={1}
-      />
-
-      {showCancel ? (
-        <Button
-          size="icon"
-          variant="outline"
-          onClick={onCancel}
-          className="shrink-0 rounded-sm border-2 border-zinc-900 bg-white text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff0a8]"
-          title="Cancel"
-        >
-          <SquareIcon className="size-4" />
-        </Button>
-      ) : (
-        <Button
-          size="icon"
-          onClick={handleSubmit}
-          className="shrink-0 rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
-          title="Send"
-          disabled={isBusy}
-        >
-          <SendIcon className="size-4" />
-        </Button>
+      {/* Pending attachment chips */}
+      {pendingFiles.length > 0 && (
+        <div className="mb-2 flex flex-wrap gap-1.5">
+          {pendingFiles.map((f) => (
+            <span
+              key={f.id}
+              className="flex items-center gap-1 rounded-full border border-zinc-400 bg-[#d8efff] px-2 py-0.5 text-xs text-zinc-700"
+            >
+              <PaperclipIcon className="size-3 shrink-0" />
+              <span className="max-w-[120px] truncate">{f.name}</span>
+              <button
+                type="button"
+                onClick={() => removeFile(f.id)}
+                className="ml-0.5 text-zinc-500 hover:text-zinc-900"
+                aria-label="Remove"
+              >
+                <XIcon className="size-3" />
+              </button>
+            </span>
+          ))}
+        </div>
       )}
+
+      <div className="flex items-end gap-2 rounded-sm border-2 border-black bg-[#fffdf4] p-2 shadow-[4px_4px_0_0_rgba(0,0,0,0.2)]">
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/gif,image/webp"
+          multiple
+          className="hidden"
+          onChange={(e) => void handleFileChange(e)}
+        />
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          disabled={isBusy || uploading}
+          className="shrink-0 rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40"
+          title="Attach image"
+        >
+          <PaperclipIcon className="size-4" />
+        </button>
+        <textarea
+          ref={textareaRef}
+          className={cn(
+            "min-h-[40px] max-h-[200px] flex-1 resize-none rounded-sm border border-transparent bg-transparent px-3 py-2 text-sm text-zinc-900",
+            "placeholder:text-zinc-400",
+            "focus:outline-none",
+            "disabled:cursor-not-allowed disabled:opacity-50",
+          )}
+          placeholder={
+            ready
+              ? "Send a message... (Shift+Enter for newline)"
+              : "Connection is reconnecting... You can still type."
+          }
+          disabled={isBusy}
+          onKeyDown={handleKeyDown}
+          onInput={handleInput}
+          rows={1}
+        />
+
+        {showCancel ? (
+          <Button
+            size="icon"
+            variant="outline"
+            onClick={onCancel}
+            className="shrink-0 rounded-sm border-2 border-zinc-900 bg-white text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff0a8]"
+            title="Cancel"
+          >
+            <SquareIcon className="size-4" />
+          </Button>
+        ) : (
+          <Button
+            size="icon"
+            onClick={handleSubmit}
+            className="shrink-0 rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
+            title="Send"
+            disabled={isBusy || uploading}
+          >
+            <SendIcon className="size-4" />
+          </Button>
+        )}
       </div>
     </div>
   );

@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 43;
+const LATEST_VERSION = 44;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -793,5 +793,27 @@ export function migrate(db: Db): void {
         ON channel_messages(channel_id, seq);
     `);
     db.exec(`UPDATE schema_version SET version = 43;`);
+  }
+
+  if (current < 44) {
+    // Attachments: file upload support
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS attachments (
+        id           TEXT PRIMARY KEY,
+        filename     TEXT NOT NULL,
+        mime_type    TEXT NOT NULL,
+        size_bytes   INTEGER NOT NULL,
+        storage_path TEXT NOT NULL,
+        channel_id   TEXT,
+        agent_id     TEXT,
+        created_at   INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_attachments_agent ON attachments(agent_id, created_at DESC);
+    `);
+    const cmCols = db.prepare("PRAGMA table_info('channel_messages')").all() as Array<{ name: string }>;
+    if (!cmCols.some((c) => c.name === 'attachment_ids')) {
+      db.exec(`ALTER TABLE channel_messages ADD COLUMN attachment_ids TEXT;`);
+    }
+    db.exec(`UPDATE schema_version SET version = 44;`);
   }
 }

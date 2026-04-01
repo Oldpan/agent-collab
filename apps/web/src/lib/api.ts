@@ -119,6 +119,8 @@ export type ChannelMessage = {
   taskNumber?: number;
   taskStatus?: string;
   taskAssigneeName?: string | null;
+  /** Attachment UUIDs to display with this message. */
+  attachmentIds?: string[];
 };
 
 export type ChannelTask = TaskInfo & {
@@ -305,13 +307,34 @@ export async function sendChannelMessage(
   content: string,
   senderName?: string,
   replyTo?: string,
+  attachmentIds?: string[],
 ): Promise<{ messageId: string; seq: number }> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/messages`, {
     method: 'POST',
     headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ content, senderName, ...(replyTo ? { replyTo } : {}) }),
+    body: JSON.stringify({
+      content, senderName,
+      ...(replyTo ? { replyTo } : {}),
+      ...(attachmentIds?.length ? { attachmentIds } : {}),
+    }),
   });
   if (!res.ok) throw new Error(`Failed to send channel message: ${res.statusText}`);
+  return res.json();
+}
+
+/** Upload a file as the current user. Returns the attachment ID. */
+export async function uploadAttachment(file: File): Promise<{ id: string; filename: string; sizeBytes: number }> {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  const res = await fetch(`${API_BASE}/attachments/upload`, {
+    method: 'POST',
+    headers: withAuthHeaders(),  // no Content-Type — let browser set multipart boundary
+    body: form,
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Upload failed: ${res.statusText}`);
+  }
   return res.json();
 }
 

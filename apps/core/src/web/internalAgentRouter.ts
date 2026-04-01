@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { writeFileSync } from 'node:fs';
+import { join, extname } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Db } from '@agent-collab/runtime-acp';
 import type { ServerEvent } from '@agent-collab/protocol';
@@ -83,6 +85,7 @@ export function registerInternalAgentRoutes(
   humanUserName: string,
   skillsService?: AgentSkillsService,
   internalAuthToken?: string,
+  attachmentsDir?: string,
 ): void {
   app.addHook('onRequest', async (req, reply) => {
     if (!req.url.startsWith('/api/internal/agent/')) return;
@@ -118,7 +121,7 @@ export function registerInternalAgentRoutes(
       return { error: 'Agent not found' };
     }
 
-    const { target, content, kind, conversationId } = req.body ?? {};
+    const { target, content, kind, conversationId, attachmentIds } = req.body ?? {};
     const normalizedContent = typeof content === 'string' ? content.trim() : '';
     if (!normalizedContent) {
       reply.code(400);
@@ -161,9 +164,12 @@ export function registerInternalAgentRoutes(
     const runId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
     const threadRootId = resolveThreadRootId(resolvedTarget);
 
+    const attachmentIdsJson = Array.isArray(attachmentIds) && attachmentIds.length > 0
+      ? JSON.stringify(attachmentIds)
+      : null;
     db.prepare(
-      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind, message_source)
-       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind, message_source, attachment_ids)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       messageId,
       channelId,
@@ -177,6 +183,7 @@ export function registerInternalAgentRoutes(
       threadRootId,
       kind ?? null,
       'agent_send',
+      attachmentIdsJson,
     );
 
     if (!channelId.startsWith('dm:')) {
@@ -293,6 +300,58 @@ export function registerInternalAgentRoutes(
 
     return { messageId, seq, runId, target: resolvedTarget, kind: kind ?? null };
   });
+
+  /**
+   * POST /api/internal/agent/:agentId/upload
+   * Upload a file (image) and store it as an attachment.
+   * Multipart form: file field + optional channelId text field.
+   * Returns { id, filename, sizeBytes }.
+   */
+  app.post<{ Params: { agentId: string } }>(
+    '/api/internal/agent/:agentId/upload',
+    async (req, reply) => {
+      const { agentId } = req.params;
+      if (!conversationManager.getAgent(agentId)) {
+        reply.code(404);
+        return { error: 'Agent not found' };
+      }
+      if (!attachmentsDir) {
+        reply.code(503);
+        return { error: 'Attachment storage not configured' };
+      }
+
+      const data = await req.file();
+      if (!data) { reply.code(400); return { error: 'No file uploaded' }; }
+
+      const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+      if (!allowedMimes.includes(data.mimetype)) {
+        reply.code(400);
+        return { error: `Unsupported file type: ${data.mimetype}. Allowed: JPEG, PNG, GIF, WebP` };
+      }
+
+      const buffer = await data.toBuffer();
+      if (buffer.length > 5 * 1024 * 1024) {
+        reply.code(400);
+        return { error: 'File too large (max 5MB)' };
+      }
+
+      const id = randomUUID();
+      const ext = extname(data.filename) || '.bin';
+      const storagePath = join(attachmentsDir, `${id}${ext}`);
+      writeFileSync(storagePath, buffer);
+
+      // Optional channelId from form fields
+      const fields = data.fields as Record<string, { value?: string }> | undefined;
+      const channelId = fields?.channelId?.value ?? null;
+
+      db.prepare(
+        `INSERT INTO attachments(id, filename, mime_type, size_bytes, storage_path, channel_id, agent_id, created_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(id, data.filename, data.mimetype, buffer.length, storagePath, channelId, agentId, Date.now());
+
+      return { id, filename: data.filename, sizeBytes: buffer.length };
+    },
+  );
 
   /**
    * GET /api/internal/agent/:agentId/receive

@@ -6,6 +6,7 @@ import Fastify from 'fastify';
 import fastifyCors from '@fastify/cors';
 import fastifyWebSocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
+import fastifyMultipart from '@fastify/multipart';
 
 import type { Db } from '@agent-collab/runtime-acp';
 import { log, finishRun } from '@agent-collab/runtime-acp';
@@ -57,6 +58,9 @@ export async function startServer(params: {
 }): Promise<void> {
   const { port, host, conversationManager, db } = params;
   const config = conversationManager.getConfig();
+  // Attachment storage: sibling directory next to the DB file
+  const attachmentsDir = path.join(path.dirname(config.dbPath), 'attachments');
+  fs.mkdirSync(attachmentsDir, { recursive: true });
   const nodeRegistry = params.nodeRegistry ?? new NodeRegistry();
   const workspaceBroker = params.workspaceBroker ?? new AgentWorkspaceBroker({ nodeRegistry });
   const skillsBroker = params.skillsBroker ?? new AgentSkillsBroker({ nodeRegistry });
@@ -73,6 +77,7 @@ export async function startServer(params: {
 
   await app.register(fastifyCors, { origin: true });
   await app.register(fastifyWebSocket);
+  await app.register(fastifyMultipart, { limits: { fileSize: 5 * 1024 * 1024 } }); // 5MB limit
 
   const getRequestUser = (req: { headers: Record<string, unknown> }): User | null => {
     const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
@@ -823,6 +828,7 @@ export async function startServer(params: {
         ? db.prepare(
             `SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
                     cm.content, cm.created_at as createdAt, cm.seq, cm.message_source as messageSource,
+                    cm.attachment_ids as attachmentIds,
                     COUNT(replies.message_id) as replyCount,
                     t.task_number as taskNumber, t.status as taskStatus,
                     t.claimed_by_name as taskAssigneeName
@@ -838,6 +844,7 @@ export async function startServer(params: {
         : db.prepare(
             `SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
                     cm.content, cm.created_at as createdAt, cm.seq, cm.message_source as messageSource,
+                    cm.attachment_ids as attachmentIds,
                     COUNT(replies.message_id) as replyCount,
                     t.task_number as taskNumber, t.status as taskStatus,
                     t.claimed_by_name as taskAssigneeName
@@ -850,7 +857,7 @@ export async function startServer(params: {
              GROUP BY cm.message_id
              ORDER BY cm.seq DESC LIMIT ?`,
           ).all(req.params.id, limit)
-      ) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; seq: number; replyCount: number; messageSource: string | null; taskNumber: number | null; taskStatus: string | null; taskAssigneeName: string | null }>;
+      ) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; seq: number; replyCount: number; messageSource: string | null; attachmentIds: string | null; taskNumber: number | null; taskStatus: string | null; taskAssigneeName: string | null }>;
       return {
         messages: rows.reverse().map((r) => ({
           id: r.id,
@@ -861,6 +868,7 @@ export async function startServer(params: {
           seq: r.seq,
           replyCount: r.replyCount,
           ...(r.messageSource ? { messageSource: r.messageSource } : {}),
+          ...(r.attachmentIds ? { attachmentIds: JSON.parse(r.attachmentIds) as string[] } : {}),
           ...(r.taskNumber != null ? { taskNumber: r.taskNumber, taskStatus: r.taskStatus, taskAssigneeName: r.taskAssigneeName } : {}),
         })),
       };
@@ -879,19 +887,21 @@ export async function startServer(params: {
       const rows = (before != null
         ? db.prepare(
             `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                    content, created_at as createdAt, seq, message_source as messageSource
+                    content, created_at as createdAt, seq, message_source as messageSource,
+                    attachment_ids as attachmentIds
              FROM channel_messages
              WHERE channel_id = ? AND thread_root_id = ? AND seq < ?
              ORDER BY seq DESC LIMIT ?`,
           ).all(req.params.id, req.params.shortId, before, limit)
         : db.prepare(
             `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                    content, created_at as createdAt, seq, message_source as messageSource
+                    content, created_at as createdAt, seq, message_source as messageSource,
+                    attachment_ids as attachmentIds
              FROM channel_messages
              WHERE channel_id = ? AND thread_root_id = ?
              ORDER BY seq ASC LIMIT ?`,
           ).all(req.params.id, req.params.shortId, limit)
-      ) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; seq: number; messageSource: string | null }>;
+      ) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; seq: number; messageSource: string | null; attachmentIds: string | null }>;
       const ordered = before != null ? rows.reverse() : rows;
       return {
         messages: ordered.map((r) => ({
@@ -903,6 +913,7 @@ export async function startServer(params: {
           seq: r.seq,
           threadRootId: req.params.shortId,
           ...(r.messageSource ? { messageSource: r.messageSource } : {}),
+          ...(r.attachmentIds ? { attachmentIds: JSON.parse(r.attachmentIds) as string[] } : {}),
         })),
       };
     },
@@ -998,15 +1009,45 @@ export async function startServer(params: {
     },
   );
 
+  // ─── User-facing attachment upload ──────────────────────────────────────────
+
+  /** POST /api/attachments/upload — upload a file as the current user */
+  app.post('/api/attachments/upload', async (req, reply) => {
+    const user = requireUser(req, reply);
+    if (!user) return;
+    const data = await req.file();
+    if (!data) { reply.code(400); return { error: 'No file uploaded' }; }
+
+    const allowedMimes = ['image/jpeg', 'image/png', 'image/gif', 'image/webp'];
+    if (!allowedMimes.includes(data.mimetype)) {
+      reply.code(400);
+      return { error: `Unsupported file type. Allowed: JPEG, PNG, GIF, WebP` };
+    }
+    const buffer = await data.toBuffer();
+    if (buffer.length > 5 * 1024 * 1024) { reply.code(400); return { error: 'File too large (max 5MB)' }; }
+
+    const id = randomUUID();
+    const ext = path.extname(data.filename) || '.bin';
+    const storagePath = path.join(attachmentsDir, `${id}${ext}`);
+    fs.writeFileSync(storagePath, buffer);
+
+    db.prepare(
+      `INSERT INTO attachments(id, filename, mime_type, size_bytes, storage_path, channel_id, agent_id, created_at)
+       VALUES(?, ?, ?, ?, ?, NULL, NULL, ?)`,
+    ).run(id, data.filename, data.mimetype, buffer.length, storagePath, Date.now());
+
+    return { id, filename: data.filename, sizeBytes: buffer.length };
+  });
+
   // Post a user message to a channel (or thread when replyTo is set)
-  app.post<{ Params: { id: string }; Body: { content: string; senderName?: string; replyTo?: string } }>(
+  app.post<{ Params: { id: string }; Body: { content: string; senderName?: string; replyTo?: string; attachmentIds?: string[] } }>(
     '/api/channels/:id/messages',
     async (req, reply) => {
       const chanUser = requireChannelAccess(req, reply, req.params.id);
       if (!chanUser) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
-      const { content, replyTo } = req.body ?? {};
+      const { content, replyTo, attachmentIds } = req.body ?? {};
       const senderName = chanUser.username;
       if (!content) { reply.code(400); return { error: 'content is required' }; }
       const threadRootId = replyTo ?? null;
@@ -1014,10 +1055,12 @@ export async function startServer(params: {
       const messageId = randomUUID();
       const seq = allocateNextChannelMessageSeq(db, req.params.id);
       const target = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
+      const attachmentIdsJson = Array.isArray(attachmentIds) && attachmentIds.length > 0
+        ? JSON.stringify(attachmentIds) : null;
       db.prepare(
-        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-         VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, NULL, ?)`,
-      ).run(messageId, req.params.id, senderName, target, content, seq, now, threadRootId);
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, attachment_ids)
+         VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, NULL, ?, ?)`,
+      ).run(messageId, req.params.id, senderName, target, content, seq, now, threadRootId, attachmentIdsJson);
       const event: import('@agent-collab/protocol').ServerEvent = {
         type: 'channel.message',
         message: {
@@ -1239,7 +1282,32 @@ export async function startServer(params: {
     config.humanUserName,
     skillsService,
     config.internalAgentAuthToken,
+    attachmentsDir,
   );
+
+  // ─── Attachment download ─────────────────────────────────────────────────────
+
+  type AttachmentRow = { id: string; filename: string; mime_type: string; size_bytes: number; storage_path: string };
+
+  /** GET /api/attachments/:id — download an uploaded attachment (user auth or internal agent token) */
+  app.get<{ Params: { id: string } }>('/api/attachments/:id', async (req, reply) => {
+    const user = getRequestUser(req);
+    if (!user) {
+      // Also accept internal agent token so agents can use view_file
+      const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
+      const token = authHeader.replace(/^Bearer\s+/i, '');
+      if (!config.internalAgentAuthToken || token !== config.internalAgentAuthToken) {
+        reply.code(401);
+        return { error: 'Unauthorized' };
+      }
+    }
+    const { id } = req.params;
+    const row = db.prepare('SELECT * FROM attachments WHERE id = ?').get(id) as AttachmentRow | undefined;
+    if (!row) { reply.code(404); return { error: 'Not found' }; }
+    if (!fs.existsSync(row.storage_path)) { reply.code(404); return { error: 'File not found on disk' }; }
+    reply.type(row.mime_type);
+    return reply.send(fs.readFileSync(row.storage_path));
+  });
 
   // ─── User-facing Task routes ───
 
