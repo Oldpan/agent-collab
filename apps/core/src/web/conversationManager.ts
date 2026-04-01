@@ -692,8 +692,12 @@ export class ConversationManager {
     await this.executionDispatcher.handleConversationSettled(conversationId);
   }
 
-  clearQueuedPromptsForNode(nodeId: string): void {
-    this.executionDispatcher.clearQueuedPromptsForNode(nodeId);
+  handleRunAccepted(runId: string, conversationId: string): boolean {
+    return this.executionDispatcher.handleRunAccepted(runId, conversationId);
+  }
+
+  rejectPendingDispatchesForNode(nodeId: string, errorMessage: string): void {
+    this.executionDispatcher.rejectPendingDispatchesForNode(nodeId, errorMessage);
   }
 
   // ─── Channel CRUD ───

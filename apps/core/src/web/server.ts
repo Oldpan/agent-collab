@@ -27,6 +27,7 @@ import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
 import { deleteChannelSubscription, listChannelSubscriptions, upsertChannelSubscription } from './channelSubscriptions.js';
 import { listTargetParticipants, setTargetOwner, upsertTargetParticipant } from './targetParticipants.js';
 import { bindTaskToThread, getBoundTaskForThread, getThreadCollaborationSummary, unbindTaskFromThread } from './threadTaskBindings.js';
+import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
 import type { User } from '../services/auth.js';
 import {
   hasAdminUser,
@@ -98,6 +99,66 @@ export async function startServer(params: {
     return user;
   };
 
+  const hasAgentAccess = (user: User, agentId: string): boolean => {
+    if (user.isAdmin) return true;
+    return getUserAgentAccess(db, user.id).includes(agentId);
+  };
+
+  const hasChannelAccess = (user: User, channelId: string): boolean => {
+    if (user.isAdmin) return true;
+    return getUserChannelAccess(db, user.id).includes(channelId);
+  };
+
+  const requireAgentAccess = (
+    req: { headers: Record<string, unknown> },
+    reply: { code: (statusCode: number) => unknown },
+    agentId: string,
+  ): User | null => {
+    const user = requireUser(req, reply);
+    if (!user) return null;
+    if (!hasAgentAccess(user, agentId)) {
+      reply.code(403);
+      return null;
+    }
+    return user;
+  };
+
+  const requireChannelAccess = (
+    req: { headers: Record<string, unknown> },
+    reply: { code: (statusCode: number) => unknown },
+    channelId: string,
+  ): User | null => {
+    const user = requireUser(req, reply);
+    if (!user) return null;
+    if (!hasChannelAccess(user, channelId)) {
+      reply.code(403);
+      return null;
+    }
+    return user;
+  };
+
+  const canAccessConversation = (user: User, conversationId: string): boolean => {
+    if (user.isAdmin) return true;
+    const conv = conversationManager.getConversation(conversationId);
+    if (!conv) return false;
+    if (conv.threadKind === 'direct') return conv.userId === user.id;
+    return hasChannelAccess(user, conv.channelId);
+  };
+
+  const requireConversationAccess = (
+    req: { headers: Record<string, unknown> },
+    reply: { code: (statusCode: number) => unknown },
+    conversationId: string,
+  ): User | null => {
+    const user = requireUser(req, reply);
+    if (!user) return null;
+    if (!canAccessConversation(user, conversationId)) {
+      reply.code(403);
+      return null;
+    }
+    return user;
+  };
+
   // ─── REST routes ───
 
   // List conversations — filtered by the requesting user
@@ -130,6 +191,7 @@ export async function startServer(params: {
   });
 
   app.get<{ Params: { id: string } }>('/api/agents/:id', async (req, reply) => {
+    if (!requireAgentAccess(req, reply, req.params.id)) return { error: 'Access denied' };
     const agent = conversationManager.getAgent(req.params.id);
     if (!agent) { reply.code(404); return { error: 'Not found' }; }
     return agent;
@@ -151,13 +213,19 @@ export async function startServer(params: {
   });
 
   app.get<{ Params: { id: string } }>('/api/agents/:id/conversations', async (req, reply) => {
+    const user = requireAgentAccess(req, reply, req.params.id);
+    if (!user) return { error: 'Access denied' };
     const agent = conversationManager.getAgent(req.params.id);
     if (!agent) { reply.code(404); return { error: 'Not found' }; }
-    return conversationManager.listConversations({ agentId: req.params.id });
+    return conversationManager.listConversations({
+      agentId: req.params.id,
+      ...(user.isAdmin ? { isAdmin: true } : { userId: user.id }),
+    });
   });
 
   app.post<{ Params: { id: string } }>('/api/agents/:id/open-thread', async (req, reply) => {
-    const user = getRequestUser(req);
+    const user = requireAgentAccess(req, reply, req.params.id);
+    if (!user) return { error: 'Access denied' };
     const thread = conversationManager.openAgentThread(req.params.id, user?.id ?? null);
     if (!thread) {
       reply.code(404);
@@ -266,6 +334,7 @@ export async function startServer(params: {
   });
 
   app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/agents/:id/workspace', async (req, reply) => {
+    if (!requireAgentAccess(req, reply, req.params.id)) return { error: 'Access denied' };
     try {
       return await workspaceService.listWorkspace(req.params.id, normalizeWorkspaceQueryPath(req.query.path));
     } catch (error) {
@@ -279,6 +348,7 @@ export async function startServer(params: {
   });
 
   app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/agents/:id/workspace/file', async (req, reply) => {
+    if (!requireAgentAccess(req, reply, req.params.id)) return { error: 'Access denied' };
     try {
       return await workspaceService.readWorkspaceFile(req.params.id, normalizeWorkspaceQueryPath(req.query.path));
     } catch (error) {
@@ -292,6 +362,7 @@ export async function startServer(params: {
   });
 
   app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/agents/:id/skills', async (req, reply) => {
+    if (!requireAgentAccess(req, reply, req.params.id)) return { error: 'Access denied' };
     try {
       return await skillsService.listSkills(req.params.id, normalizeSkillQueryPath(req.query.path));
     } catch (error) {
@@ -305,6 +376,7 @@ export async function startServer(params: {
   });
 
   app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/agents/:id/skills/file', async (req, reply) => {
+    if (!requireAgentAccess(req, reply, req.params.id)) return { error: 'Access denied' };
     try {
       return await skillsService.readSkillFile(req.params.id, normalizeRequiredSkillQueryPath(req.query.path));
     } catch (error) {
@@ -319,6 +391,7 @@ export async function startServer(params: {
 
   // Create conversation
   app.post<{ Body: CreateConversationRequest }>('/api/conversations', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     const body = req.body ?? {};
     const conv = conversationManager.createConversation({
       agentType: body.agentType,
@@ -337,6 +410,7 @@ export async function startServer(params: {
 
   // Delete conversation
   app.delete<{ Params: { id: string } }>('/api/conversations/:id', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     const conv = conversationManager.getConversation(req.params.id);
     if (!conv) {
       reply.code(404);
@@ -358,11 +432,7 @@ export async function startServer(params: {
         reply.code(404);
         return { error: 'Not found' };
       }
-
-      const isDirectThread = conv.threadKind === 'direct';
-      const isOwner = conv.userId === user.id;
-      const isAdmin = user.isAdmin;
-      if (isDirectThread && !isOwner && !isAdmin) {
+      if (!canAccessConversation(user, req.params.id)) {
         reply.code(403);
         return { error: 'Access denied' };
       }
@@ -392,22 +462,12 @@ export async function startServer(params: {
 
   // Get conversation history (stored events from DB)
   app.get<{ Params: { id: string } }>('/api/conversations/:id/history', async (req, reply) => {
-    const user = requireUser(req, reply);
-    if (!user) return { error: 'Unauthorized' };
-
     const conv = conversationManager.getConversation(req.params.id);
     if (!conv) {
       reply.code(404);
       return { error: 'Not found' };
     }
-    // Private DM conversations: user must own or be admin
-    const isDirectThread = conv.threadKind === 'direct';
-    const isOwner = conv.userId === user.id;
-    const isAdmin = user.isAdmin;
-    if (isDirectThread && !isOwner && !isAdmin) {
-      reply.code(403);
-      return { error: 'Access denied' };
-    }
+    if (!requireConversationAccess(req, reply, req.params.id)) return { error: 'Access denied' };
 
     // Fetch runs and events for this conversation's session
     const sessionRow = db
@@ -469,41 +529,31 @@ export async function startServer(params: {
   app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
     '/api/conversations/:id/channel-messages',
     async (req, reply) => {
-      const user = requireUser(req, reply);
-      if (!user) return { error: 'Unauthorized' };
-
       const conv = conversationManager.getConversation(req.params.id);
       if (!conv) {
         reply.code(404);
         return { error: 'Not found' };
       }
-      // Private DM conversations: user must own or be admin
-      const isDirectThread = conv.threadKind === 'direct';
-      const isOwner = conv.userId === user.id;
-      const isAdmin = user.isAdmin;
-      if (isDirectThread && !isOwner && !isAdmin) {
-        reply.code(403);
-        return { error: 'Access denied' };
-      }
+      const user = requireConversationAccess(req, reply, req.params.id);
+      if (!user) return { error: 'Access denied' };
       if (!conv.agentId) {
         return { messages: [] };
       }
 
       const limit = Math.min(Number(req.query.limit ?? 50), 200);
       const dmChannelId = `dm:${conv.agentId}`;
-      const username = user.username;
+      const directTarget = (conv.replyTarget ?? '').trim();
+      const directTargetPrefix = `${directTarget}:%`;
 
-      // For DM conversations, only show messages sent by this user or targeted at this user
-      // This ensures users can't see other users' DM history with the same agent
       const rows = db
         .prepare(
           `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                  content, created_at as createdAt, seq, message_source as messageSource, target
+                  content, created_at as createdAt, seq, message_source as messageSource
            FROM channel_messages
-           WHERE channel_id = ? AND (sender_name = ? OR target LIKE ?)
+           WHERE channel_id = ? AND (target = ? OR target LIKE ?)
            ORDER BY seq DESC LIMIT ?`,
         )
-        .all(dmChannelId, username, `dm:@${username}%`, limit) as Array<{
+        .all(dmChannelId, directTarget, directTargetPrefix, limit) as Array<{
         id: string;
         senderName: string;
         senderType: string;
@@ -535,13 +585,17 @@ export async function startServer(params: {
       channelReadSeqs?: Record<string, number>;
     };
   }>('/api/unread-summary', async (req) => {
+    const user = getRequestUser(req);
+    if (!user) return { agentDms: {}, channels: {} };
     const body = req.body ?? {};
-    const agentIds = Array.isArray(body.agentIds)
+    const requestedAgentIds = Array.isArray(body.agentIds)
       ? body.agentIds.filter((value): value is string => typeof value === 'string')
       : [];
-    const channelIds = Array.isArray(body.channelIds)
+    const requestedChannelIds = Array.isArray(body.channelIds)
       ? body.channelIds.filter((value): value is string => typeof value === 'string')
       : [];
+    const allowedAgentIds = user.isAdmin ? requestedAgentIds : requestedAgentIds.filter((id) => hasAgentAccess(user, id));
+    const allowedChannelIds = user.isAdmin ? requestedChannelIds : requestedChannelIds.filter((id) => hasChannelAccess(user, id));
     const agentDmReadSeqs = body.agentDmReadSeqs && typeof body.agentDmReadSeqs === 'object'
       ? body.agentDmReadSeqs
       : {};
@@ -567,13 +621,13 @@ export async function startServer(params: {
 
     return {
       agentDms: Object.fromEntries(
-        agentIds.map((agentId) => [
+        allowedAgentIds.map((agentId) => [
           agentId,
           summarizeChannel(`dm:${agentId}`, Math.max(0, Number(agentDmReadSeqs[agentId] ?? 0))),
         ]),
       ),
       channels: Object.fromEntries(
-        channelIds.map((channelId) => [
+        allowedChannelIds.map((channelId) => [
           channelId,
           summarizeChannel(channelId, Math.max(0, Number(channelReadSeqs[channelId] ?? 0))),
         ]),
@@ -624,6 +678,7 @@ export async function startServer(params: {
   app.patch<{ Params: { id: string }; Body: UpdateChannelRequest }>(
     '/api/channels/:id',
     async (req, reply) => {
+      if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
       const updated = conversationManager.updateChannel(req.params.id, req.body ?? {});
       if (!updated) { reply.code(404); return { error: 'Not found' }; }
       return updated;
@@ -633,6 +688,7 @@ export async function startServer(params: {
   app.post<{ Params: { id: string; agentId: string } }>(
     '/api/channels/:id/subscriptions/:agentId',
     async (req, reply) => {
+      if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const agent = conversationManager.getAgent(req.params.agentId);
@@ -648,6 +704,7 @@ export async function startServer(params: {
   app.delete<{ Params: { id: string; agentId: string } }>(
     '/api/channels/:id/subscriptions/:agentId',
     async (req, reply) => {
+      if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       deleteChannelSubscription(db, req.params.id, req.params.agentId);
@@ -658,6 +715,7 @@ export async function startServer(params: {
   app.post<{ Params: { id: string } }>(
     '/api/channels/:id/clear-chat',
     async (req, reply) => {
+      if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) {
         reply.code(404);
@@ -743,6 +801,7 @@ export async function startServer(params: {
 
   // List conversations in a channel
   app.get<{ Params: { id: string } }>('/api/channels/:id/conversations', async (req, reply) => {
+    if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
     const channel = conversationManager.getChannel(req.params.id);
     if (!channel) {
       reply.code(404);
@@ -755,6 +814,7 @@ export async function startServer(params: {
   app.get<{ Params: { id: string }; Querystring: { limit?: string; before?: string } }>(
     '/api/channels/:id/messages',
     async (req, reply) => {
+      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const limit = Math.min(Number(req.query.limit ?? 50), 200);
@@ -811,6 +871,7 @@ export async function startServer(params: {
   app.get<{ Params: { id: string; shortId: string }; Querystring: { limit?: string; before?: string } }>(
     '/api/channels/:id/threads/:shortId/messages',
     async (req, reply) => {
+      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const limit = Math.min(Number(req.query.limit ?? 100), 200);
@@ -850,6 +911,7 @@ export async function startServer(params: {
   app.get<{ Params: { id: string; shortId: string } }>(
     '/api/channels/:id/threads/:shortId/summary',
     async (req, reply) => {
+      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       return getThreadCollaborationSummary(db, {
@@ -862,6 +924,7 @@ export async function startServer(params: {
   app.post<{ Params: { id: string; shortId: string }; Body: { taskNumber?: number } }>(
     '/api/channels/:id/threads/:shortId/task',
     async (req, reply) => {
+      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const taskNumber = req.body?.taskNumber;
@@ -909,6 +972,7 @@ export async function startServer(params: {
   app.delete<{ Params: { id: string; shortId: string } }>(
     '/api/channels/:id/threads/:shortId/task',
     async (req, reply) => {
+      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const boundTask = getBoundTaskForThread(db, {
@@ -938,18 +1002,17 @@ export async function startServer(params: {
   app.post<{ Params: { id: string }; Body: { content: string; senderName?: string; replyTo?: string } }>(
     '/api/channels/:id/messages',
     async (req, reply) => {
+      const chanUser = requireChannelAccess(req, reply, req.params.id);
+      if (!chanUser) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
-      const authHeader = req.headers.authorization ?? '';
-      const chanToken = authHeader.replace(/^Bearer\s+/i, '');
-      const chanUser = chanToken ? validateSession(db, chanToken) : null;
-      const { content, senderName = chanUser?.username ?? config.humanUserName, replyTo } = req.body ?? {};
+      const { content, replyTo } = req.body ?? {};
+      const senderName = chanUser.username;
       if (!content) { reply.code(400); return { error: 'content is required' }; }
       const threadRootId = replyTo ?? null;
       const now = Date.now();
       const messageId = randomUUID();
-      const seqRow = db.prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?').get(req.params.id) as { maxSeq: number | null };
-      const seq = (seqRow.maxSeq ?? 0) + 1;
+      const seq = allocateNextChannelMessageSeq(db, req.params.id);
       const target = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
       db.prepare(
         `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
@@ -1099,11 +1162,13 @@ export async function startServer(params: {
 
   // ─── Machine routes ───
 
-  app.get('/api/machines', async () => {
+  app.get('/api/machines', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     return conversationManager.listMachines();
   });
 
   app.post<{ Body: CreateMachineRequest }>('/api/machines', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     const body = (req.body ?? {}) as CreateMachineRequest;
     if (!body.name) {
       reply.code(400);
@@ -1115,12 +1180,14 @@ export async function startServer(params: {
   });
 
   app.get<{ Params: { id: string } }>('/api/machines/:id', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     const machine = conversationManager.getMachine(req.params.id);
     if (!machine) { reply.code(404); return { error: 'Not found' }; }
     return machine;
   });
 
   app.delete<{ Params: { id: string } }>('/api/machines/:id', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     const machine = conversationManager.getMachine(req.params.id);
     if (!machine) { reply.code(404); return { error: 'Not found' }; }
     conversationManager.deleteMachine(req.params.id);
@@ -1163,7 +1230,16 @@ export async function startServer(params: {
     }
   }
 
-  registerInternalAgentRoutes(app, db, conversationManager, broadcastToAgent, broadcastToChannel, config.humanUserName, skillsService);
+  registerInternalAgentRoutes(
+    app,
+    db,
+    conversationManager,
+    broadcastToAgent,
+    broadcastToChannel,
+    config.humanUserName,
+    skillsService,
+    config.internalAgentAuthToken,
+  );
 
   // ─── User-facing Task routes ───
 
@@ -1171,6 +1247,7 @@ export async function startServer(params: {
   app.get<{ Params: { id: string }; Querystring: { status?: string } }>(
     '/api/channels/:id/tasks',
     async (req, reply) => {
+      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const rows = req.query.status && req.query.status !== 'all'
@@ -1206,6 +1283,7 @@ export async function startServer(params: {
   app.post<{ Params: { id: string }; Body: { title: string; description?: string } }>(
     '/api/channels/:id/tasks',
     async (req, reply) => {
+      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const { title, description } = req.body ?? {};
@@ -1215,8 +1293,7 @@ export async function startServer(params: {
       const messageId = randomUUID();
       const seqRow = db.prepare('SELECT MAX(task_number) as maxNum FROM tasks WHERE channel_id = ?').get(req.params.id) as { maxNum: number | null };
       const taskNumber = (seqRow.maxNum ?? 0) + 1;
-      const msgSeqRow = db.prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?').get(req.params.id) as { maxSeq: number | null };
-      const seq = (msgSeqRow.maxSeq ?? 0) + 1;
+      const seq = allocateNextChannelMessageSeq(db, req.params.id);
       const target = `#${channel.name}`;
 
       // Insert the task message (becomes the thread root)
@@ -1251,6 +1328,7 @@ export async function startServer(params: {
   app.post<{ Params: { id: string }; Body: { messageId: string; title?: string } }>(
     '/api/channels/:id/tasks/claim-message',
     async (req, reply) => {
+      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const { messageId, title } = req.body ?? {};
@@ -1285,6 +1363,7 @@ export async function startServer(params: {
   app.patch<{ Params: { id: string; num: string }; Body: { status: string } }>(
     '/api/channels/:id/tasks/:num/status',
     async (req, reply) => {
+      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const taskNumber = Number(req.params.num);
@@ -1312,7 +1391,8 @@ export async function startServer(params: {
   // ─── Node REST routes ───
 
   // List connected agent nodes (in-memory only, for backward compat)
-  app.get('/api/nodes', async () => {
+  app.get('/api/nodes', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     return nodeRegistry.listNodes();
   });
 
@@ -1339,11 +1419,7 @@ export async function startServer(params: {
         socket.close();
         return;
       }
-      // Private DM conversations: user must own or be admin
-      const isDirectThread = conv.threadKind === 'direct';
-      const isOwner = conv.userId === wsUser.id;
-      const isAdmin = wsUser.isAdmin;
-      if (isDirectThread && !isOwner && !isAdmin) {
+      if (!canAccessConversation(wsUser, conversationId)) {
         socket.send(JSON.stringify({ type: 'error', message: 'Access denied' }));
         socket.close();
         return;
@@ -1359,8 +1435,20 @@ export async function startServer(params: {
     { websocket: true },
     (socket, req) => {
       const channelId = req.params.id;
+      const wsToken = (req.query as Record<string, string>)['token'] ?? '';
+      const wsUser = wsToken ? validateSession(db, wsToken) : null;
+      if (!wsUser) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Unauthorized' }));
+        socket.close();
+        return;
+      }
       if (!conversationManager.getChannel(channelId)) {
         socket.send(JSON.stringify({ type: 'error', message: 'Channel not found' }));
+        socket.close();
+        return;
+      }
+      if (!hasChannelAccess(wsUser, channelId)) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Access denied' }));
         socket.close();
         return;
       }

@@ -7,6 +7,7 @@ import { createTestConfig, createTestDb } from './helpers.js';
 import { ConversationManager } from '../web/conversationManager.js';
 import { registerInternalAgentRoutes } from '../web/internalAgentRouter.js';
 import { AgentSkillsService } from '../services/agentSkillsService.js';
+import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
 
 let db: Db;
 let manager: ConversationManager;
@@ -754,10 +755,11 @@ describe('internalAgentRouter', () => {
     });
     manager.joinChannel(agent.agentId, 'default');
 
+    const seq = allocateNextChannelMessageSeq(db, 'default');
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
        VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    ).run('msg-1', 'default', 'user', 'User', 'user', '#default', 'hello channel', 1, Date.now());
+    ).run('msg-1', 'default', 'user', 'User', 'user', '#default', 'hello channel', seq, Date.now());
 
     const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent('#default')}`);
     expect(res.status).toBe(200);
@@ -780,10 +782,24 @@ describe('internalAgentRouter', () => {
 
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
-       VALUES
-       ('main-msg-1', 'default', 'user', 'User', 'user', '#default', 'main channel context', 1, ?),
-       ('thread-msg-1', 'default', 'user', 'User', 'user', '#default:mainread1', 'thread-only context', 2, ?)`,
-    ).run(Date.now(), Date.now() + 1);
+       VALUES(?, 'default', 'user', 'User', 'user', ?, ?, ?, ?)`,
+    ).run(
+      'main-msg-1',
+      '#default',
+      'main channel context',
+      allocateNextChannelMessageSeq(db, 'default'),
+      Date.now(),
+    );
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES(?, 'default', 'user', 'User', 'user', ?, ?, ?, ?)`,
+    ).run(
+      'thread-msg-1',
+      '#default:mainread1',
+      'thread-only context',
+      allocateNextChannelMessageSeq(db, 'default'),
+      Date.now() + 1,
+    );
 
     const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent('#default')}`);
     expect(res.status).toBe(200);

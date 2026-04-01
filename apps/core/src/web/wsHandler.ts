@@ -281,8 +281,6 @@ async function handleClientEvent(
         const result = await manager.submitPrompt(conversationId, event.text, { senderName });
         if (result.queued) {
           broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'queued' });
-        } else {
-          broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'active' });
         }
       } catch (error: any) {
         broadcast(conversationId, { type: 'error', message: String(error?.message ?? error) });

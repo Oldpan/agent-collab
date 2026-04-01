@@ -59,8 +59,9 @@ export function useThreadStream(
 
     // Reuse the channel-level WS stream; filter by threadRootId
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const token = localStorage.getItem("auth_token") ?? "";
     const ws = new WebSocket(
-      `${protocol}//${window.location.host}/api/channels/${encodeURIComponent(channelId)}/stream`,
+      `${protocol}//${window.location.host}/api/channels/${encodeURIComponent(channelId)}/stream${token ? `?token=${encodeURIComponent(token)}` : ""}`,
     );
     wsRef.current = ws;
 

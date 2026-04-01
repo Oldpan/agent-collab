@@ -18,6 +18,7 @@ import { findMentionedAgents } from './channelMentions.js';
 import { resolveConversationReplyTarget } from './directReplyTargets.js';
 import { setTargetOwner, upsertTargetParticipant } from './targetParticipants.js';
 import { bindTaskToThread, getThreadBindingForTask } from './threadTaskBindings.js';
+import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
 
 const AGENT_MENTION_COOLDOWN_MS = 60_000;
 
@@ -81,7 +82,18 @@ export function registerInternalAgentRoutes(
   broadcastToChannel: (channelId: string, event: ServerEvent) => void,
   humanUserName: string,
   skillsService?: AgentSkillsService,
+  internalAuthToken?: string,
 ): void {
+  app.addHook('onRequest', async (req, reply) => {
+    if (!req.url.startsWith('/api/internal/agent/')) return;
+    if (!internalAuthToken) return;
+    const authHeader = typeof req.headers.authorization === 'string' ? req.headers.authorization : '';
+    const token = authHeader.replace(/^Bearer\s+/i, '');
+    if (token !== internalAuthToken) {
+      reply.code(401).send({ error: 'Unauthorized' });
+    }
+  });
+
   // ─── Messaging ───────────────────────────────────────────────────────────
 
   /**
@@ -145,7 +157,7 @@ export function registerInternalAgentRoutes(
 
     const now = Date.now();
     const messageId = randomUUID();
-    const seq = nextSeq(db, channelId);
+    const seq = allocateNextChannelMessageSeq(db, channelId);
     const runId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
     const threadRootId = resolveThreadRootId(resolvedTarget);
 
@@ -692,7 +704,7 @@ export function registerInternalAgentRoutes(
       const taskId = randomUUID();
       const messageId = randomUUID();
       const taskNumber = nextTaskNumber(db, channelId);
-      const seq = nextSeq(db, channelId);
+      const seq = allocateNextChannelMessageSeq(db, channelId);
       const target = `#${channelName}`;
       insertMessage.run(messageId, channelId, agentId, agent.name, target, taskDef.title, seq, now);
       insertTask.run(taskId, channelId, taskNumber, taskDef.title, taskDef.description ?? null, messageId, agentId, agent.name, now, now);
@@ -1103,12 +1115,6 @@ function resolveThreadRootId(target: string): string | null {
   return match ? match[1] : null;
 }
 
-function nextSeq(db: Db, channelId: string): number {
-  const row = db
-    .prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?')
-    .get(channelId) as { maxSeq: number | null };
-  return (row.maxSeq ?? 0) + 1;
-}
 
 function findActiveConversationRunId(db: Db, conversationId: string): string | null {
   const row = db

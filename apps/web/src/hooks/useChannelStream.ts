@@ -68,8 +68,9 @@ export function useChannelStream(options: UseChannelStreamOptions): {
       .catch(() => {});
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+    const token = localStorage.getItem("auth_token") ?? "";
     const ws = new WebSocket(
-      `${protocol}//${window.location.host}/api/channels/${encodeURIComponent(channelId)}/stream`,
+      `${protocol}//${window.location.host}/api/channels/${encodeURIComponent(channelId)}/stream${token ? `?token=${encodeURIComponent(token)}` : ""}`,
     );
     wsRef.current = ws;
 

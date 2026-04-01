@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 42;
+const LATEST_VERSION = 43;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -774,5 +774,24 @@ export function migrate(db: Db): void {
       CREATE INDEX IF NOT EXISTS idx_tasks_message_id ON tasks(message_id);
     `);
     db.exec(`UPDATE schema_version SET version = 42;`);
+  }
+
+  if (current < 43) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS channel_message_sequences (
+        channel_id TEXT PRIMARY KEY,
+        next_seq   INTEGER NOT NULL
+      );
+
+      INSERT INTO channel_message_sequences(channel_id, next_seq)
+      SELECT channel_id, MAX(seq) + 1
+      FROM channel_messages
+      GROUP BY channel_id
+      ON CONFLICT(channel_id) DO NOTHING;
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_channel_messages_channel_seq_unique
+        ON channel_messages(channel_id, seq);
+    `);
+    db.exec(`UPDATE schema_version SET version = 43;`);
   }
 }

@@ -100,7 +100,13 @@ export function createTestDb(): Db {
   if (!channelMessageCols.some((col) => col.name === 'message_source')) {
     db.exec(`ALTER TABLE channel_messages ADD COLUMN message_source TEXT;`);
   }
-  db.exec(`UPDATE schema_version SET version = MAX(version, 39);`);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS channel_message_sequences (
+      channel_id TEXT PRIMARY KEY,
+      next_seq   INTEGER NOT NULL
+    );
+  `);
+  db.exec(`UPDATE schema_version SET version = MAX(version, 43);`);
   return db;
 }
 
@@ -109,6 +115,9 @@ export function createTestConfig(overrides?: Partial<AppConfig>): AppConfig {
   return {
     webPort: 0, // 随机端口
     webHost: '127.0.0.1',
+    publicServerUrl: '',
+    internalAgentAuthToken: 'test-internal-token',
+    nodeDispatchAckTimeoutMs: 50,
     acpAgentCommand: 'echo',
     acpAgentArgs: ['noop'],
     acpPromptTimeoutMs: 120_000,

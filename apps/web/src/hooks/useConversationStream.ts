@@ -805,8 +805,6 @@ export function useConversationStream(
 
   const sendPrompt = useCallback(
     (text: string) => {
-      const ws = wsRef.current;
-      const readyState = ws?.readyState;
       const id = createId();
       setMessages((prev) => [
         ...prev,
@@ -814,16 +812,6 @@ export function useConversationStream(
       ]);
       const rollback = () =>
         setMessages((prev) => prev.filter((message) => message.id !== id));
-
-      if (readyState === WebSocket.OPEN) {
-        const delivered = sendEvent({ type: "prompt", text });
-        if (!delivered) {
-          rollback();
-          return false;
-        }
-        setStatus("submitted");
-        return true;
-      }
 
       if (!conversationId) {
         rollback();
@@ -854,7 +842,7 @@ export function useConversationStream(
 
       return true;
     },
-    [conversationId, sendEvent],
+    [conversationId],
   );
 
   const respondApproval = useCallback(

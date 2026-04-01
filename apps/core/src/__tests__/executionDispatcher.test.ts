@@ -8,6 +8,7 @@ import { ConversationManager } from '../web/conversationManager.js';
 describe('ExecutionDispatcher', () => {
   let db: Db;
   const sent: Array<{ nodeId: string; msg: CoreToNode }> = [];
+  let manager: ConversationManager;
   const fakeRegistry = {
     getNode(nodeId: string) {
       return {
@@ -19,11 +20,14 @@ describe('ExecutionDispatcher', () => {
     },
     send(nodeId: string, msg: CoreToNode) {
       sent.push({ nodeId, msg });
+      if (msg.type === 'run.dispatch') {
+        queueMicrotask(() => {
+          manager.handleRunAccepted(msg.runId, msg.conversationId);
+        });
+      }
       return true;
     },
   };
-
-  let manager: ConversationManager;
 
   beforeEach(() => {
     db = createTestDb();

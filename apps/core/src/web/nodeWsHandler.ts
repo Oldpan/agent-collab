@@ -8,6 +8,7 @@ import type { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import type { AgentSkillsBroker } from '../services/agentSkillsBroker.js';
 import type { ConversationManager } from './conversationManager.js';
 import { resolveConversationReplyTarget } from './directReplyTargets.js';
+import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
 
 /** Persist a ServerEvent from a remote run into core DB as a node/event entry */
 function appendNodeEvent(db: Db, runId: string, seq: number, event: ServerEvent): void {
@@ -283,12 +284,6 @@ function getFallbackMessageContext(
   };
 }
 
-function nextChannelMessageSeq(db: Db, channelId: string): number {
-  const row = db.prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?')
-    .get(channelId) as { maxSeq: number | null };
-  return (row.maxSeq ?? 0) + 1;
-}
-
 function persistDeltaFallbackMessages(params: {
   db: Db,
   conversationId: string,
@@ -311,7 +306,7 @@ function persistDeltaFallbackMessages(params: {
   let createdAt = Date.now();
   let emittedCount = 0;
   for (const content of segments) {
-    const seq = nextChannelMessageSeq(params.db, context.channelId);
+    const seq = allocateNextChannelMessageSeq(params.db, context.channelId);
     const messageId = randomUUID();
     params.db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind, message_source)
@@ -495,12 +490,39 @@ export function handleNodeWebSocket(
         }
 
         socket.send(JSON.stringify({ type: 'node.ack', nodeId: msg.nodeId }));
+        const queuedConversationIds = db.prepare(
+          `SELECT DISTINCT conversation_id as conversationId
+           FROM conversation_prompt_queue
+           WHERE conversation_id IN (
+             SELECT id FROM conversations WHERE node_id = ?
+           )`,
+        ).all(msg.nodeId) as Array<{ conversationId: string }>;
+        for (const conversation of queuedConversationIds) {
+          void manager.onConversationSettled(conversation.conversationId);
+        }
         log.info(`[node-ws] registered: ${msg.nodeId} (${msg.hostname})`);
         break;
       }
 
       case 'node.heartbeat': {
         registry.heartbeat(msg.nodeId);
+        break;
+      }
+
+      case 'run.accepted': {
+        const accepted = manager.handleRunAccepted(msg.runId, msg.conversationId);
+        if (!accepted) {
+          log.debug('[node-ws] ignoring late run.accepted without pending waiter', {
+            runId: msg.runId,
+            conversationId: msg.conversationId,
+          });
+          break;
+        }
+        broadcast(msg.conversationId, {
+          type: 'conversation.status',
+          conversationId: msg.conversationId,
+          status: 'active',
+        });
         break;
       }
 
@@ -634,15 +656,33 @@ export function handleNodeWebSocket(
 
   socket.on('close', () => {
     if (nodeId) {
+      const disconnectMessage = `Agent node disconnected: ${nodeId}`;
       workspaceBroker?.rejectPendingForNode(nodeId);
       skillsBroker?.rejectPendingForNode(nodeId);
+      manager.rejectPendingDispatchesForNode(nodeId, disconnectMessage);
       registry.unregister(nodeId);
-      manager.clearQueuedPromptsForNode(nodeId);
       db.prepare(`UPDATE nodes SET status='offline', last_seen=? WHERE node_id=?`)
         .run(Date.now(), nodeId);
       const affected = db.prepare(
         `SELECT id FROM conversations WHERE node_id = ? AND status != 'idle'`
       ).all(nodeId) as Array<{ id: string }>;
+      const openRuns = db.prepare(
+        `SELECT r.run_id as runId, c.id as conversationId
+         FROM runs r
+         JOIN conversations c ON c.session_key = r.session_key
+         WHERE c.node_id = ?
+           AND r.ended_at IS NULL`,
+      ).all(nodeId) as Array<{ runId: string; conversationId: string }>;
+      for (const run of openRuns) {
+        finishRun(db, { runId: run.runId, error: disconnectMessage });
+        broadcast(run.conversationId, {
+          type: 'turn.end',
+          turnId: run.runId,
+          stopReason: 'error',
+          endedAt: Date.now(),
+          error: disconnectMessage,
+        });
+      }
       db.prepare(`UPDATE conversations SET status='failed', updated_at=? WHERE node_id=? AND status != 'idle'`)
         .run(Date.now(), nodeId);
       for (const conv of affected) {
@@ -653,7 +693,7 @@ export function handleNodeWebSocket(
         });
         broadcast(conv.id, {
           type: 'error',
-          message: `Agent node disconnected: ${nodeId}`,
+          message: disconnectMessage,
         });
       }
       log.info(`[node-ws] disconnected: ${nodeId}`);

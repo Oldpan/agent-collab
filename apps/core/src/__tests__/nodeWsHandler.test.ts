@@ -40,6 +40,11 @@ describe('nodeWsHandler', () => {
       },
       send(_nodeId: string, msg: CoreToNode) {
         dispatches.push(msg);
+        if (msg.type === 'run.dispatch') {
+          queueMicrotask(() => {
+            manager.handleRunAccepted(msg.runId, msg.conversationId);
+          });
+        }
         return true;
       },
     };
@@ -845,5 +850,139 @@ describe('nodeWsHandler', () => {
       conversationId: conv.id,
       status: 'recovering',
     });
+  });
+
+  it('run.accepted 应把会话切到 active', () => {
+    const conv = manager.createConversation({ title: 'Accepted Test', nodeId: 'node-1' });
+    const socket = new FakeSocket();
+    const events: any[] = [];
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(socket as any, registry as any, (_conversationId, event) => {
+      events.push(event);
+    }, db, manager);
+
+    const dispatchPromise = manager.dispatchToNode(conv.id, 'hello');
+    socket.emit('message', JSON.stringify({
+      type: 'run.accepted',
+      runId: (dispatches[0] as Extract<CoreToNode, { type: 'run.dispatch' }>).runId,
+      conversationId: conv.id,
+    }));
+
+    return dispatchPromise.then(() => {
+      const row = db.prepare('SELECT status FROM conversations WHERE id = ?')
+      .get(conv.id) as { status: string };
+      expect(row.status).toBe('active');
+      expect(events).toContainEqual({
+        type: 'conversation.status',
+        conversationId: conv.id,
+        status: 'active',
+      });
+    });
+  });
+
+  it('node 断连时不应清空 core 侧 queued prompt，并应收口未结束 run', async () => {
+    const agent = manager.createAgent({
+      name: 'Queue Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/queue-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    const socket = new FakeSocket();
+    const events: any[] = [];
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(socket as any, registry as any, (_conversationId, event) => {
+      events.push(event);
+    }, db, manager);
+
+    socket.emit('message', JSON.stringify({
+      type: 'node.register',
+      nodeId: 'node-1',
+      hostname: 'queue-host',
+      agentTypes: ['claude_acp'],
+      version: '0.1.0',
+    }));
+
+    await manager.submitPrompt(conv.id, 'first');
+    const queued = await manager.submitPrompt(conv.id, 'second');
+    expect(queued.queued).toBe(true);
+
+    socket.emit('close');
+
+    const queueCount = db.prepare(
+      'SELECT COUNT(*) as count FROM conversation_prompt_queue WHERE conversation_id = ?',
+    ).get(conv.id) as { count: number };
+    expect(queueCount.count).toBe(1);
+
+    const openRuns = db.prepare(
+      `SELECT COUNT(*) as count
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.id = ? AND r.ended_at IS NULL`,
+    ).get(conv.id) as { count: number };
+    expect(openRuns.count).toBe(0);
+    expect(events.some((event) => event.type === 'error' && event.message === 'Agent node disconnected: node-1')).toBe(true);
+  });
+
+  it('node 重连后应继续派发保留的 queued prompt', async () => {
+    const agent = manager.createAgent({
+      name: 'Reconnect Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/reconnect-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    const socket = new FakeSocket();
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(socket as any, registry as any, () => {}, db, manager);
+
+    socket.emit('message', JSON.stringify({
+      type: 'node.register',
+      nodeId: 'node-1',
+      hostname: 'reconnect-host',
+      agentTypes: ['claude_acp'],
+      version: '0.1.0',
+    }));
+
+    await manager.submitPrompt(conv.id, 'first');
+    await manager.submitPrompt(conv.id, 'second');
+    socket.emit('close');
+
+    const reconnectSocket = new FakeSocket();
+    handleNodeWebSocket(reconnectSocket as any, registry as any, () => {}, db, manager);
+    reconnectSocket.emit('message', JSON.stringify({
+      type: 'node.register',
+      nodeId: 'node-1',
+      hostname: 'reconnect-host',
+      agentTypes: ['claude_acp'],
+      version: '0.1.0',
+    }));
+
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(dispatches.filter((msg) => msg.type === 'run.dispatch')).toHaveLength(2);
+    const queuedCount = db.prepare(
+      'SELECT COUNT(*) as count FROM conversation_prompt_queue WHERE conversation_id = ?',
+    ).get(conv.id) as { count: number };
+    expect(queuedCount.count).toBe(0);
   });
 });

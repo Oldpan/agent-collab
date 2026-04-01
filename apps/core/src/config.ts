@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { createInterface } from 'node:readline/promises';
 
 import { z } from 'zod';
@@ -49,6 +50,9 @@ function createConfigSchema(defaults: {
   return z.object({
     webPort: z.number().int().min(1).max(65535).default(3100),
     webHost: z.string().min(1).default('0.0.0.0'),
+    publicServerUrl: z.string().default(''),
+    internalAgentAuthToken: z.string().min(1).default('internal-agent-auth-token'),
+    nodeDispatchAckTimeoutMs: z.number().int().min(100).max(60_000).default(5_000),
 
     acpAgentCommand: z.string().min(1).default('npx'),
     acpAgentArgs: z
@@ -128,6 +132,16 @@ export async function loadConfig(options: LoadConfigOptions = {}): Promise<AppCo
   if (typeof raw?.dbPath === 'string') {
     raw.dbPath = resolvePathRelativeTo(raw.dbPath, gatewayHome, homeDir);
   }
+  if (typeof raw?.publicServerUrl !== 'string') {
+    raw.publicServerUrl = '';
+  }
+  if (typeof raw?.internalAgentAuthToken !== 'string' || !raw.internalAgentAuthToken.trim()) {
+    raw.internalAgentAuthToken = randomUUID();
+    fs.writeFileSync(file, JSON.stringify(raw, null, 2) + '\n', 'utf8');
+  }
+  if (typeof raw?.nodeDispatchAckTimeoutMs !== 'number') {
+    raw.nodeDispatchAckTimeoutMs = 5_000;
+  }
 
   return schema.parse(raw);
 }
@@ -145,6 +159,9 @@ function createDefaultConfig(defaults: {
     uiDefaultMode: 'summary',
     webPort: 3100,
     webHost: '0.0.0.0',
+    publicServerUrl: '',
+    internalAgentAuthToken: randomUUID(),
+    nodeDispatchAckTimeoutMs: 5_000,
   };
 }
 
@@ -196,6 +213,10 @@ async function runFirstTimeSetup(params: {
       params.defaults.defaultDbPath,
     );
     const webPort = await askPortWithDefault(rl, 'Web server port', 3100);
+    const publicServerUrl = await askOptional(
+      rl,
+      'Public server URL for remote nodes (optional, e.g. http://10.0.0.5:3100)',
+    );
 
     const raw: Record<string, unknown> = {
       workspaceRoot,
@@ -206,6 +227,9 @@ async function runFirstTimeSetup(params: {
       uiDefaultMode: 'summary',
       webPort,
       webHost: '0.0.0.0',
+      publicServerUrl,
+      internalAgentAuthToken: randomUUID(),
+      nodeDispatchAckTimeoutMs: 5_000,
     };
 
     params.output.write('\nSaved config. You can edit it later at:\n');

@@ -138,6 +138,53 @@ describe('Executor recovery', () => {
     executor.close();
   });
 
+  it('dispatch 入本地队列后应先向 core 发送 run.accepted', async () => {
+    const db = createTestDb();
+    openDbs.push(db);
+
+    const sent: NodeToCore[] = [];
+    const executor = new Executor({
+      db,
+      config: createTestConfig(),
+      send: (event) => {
+        sent.push(event);
+      },
+      createHost: () => ({
+        getState: () => 'idle',
+        dispatch: async () => {},
+        cancelRun: async () => false,
+        handlePermissionResponse: async () => false,
+        close: () => {},
+        getCurrentRunId: () => null,
+        getLastError: () => null,
+        getWorkspaceRoot: () => '/tmp',
+        getLastSleepAt: () => Date.now(),
+        hasPendingApproval: () => false,
+        isIdleExpired: () => false,
+      }),
+    });
+
+    await executor.dispatch({
+      type: 'run.dispatch',
+      runId: 'run-accepted-1',
+      conversationId: 'conv-accepted-1',
+      agentType: 'claude_acp',
+      workspacePath: '/tmp',
+      prompt: 'hello',
+      sessionKey: 'session-accepted-1',
+      hostKey: 'conversation:conv-accepted-1:claude_acp',
+      dispatchMode: 'cold_start',
+    });
+
+    expect(sent[0]).toEqual({
+      type: 'run.accepted',
+      runId: 'run-accepted-1',
+      conversationId: 'conv-accepted-1',
+    });
+
+    executor.close();
+  });
+
   it('awaiting_approval 的 pending dispatch 在恢复时应失败收口', async () => {
     const db = createTestDb();
     openDbs.push(db);

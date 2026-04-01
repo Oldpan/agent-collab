@@ -265,6 +265,12 @@ export type RunEndMsg = {
   error?: string;
 };
 
+export type RunAcceptedMsg = {
+  type: 'run.accepted';
+  runId: string;
+  conversationId: string;
+};
+
 export type NodePermissionRequestMsg = {
   type: 'permission.request';
   runId: string;
@@ -399,6 +405,7 @@ export type SkillsReadResponseMsg = {
 export type NodeToCore =
   | NodeRegisterMsg
   | NodeHeartbeatMsg
+  | RunAcceptedMsg
   | RunEventMsg
   | RunEndMsg
   | NodePermissionRequestMsg

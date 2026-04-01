@@ -11,6 +11,7 @@ import { buildChannelActivationPrompt } from '../web/channelActivationPrompt.js'
 import { bumpAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
 import { listChannelSubscriptions } from '../web/channelSubscriptions.js';
 import { listTargetParticipants, upsertTargetParticipant } from '../web/targetParticipants.js';
+import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
 
 let db: Db;
 let manager: ConversationManager;
@@ -233,10 +234,9 @@ beforeAll(async () => {
         return { error: 'content is required' };
       }
 
-      const now = Date.now();
-      const messageId = `msg-${randomUUID()}`;
-      const seqRow = db.prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?').get(req.params.id) as { maxSeq: number | null };
-      const seq = (seqRow.maxSeq ?? 0) + 1;
+    const now = Date.now();
+    const messageId = `msg-${randomUUID()}`;
+    const seq = allocateNextChannelMessageSeq(db, req.params.id);
       const threadRootId = replyTo ?? null;
       const target = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
       db.prepare(
@@ -488,14 +488,22 @@ describe('REST API', () => {
     expect(conversation).not.toBeNull();
     if (!conversation) throw new Error('missing conversation');
 
+    const dmChannelId = `dm:${agent.agentId}`;
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-       VALUES(?, ?, 'user', 'User', 'user', 'dm:@SeqBob', 'hello', 1, ?, NULL, NULL)`,
-    ).run(randomUUID(), `dm:${agent.agentId}`, Date.now());
+       VALUES(?, ?, 'user', 'User', 'user', 'dm:@SeqBob', 'hello', ?, ?, NULL, NULL)`,
+    ).run(randomUUID(), dmChannelId, allocateNextChannelMessageSeq(db, dmChannelId), Date.now());
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-       VALUES(?, ?, ?, ?, 'agent', 'dm:@User', 'hi', 2, ?, NULL, NULL)`,
-    ).run(randomUUID(), `dm:${agent.agentId}`, agent.agentId, agent.name, Date.now());
+       VALUES(?, ?, ?, ?, 'agent', 'dm:@User', 'hi', ?, ?, NULL, NULL)`,
+    ).run(
+      randomUUID(),
+      dmChannelId,
+      agent.agentId,
+      agent.name,
+      allocateNextChannelMessageSeq(db, dmChannelId),
+      Date.now(),
+    );
 
     const { status, body } = await fetchJson(`/api/conversations/${conversation.id}/channel-messages?limit=10`);
     expect(status).toBe(200);
@@ -511,26 +519,34 @@ describe('REST API', () => {
     });
     manager.joinChannel(agent.agentId, 'default');
 
+    const dmChannelId = `dm:${agent.agentId}`;
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-       VALUES(?, ?, 'user', 'User', 'user', 'dm:@UnreadBob', 'hello', 1, ?, NULL, NULL)`,
-    ).run(randomUUID(), `dm:${agent.agentId}`, Date.now());
+       VALUES(?, ?, 'user', 'User', 'user', 'dm:@UnreadBob', 'hello', ?, ?, NULL, NULL)`,
+    ).run(randomUUID(), dmChannelId, allocateNextChannelMessageSeq(db, dmChannelId), Date.now());
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-       VALUES(?, ?, ?, ?, 'agent', 'dm:@User', 'reply', 2, ?, NULL, NULL)`,
-    ).run(randomUUID(), `dm:${agent.agentId}`, agent.agentId, agent.name, Date.now());
+       VALUES(?, ?, ?, ?, 'agent', 'dm:@User', 'reply', ?, ?, NULL, NULL)`,
+    ).run(
+      randomUUID(),
+      dmChannelId,
+      agent.agentId,
+      agent.name,
+      allocateNextChannelMessageSeq(db, dmChannelId),
+      Date.now(),
+    );
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-       VALUES(?, 'default', 'user', 'User', 'user', '#default', 'channel hello', 1, ?, NULL, NULL)`,
-    ).run(randomUUID(), Date.now());
+       VALUES(?, 'default', 'user', 'User', 'user', '#default', 'channel hello', ?, ?, NULL, NULL)`,
+    ).run(randomUUID(), allocateNextChannelMessageSeq(db, 'default'), Date.now());
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-       VALUES(?, 'default', ?, ?, 'agent', '#default', 'channel reply', 2, ?, NULL, NULL)`,
-    ).run(randomUUID(), agent.agentId, agent.name, Date.now());
+       VALUES(?, 'default', ?, ?, 'agent', '#default', 'channel reply', ?, ?, NULL, NULL)`,
+    ).run(randomUUID(), agent.agentId, agent.name, allocateNextChannelMessageSeq(db, 'default'), Date.now());
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-       VALUES(?, 'default', ?, ?, 'agent', '#default:abcd1234', 'thread reply', 3, ?, NULL, 'abcd1234')`,
-    ).run(randomUUID(), agent.agentId, agent.name, Date.now());
+       VALUES(?, 'default', ?, ?, 'agent', '#default:abcd1234', 'thread reply', ?, ?, NULL, 'abcd1234')`,
+    ).run(randomUUID(), agent.agentId, agent.name, allocateNextChannelMessageSeq(db, 'default'), Date.now());
 
     const { status, body } = await fetchJson('/api/unread-summary', {
       method: 'POST',
@@ -788,10 +804,11 @@ describe('REST API', () => {
     manager.joinChannel(agent.agentId, 'default');
 
     const rootMessageId = randomUUID();
+    const seq = allocateNextChannelMessageSeq(db, 'default');
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-       VALUES(?, 'default', ?, ?, 'agent', '#default', ?, 1, ?, NULL, NULL)`,
-    ).run(rootMessageId, agent.agentId, agent.name, 'root message', Date.now());
+       VALUES(?, 'default', ?, ?, 'agent', '#default', ?, ?, ?, NULL, NULL)`,
+    ).run(rootMessageId, agent.agentId, agent.name, 'root message', seq, Date.now());
 
     const response = await fetchJson('/api/channels/default/messages', {
       method: 'POST',
@@ -899,13 +916,14 @@ describe('REST API', () => {
       'SELECT session_key as sessionKey FROM conversations WHERE id = ?',
     ).get(branch.id) as { sessionKey: string };
 
+    const seq = allocateNextChannelMessageSeq(db, 'default');
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-       VALUES(?, 'default', 'user', 'User', 'user', '#default', 'hello', 1, ?, NULL, NULL)`,
-    ).run(randomUUID(), Date.now());
+       VALUES(?, 'default', 'user', 'User', 'user', '#default', 'hello', ?, ?, NULL, NULL)`,
+    ).run(randomUUID(), seq, Date.now());
     db.prepare(
       'INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq) VALUES(?, ?, ?, ?)',
-    ).run(agent.agentId, 'default', '', 1);
+    ).run(agent.agentId, 'default', '', seq);
     db.prepare(
       'INSERT INTO runs(run_id, session_key, prompt_text, started_at) VALUES(?, ?, ?, ?)',
     ).run('run-clear-channel', sessionRow.sessionKey, 'hello', Date.now());

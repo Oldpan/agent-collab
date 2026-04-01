@@ -10,6 +10,7 @@ import type { NodeRegistry } from '../services/nodeRegistry.js';
 import { bumpAgentMessageCheckpoint, getAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
 import { buildDirectActivationPrompt } from '../web/directActivationPrompt.js';
 import { resolveConversationReplyTarget } from '../web/directReplyTargets.js';
+import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
 
 const TURN_REPLY_CONTRACT = [
   '[Reply contract]',
@@ -19,13 +20,20 @@ const TURN_REPLY_CONTRACT = [
   'Use kind="final" only when your current answer is complete. The runtime decides when the run ends.',
 ].join('\n');
 
-const CORE_PUBLIC_HOST = '10.104.9.253';
+type PendingDispatchAcceptance = {
+  nodeId: string;
+  conversationId: string;
+  resolve: () => void;
+  reject: (error: Error) => void;
+  timer: NodeJS.Timeout;
+};
 
 export class ExecutionDispatcher {
   private readonly db: Db;
   private readonly config: AppConfig;
   private readonly nodeRegistry?: NodeRegistry;
   private readonly getAgentById: (agentId: string) => AgentInfo | null;
+  private readonly pendingDispatchAcceptances = new Map<string, PendingDispatchAcceptance>();
 
   constructor(params: {
     db: Db;
@@ -71,7 +79,6 @@ export class ExecutionDispatcher {
     // Persist run and user message BEFORE node connectivity check so they survive
     // even if the node is offline — the user's message will still be visible after refresh.
     createRun(this.db, { runId, sessionKey: row.sessionKey, promptText });
-    this.updateStatus(conversationId, 'active');
 
     let contextText = '';
     let systemPromptText = '';
@@ -111,12 +118,7 @@ export class ExecutionDispatcher {
             conversationId,
             humanUserName,
           ) ?? row.replyTarget?.trim() ?? `dm:@${humanUserName}`;
-          const msgSeq = (() => {
-            const r = this.db
-              .prepare('SELECT MAX(seq) as maxSeq FROM channel_messages WHERE channel_id = ?')
-              .get(dmChannelId) as { maxSeq: number | null };
-            return (r.maxSeq ?? 0) + 1;
-          })();
+          const msgSeq = allocateNextChannelMessageSeq(this.db, dmChannelId);
           this.db.prepare(
             `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
              VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?)`,
@@ -165,15 +167,18 @@ export class ExecutionDispatcher {
       hostKey,
     });
 
-    let channelBridgeConfig: { agentId: string; conversationId: string; serverUrl: string } | undefined;
+    let channelBridgeConfig: { agentId: string; conversationId: string; serverUrl: string; authToken: string } | undefined;
     if (row.agentId) {
-      const cbHost = this.config.webHost === '0.0.0.0' ? CORE_PUBLIC_HOST : this.config.webHost;
+      const serverUrl = this.resolveChannelBridgeServerUrl();
       channelBridgeConfig = {
         agentId: row.agentId,
         conversationId,
-        serverUrl: `http://${cbHost}:${this.config.webPort}`,
+        serverUrl,
+        authToken: this.config.internalAgentAuthToken,
       };
     }
+
+    const acceptance = this.waitForDispatchAcceptance(runId, row.nodeId, conversationId);
 
     const sent = this.nodeRegistry!.send(row.nodeId, {
       type: 'run.dispatch',
@@ -198,9 +203,18 @@ export class ExecutionDispatcher {
     });
 
     if (!sent) {
+      this.clearPendingDispatchAcceptance(runId);
       finishRun(this.db, { runId, error: 'Node disconnected during dispatch' });
       this.updateStatus(conversationId, 'idle');
       throw new Error(`Node disconnected: ${row.nodeId}`);
+    }
+
+    try {
+      await acceptance;
+    } catch (error) {
+      finishRun(this.db, { runId, error: String((error as Error)?.message ?? error) });
+      this.updateStatus(conversationId, 'failed');
+      throw error;
     }
 
     if (dmActivationCheckpoint) {
@@ -330,13 +344,23 @@ export class ExecutionDispatcher {
     }
   }
 
-  clearQueuedPromptsForNode(nodeId: string): void {
-    this.db.prepare(
-      `DELETE FROM conversation_prompt_queue
-       WHERE conversation_id IN (
-         SELECT id FROM conversations WHERE node_id = ?
-       )`,
-    ).run(nodeId);
+  handleRunAccepted(runId: string, conversationId: string): boolean {
+    const pending = this.pendingDispatchAcceptances.get(runId);
+    if (!pending) return false;
+    clearTimeout(pending.timer);
+    this.pendingDispatchAcceptances.delete(runId);
+    this.updateStatus(conversationId, 'active');
+    pending.resolve();
+    return true;
+  }
+
+  rejectPendingDispatchesForNode(nodeId: string, errorMessage: string): void {
+    for (const [runId, pending] of this.pendingDispatchAcceptances.entries()) {
+      if (pending.nodeId !== nodeId) continue;
+      clearTimeout(pending.timer);
+      pending.reject(new Error(errorMessage));
+      this.pendingDispatchAcceptances.delete(runId);
+    }
   }
 
   ensureConversationSessionAgent(
@@ -484,6 +508,42 @@ export class ExecutionDispatcher {
       now,
       now,
     );
+  }
+
+  private waitForDispatchAcceptance(
+    runId: string,
+    nodeId: string,
+    conversationId: string,
+  ): Promise<void> {
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pendingDispatchAcceptances.delete(runId);
+        reject(new Error('Node did not acknowledge dispatch in time'));
+      }, this.config.nodeDispatchAckTimeoutMs);
+      this.pendingDispatchAcceptances.set(runId, {
+        nodeId,
+        conversationId,
+        resolve,
+        reject,
+        timer,
+      });
+    });
+  }
+
+  private clearPendingDispatchAcceptance(runId: string): void {
+    const pending = this.pendingDispatchAcceptances.get(runId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.pendingDispatchAcceptances.delete(runId);
+  }
+
+  private resolveChannelBridgeServerUrl(): string {
+    const configured = this.config.publicServerUrl?.trim();
+    if (configured) {
+      return configured.replace(/\/+$/, '');
+    }
+    const host = this.config.webHost === '0.0.0.0' ? '10.104.9.253' : this.config.webHost;
+    return `http://${host}:${this.config.webPort}`;
   }
 }
 

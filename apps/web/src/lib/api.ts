@@ -38,7 +38,7 @@ export async function createConversation(
 ): Promise<ConversationInfo> {
   const res = await fetch(`${API_BASE}/conversations`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error(`Failed to create conversation: ${res.statusText}`);
@@ -46,7 +46,7 @@ export async function createConversation(
 }
 
 export async function deleteConversation(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/conversations/${id}`, { method: "DELETE" });
+  const res = await fetch(`${API_BASE}/conversations/${id}`, { method: "DELETE", headers: withAuthHeaders() });
   if (!res.ok) throw new Error(`Failed to delete conversation: ${res.statusText}`);
 }
 
@@ -164,7 +164,7 @@ export type UnreadSummaryResponse = {
 export async function getUnreadSummary(req: UnreadSummaryRequest): Promise<UnreadSummaryResponse> {
   const res = await fetch(`${API_BASE}/unread-summary`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error(`Failed to get unread summary: ${res.statusText}`);
@@ -218,7 +218,9 @@ export async function getChannelTasks(
   const params = new URLSearchParams();
   if (status) params.set("status", status);
   const suffix = params.size > 0 ? `?${params.toString()}` : "";
-  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks${suffix}`);
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks${suffix}`, {
+    headers: withAuthHeaders(),
+  });
   if (!res.ok) throw new Error(`Failed to get channel tasks: ${res.statusText}`);
   return res.json();
 }
@@ -230,7 +232,7 @@ export async function createChannelTask(
 ): Promise<ChannelTask> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ title, ...(description ? { description } : {}) }),
   });
   if (!res.ok) throw new Error(`Failed to create channel task: ${res.statusText}`);
@@ -261,7 +263,7 @@ export async function updateTaskStatus(
 ): Promise<ChannelTask> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks/${taskNumber}/status`, {
     method: "PATCH",
-    headers: { "Content-Type": "application/json" },
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ status }),
   });
   if (!res.ok) throw new Error(`Failed to update task status: ${res.statusText}`);
@@ -291,7 +293,9 @@ export async function getChannelMessages(
 ): Promise<{ messages: ChannelMessage[] }> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (before !== undefined) params.set('before', String(before));
-  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/messages?${params}`);
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/messages?${params}`, {
+    headers: withAuthHeaders(),
+  });
   if (!res.ok) throw new Error(`Failed to get channel messages: ${res.statusText}`);
   return res.json();
 }
@@ -304,7 +308,7 @@ export async function sendChannelMessage(
 ): Promise<{ messageId: string; seq: number }> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/messages`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: withAuthHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ content, senderName, ...(replyTo ? { replyTo } : {}) }),
   });
   if (!res.ok) throw new Error(`Failed to send channel message: ${res.statusText}`);
@@ -321,6 +325,7 @@ export async function getThreadMessages(
   if (before !== undefined) params.set('before', String(before));
   const res = await fetch(
     `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/messages?${params}`,
+    { headers: withAuthHeaders() },
   );
   if (!res.ok) throw new Error(`Failed to get thread messages: ${res.statusText}`);
   return res.json();
@@ -332,6 +337,7 @@ export async function getThreadSummary(
 ): Promise<ThreadCollaborationSummary> {
   const res = await fetch(
     `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/summary`,
+    { headers: withAuthHeaders() },
   );
   if (!res.ok) throw new Error(`Failed to get thread summary: ${res.statusText}`);
   return res.json();
@@ -346,7 +352,7 @@ export async function bindThreadTask(
     `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/task`,
     {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: withAuthHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ taskNumber }),
     },
   );
@@ -363,7 +369,7 @@ export async function unbindThreadTask(
 ): Promise<ThreadCollaborationSummary> {
   const res = await fetch(
     `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/task`,
-    { method: "DELETE" },
+    { method: "DELETE", headers: withAuthHeaders() },
   );
   if (!res.ok) {
     const body = await safeReadErrorBody(res);
@@ -373,7 +379,7 @@ export async function unbindThreadTask(
 }
 
 export async function listNodes(): Promise<NodeInfoRest[]> {
-  const res = await fetch(`${API_BASE}/nodes`);
+  const res = await fetch(`${API_BASE}/nodes`, { headers: withAuthHeaders() });
   if (!res.ok) throw new Error(`Failed to list nodes: ${res.statusText}`);
   return res.json();
 }
@@ -381,7 +387,7 @@ export async function listNodes(): Promise<NodeInfoRest[]> {
 // ─── Machine API ───
 
 export async function listMachines(): Promise<MachineInfo[]> {
-  const res = await fetch(`${API_BASE}/machines`);
+  const res = await fetch(`${API_BASE}/machines`, { headers: withAuthHeaders() });
   if (!res.ok) throw new Error(`Failed to list machines: ${res.statusText}`);
   return res.json();
 }
@@ -389,7 +395,7 @@ export async function listMachines(): Promise<MachineInfo[]> {
 export async function createMachine(req: CreateMachineRequest): Promise<MachineInfo> {
   const res = await fetch(`${API_BASE}/machines`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error(`Failed to create machine: ${res.statusText}`);
@@ -397,7 +403,7 @@ export async function createMachine(req: CreateMachineRequest): Promise<MachineI
 }
 
 export async function deleteMachine(id: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/machines/${id}`, { method: "DELETE" });
+  const res = await fetch(`${API_BASE}/machines/${id}`, { method: "DELETE", headers: withAuthHeaders() });
   if (!res.ok) throw new Error(`Failed to delete machine: ${res.statusText}`);
 }
 
@@ -457,7 +463,9 @@ export async function deleteAgent(id: string): Promise<void> {
 }
 
 export async function listAgentConversations(agentId: string): Promise<ConversationInfo[]> {
-  const res = await fetch(`${API_BASE}/agents/${agentId}/conversations`);
+  const res = await fetch(`${API_BASE}/agents/${agentId}/conversations`, {
+    headers: withAuthHeaders(),
+  });
   if (!res.ok) throw new Error(`Failed to list agent conversations: ${res.statusText}`);
   return res.json();
 }
@@ -514,7 +522,9 @@ export async function listAgentWorkspace(
   const params = new URLSearchParams();
   if (relativePath) params.set("path", relativePath);
   const suffix = params.toString() ? `?${params.toString()}` : "";
-  const res = await fetch(`${API_BASE}/agents/${agentId}/workspace${suffix}`);
+  const res = await fetch(`${API_BASE}/agents/${agentId}/workspace${suffix}`, {
+    headers: withAuthHeaders(),
+  });
   if (!res.ok) {
     const body = await safeReadErrorBody(res);
     throw new Error(body ?? `Failed to list workspace: ${res.statusText}`);
@@ -528,7 +538,9 @@ export async function readAgentWorkspaceFile(
 ): Promise<AgentWorkspaceFileResult> {
   const params = new URLSearchParams();
   params.set("path", relativePath);
-  const res = await fetch(`${API_BASE}/agents/${agentId}/workspace/file?${params.toString()}`);
+  const res = await fetch(`${API_BASE}/agents/${agentId}/workspace/file?${params.toString()}`, {
+    headers: withAuthHeaders(),
+  });
   if (!res.ok) {
     const body = await safeReadErrorBody(res);
     throw new Error(body ?? `Failed to read workspace file: ${res.statusText}`);
@@ -543,7 +555,9 @@ export async function listAgentSkills(
   const params = new URLSearchParams();
   if (skillPath) params.set("path", skillPath);
   const suffix = params.toString() ? `?${params.toString()}` : "";
-  const res = await fetch(`${API_BASE}/agents/${agentId}/skills${suffix}`);
+  const res = await fetch(`${API_BASE}/agents/${agentId}/skills${suffix}`, {
+    headers: withAuthHeaders(),
+  });
   if (!res.ok) {
     const body = await safeReadErrorBody(res);
     throw new Error(body ?? `Failed to list skills: ${res.statusText}`);
@@ -556,7 +570,9 @@ export async function readAgentSkillFile(
   skillPath: string,
 ): Promise<AgentSkillFileResult> {
   const params = new URLSearchParams({ path: skillPath });
-  const res = await fetch(`${API_BASE}/agents/${agentId}/skills/file?${params.toString()}`);
+  const res = await fetch(`${API_BASE}/agents/${agentId}/skills/file?${params.toString()}`, {
+    headers: withAuthHeaders(),
+  });
   if (!res.ok) {
     const body = await safeReadErrorBody(res);
     throw new Error(body ?? `Failed to read skill file: ${res.statusText}`);

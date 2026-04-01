@@ -187,6 +187,11 @@ export class Executor {
     }
 
     this.runToHost.set(runId, runtimeKey);
+    this.send({
+      type: 'run.accepted',
+      runId,
+      conversationId,
+    });
 
     try {
       await host.dispatch(msg);
