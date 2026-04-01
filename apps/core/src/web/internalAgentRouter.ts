@@ -39,6 +39,7 @@ type TaskRow = {
   channelId: string;
   taskNumber: number;
   title: string;
+  description?: string | null;
   status: string;
   claimedByAgentId: string | null;
   claimedByName: string | null;
@@ -47,6 +48,24 @@ type TaskRow = {
   createdAt: number;
   updatedAt: number;
 };
+
+type ContextMsg = { senderName: string; senderType: string; content: string; seq: number };
+
+/** 获取 task 对应消息之前的 K 条主线消息作为上下文 */
+function fetchTaskContext(db: Db, channelId: string, messageId: string, limit = 8): ContextMsg[] {
+  const seqRow = db.prepare(
+    `SELECT seq FROM channel_messages WHERE message_id = ?`,
+  ).get(messageId) as { seq: number } | undefined;
+  if (!seqRow) return [];
+
+  return (db.prepare(
+    `SELECT cm.sender_name as senderName, cm.sender_type as senderType,
+            cm.content, cm.seq
+     FROM channel_messages cm
+     WHERE cm.channel_id = ? AND cm.seq < ? AND cm.thread_root_id IS NULL
+     ORDER BY cm.seq DESC LIMIT ?`,
+  ).all(channelId, seqRow.seq, limit) as ContextMsg[]).reverse();
+}
 
 /**
  * Registers internal agent API routes — used by channel-bridge MCP server.
@@ -592,7 +611,7 @@ export function registerInternalAgentRoutes(
       ? db
         .prepare(
           `SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
-                  title, status, claimed_by_agent_id as claimedByAgentId,
+                  title, description, status, claimed_by_agent_id as claimedByAgentId,
                   claimed_by_name as claimedByName, created_by_agent_id as createdByAgentId,
                   created_by_name as createdByName, created_at as createdAt, updated_at as updatedAt,
                   message_id as messageId
@@ -602,7 +621,7 @@ export function registerInternalAgentRoutes(
       : db
         .prepare(
           `SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
-                  title, status, claimed_by_agent_id as claimedByAgentId,
+                  title, description, status, claimed_by_agent_id as claimedByAgentId,
                   claimed_by_name as claimedByName, created_by_agent_id as createdByAgentId,
                   created_by_name as createdByName, created_at as createdAt, updated_at as updatedAt,
                   message_id as messageId
@@ -614,6 +633,7 @@ export function registerInternalAgentRoutes(
       taskId: r.taskId,
       taskNumber: r.taskNumber,
       title: r.title,
+      description: r.description ?? null,
       status: r.status,
       claimedByName: r.claimedByName,
       createdByName: r.createdByName,
@@ -630,7 +650,7 @@ export function registerInternalAgentRoutes(
    */
   app.post<{
     Params: { agentId: string };
-    Body: { channel: string; tasks: Array<{ title: string }> };
+    Body: { channel: string; tasks: Array<{ title: string; description?: string }> };
   }>('/api/internal/agent/:agentId/tasks', async (req, reply) => {
     const { agentId } = req.params;
     const agent = conversationManager.getAgent(agentId);
@@ -663,9 +683,9 @@ export function registerInternalAgentRoutes(
     );
 
     const insertTask = db.prepare(
-      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id,
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
                          created_by_agent_id, created_by_name, created_at, updated_at)
-       VALUES(?, ?, ?, ?, 'todo', ?, ?, ?, ?, ?)`,
+       VALUES(?, ?, ?, ?, ?, 'todo', ?, ?, ?, ?, ?)`,
     );
 
     for (const taskDef of tasks) {
@@ -675,7 +695,7 @@ export function registerInternalAgentRoutes(
       const seq = nextSeq(db, channelId);
       const target = `#${channelName}`;
       insertMessage.run(messageId, channelId, agentId, agent.name, target, taskDef.title, seq, now);
-      insertTask.run(taskId, channelId, taskNumber, taskDef.title, messageId, agentId, agent.name, now, now);
+      insertTask.run(taskId, channelId, taskNumber, taskDef.title, taskDef.description ?? null, messageId, agentId, agent.name, now, now);
       created.push({ taskId, taskNumber, title: taskDef.title, messageId });
       broadcastToChannel(channelId, {
         type: 'channel.message',
@@ -714,7 +734,7 @@ export function registerInternalAgentRoutes(
     if (!channelId) { reply.code(400); return { error: `Cannot resolve channel: ${channel}` }; }
 
     const now = Date.now();
-    const results: Array<{ messageId: string; taskNumber?: number; success: boolean; reason?: string }> = [];
+    const results: Array<{ messageId: string; taskNumber?: number; success: boolean; reason?: string; context?: ContextMsg[] }> = [];
 
     for (const msgShortId of message_ids) {
       // Accept both full UUIDs and 8-char short IDs
@@ -739,7 +759,10 @@ export function registerInternalAgentRoutes(
       ).run(taskId, channelId, taskNumber, taskTitle, msg.message_id, agentId, agent.name, agentId, agent.name, now, now);
       db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.message_id);
 
-      results.push({ messageId: msg.message_id, taskNumber, success: true });
+      results.push({
+        messageId: msg.message_id, taskNumber, success: true,
+        context: fetchTaskContext(db, channelId, msg.message_id),
+      });
     }
 
     reply.code(201);
@@ -775,7 +798,7 @@ export function registerInternalAgentRoutes(
     }
 
     const now = Date.now();
-    const results: Array<{ taskNumber: number; success: boolean; reason?: string; messageId?: string | null }> = [];
+    const results: Array<{ taskNumber: number; success: boolean; reason?: string; messageId?: string | null; context?: ContextMsg[] }> = [];
     const threadBinding = resolveThreadBindingContext(db, conversationId, channelId);
 
     for (const taskNumber of task_numbers) {
@@ -832,7 +855,10 @@ export function registerInternalAgentRoutes(
         });
       }
 
-      results.push({ taskNumber, success: true, messageId: row.messageId ?? null });
+      results.push({
+        taskNumber, success: true, messageId: row.messageId ?? null,
+        context: row.messageId ? fetchTaskContext(db, channelId, row.messageId) : [],
+      });
     }
 
     return { results };

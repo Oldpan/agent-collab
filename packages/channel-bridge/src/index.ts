@@ -270,7 +270,10 @@ server.tool(
         const creator = t.createdByName ? ` (by @${t.createdByName})` : '';
         const msgShort = t.messageId ? t.messageId.slice(0, 8) : null;
         const msgTag = msgShort ? `  msg=${msgShort}` : '';
-        return `#t${t.taskNumber} [${t.status}] "${t.title}"${assignee}${creator}${msgTag}`;
+        const descLine = t.description
+          ? `\n  desc: ${t.description.length > 80 ? t.description.slice(0, 80) + '...' : t.description}`
+          : '';
+        return `#t${t.taskNumber} [${t.status}] "${t.title}"${assignee}${creator}${msgTag}${descLine}`;
       }).join('\n');
 
       const threadHints = d.tasks
@@ -294,7 +297,10 @@ server.tool(
   {
     channel: z.string().describe("The channel to create tasks in — e.g. '#general'"),
     tasks: z
-      .array(z.object({ title: z.string().describe('Task title') }))
+      .array(z.object({
+        title: z.string().describe('Task title'),
+        description: z.string().optional().describe('Optional task description with more detail'),
+      }))
       .describe('Array of tasks to create'),
   },
   async ({ channel, tasks }) => {
@@ -337,7 +343,8 @@ server.tool(
       });
       if (!ok) return toText(`Error: ${errText(data, 'claim-message failed')}`);
 
-      const d = data as { results?: Array<{ messageId: string; taskNumber?: number; success: boolean; reason?: string }> };
+      type ClaimMsgResult = { messageId: string; taskNumber?: number; success: boolean; reason?: string; context?: Array<{ senderName: string; content: string; seq: number }> };
+      const d = data as { results?: ClaimMsgResult[] };
       const lines = (d.results ?? []).map((r) => {
         const msgShort = r.messageId.slice(0, 8);
         if (r.success) return `msg:${msgShort} → #t${r.taskNumber}: claimed`;
@@ -348,13 +355,23 @@ server.tool(
       let summary = `${succeeded} claimed`;
       if (failed > 0) summary += `, ${failed} failed`;
 
+      const contextBlocks = (d.results ?? [])
+        .filter((r) => r.success && r.context?.length)
+        .map((r) => {
+          const msgs = r.context!.map(
+            (m) => `  @${m.senderName}: ${m.content.length > 100 ? m.content.slice(0, 100) + '...' : m.content}`,
+          ).join('\n');
+          return `#t${r.taskNumber} context:\n${msgs}`;
+        }).join('\n\n');
+      const contextSection = contextBlocks ? `\n\n${contextBlocks}` : '';
+
       const threadHints = (d.results ?? [])
         .filter((r) => r.success)
         .map((r) => `#t${r.taskNumber} → send_message to "${channel}:${r.messageId.slice(0, 8)}"`)
         .join('\n');
       const hint = threadHints ? `\n\nFollow up in each task's thread:\n${threadHints}` : '';
 
-      return toText(`Claim results (${summary}):\n${lines.join('\n')}${hint}`);
+      return toText(`Claim results (${summary}):\n${lines.join('\n')}${contextSection}${hint}`);
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }
@@ -378,7 +395,8 @@ server.tool(
       });
       if (!ok) return toText(`Error: ${errText(data, 'claim tasks failed')}`);
 
-      const d = data as { results?: Array<{ taskNumber: number; success: boolean; reason?: string; messageId?: string | null }> };
+      type ClaimTaskResult = { taskNumber: number; success: boolean; reason?: string; messageId?: string | null; context?: Array<{ senderName: string; content: string; seq: number }> };
+      const d = data as { results?: ClaimTaskResult[] };
       const lines = (d.results ?? []).map((r) =>
         r.success ? `#t${r.taskNumber}: claimed` : `#t${r.taskNumber}: FAILED — ${r.reason ?? 'already claimed'}`,
       );
@@ -386,12 +404,21 @@ server.tool(
       const failed = (d.results ?? []).length - succeeded;
       let summary = `${succeeded} claimed`;
       if (failed > 0) summary += `, ${failed} failed`;
+      const contextBlocks = (d.results ?? [])
+        .filter((r) => r.success && r.context?.length)
+        .map((r) => {
+          const msgs = r.context!.map(
+            (m) => `  @${m.senderName}: ${m.content.length > 100 ? m.content.slice(0, 100) + '...' : m.content}`,
+          ).join('\n');
+          return `#t${r.taskNumber} context:\n${msgs}`;
+        }).join('\n\n');
+      const contextSection = contextBlocks ? `\n\n${contextBlocks}` : '';
       const threadHints = (d.results ?? [])
         .filter((r) => r.success && r.messageId)
         .map((r) => `#t${r.taskNumber} → send_message to "${channel}:${r.messageId!.slice(0, 8)}"`)
         .join('\n');
       const hint = threadHints ? `\n\nFollow up in each task's thread:\n${threadHints}` : '';
-      return toText(`Claim results (${summary}):\n${lines.join('\n')}${hint}`);
+      return toText(`Claim results (${summary}):\n${lines.join('\n')}${contextSection}${hint}`);
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }
@@ -482,6 +509,7 @@ type HumanItem = { name: string };
 type TaskItem = {
   taskNumber: number;
   title: string;
+  description?: string | null;
   status: string;
   claimedByName: string | null;
   createdByName: string | null;

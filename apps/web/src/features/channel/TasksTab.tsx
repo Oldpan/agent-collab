@@ -55,6 +55,7 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: Tasks
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
+  const [description, setDescription] = useState("");
   const [creating, setCreating] = useState(false);
   const [updatingTaskNumber, setUpdatingTaskNumber] = useState<number | null>(null);
   const [bindingTaskNumber, setBindingTaskNumber] = useState<number | null>(null);
@@ -105,9 +106,10 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: Tasks
     setCreating(true);
     setError(null);
     try {
-      const created = await createChannelTask(channelId, trimmed);
+      const created = await createChannelTask(channelId, trimmed, description.trim() || undefined);
       setTasks((prev) => [...prev, created]);
       setTitle("");
+      setDescription("");
     } catch (err) {
       setError(String((err as Error)?.message ?? err));
     } finally {
@@ -198,6 +200,14 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: Tasks
             Add
           </Button>
         </div>
+        <textarea
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          placeholder="Description (optional)"
+          rows={2}
+          className="mt-1 w-full resize-none rounded-sm border-2 border-zinc-900 bg-white px-3 py-1.5 text-sm text-zinc-900 placeholder:text-zinc-400"
+          disabled={creating}
+        />
         {error && (
           <div className="mt-2 rounded-sm border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700">
             {error}
