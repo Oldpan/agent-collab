@@ -37,16 +37,5 @@ fi
 echo "==> [update-node] pnpm install"
 pnpm install --frozen-lockfile
 
-# 3. Build in dependency order
-echo "==> [update-node] build protocol"
-pnpm --filter @agent-collab/protocol build
-
-echo "==> [update-node] build runtime-acp"
-pnpm --filter @agent-collab/runtime-acp build
-
-echo "==> [update-node] build agent-node"
-pnpm --filter @agent-collab/agent-node build
-
-
-
+pnpm -r build  
 echo "==> [update-node] done"

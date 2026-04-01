@@ -35,6 +35,7 @@ export class Executor {
   private readonly config: AgentNodeConfig;
   private readonly toolAuth: ToolAuth;
   private readonly hosts = new Map<string, HostInstance>();
+  private readonly hostBridgeSignatures = new Map<string, string>();
   private readonly runToHost = new Map<string, string>();
   private readonly send: SendFn;
   private readonly createHost: CreateHostFn;
@@ -124,18 +125,22 @@ export class Executor {
       try {
         const req = createRequire(import.meta.url);
         const binPath = req.resolve('@agent-collab/channel-bridge');
+        const args = [
+          binPath,
+          '--agent-id',
+          agentId,
+          '--conversation-id',
+          conversationId,
+          '--server-url',
+          serverUrl,
+        ];
+        if (authToken) {
+          args.push('--auth-token', authToken);
+        }
         channelBridgeMcpEntry = {
           name: 'chat',
           command: 'node',
-          args: [
-            binPath,
-            '--agent-id',
-            agentId,
-            '--conversation-id',
-            conversationId,
-            '--server-url',
-            serverUrl,
-          ],
+          args,
           env: authToken ? [{ name: 'CHANNEL_BRIDGE_AUTH_TOKEN', value: authToken }] : [],
         };
       } catch {
@@ -143,6 +148,7 @@ export class Executor {
       }
     }
 
+    const bridgeSignature = JSON.stringify(channelBridgeMcpEntry ?? null);
     let host = this.hosts.get(runtimeKey);
     if (host?.getState() === 'failed') {
       log.warn('[executor] recreating failed host', {
@@ -153,6 +159,24 @@ export class Executor {
       });
       host.close();
       this.hosts.delete(runtimeKey);
+      this.hostBridgeSignatures.delete(runtimeKey);
+      host = undefined;
+    }
+    const previousBridgeSignature = this.hostBridgeSignatures.get(runtimeKey);
+    if (
+      host &&
+      previousBridgeSignature !== bridgeSignature &&
+      host.getState() === 'idle' &&
+      !host.getCurrentRunId() &&
+      !host.hasPendingApproval()
+    ) {
+      log.info('[executor] recreating host to refresh channel bridge config', {
+        runtimeKey,
+        sessionKey,
+      });
+      host.close();
+      this.hosts.delete(runtimeKey);
+      this.hostBridgeSignatures.delete(runtimeKey);
       host = undefined;
     }
     if (!host) {
@@ -184,6 +208,7 @@ export class Executor {
         },
       });
       this.hosts.set(runtimeKey, host);
+      this.hostBridgeSignatures.set(runtimeKey, bridgeSignature);
     }
 
     this.runToHost.set(runId, runtimeKey);
@@ -278,6 +303,7 @@ export class Executor {
       }
       host.close();
       this.hosts.delete(entry.hostKey);
+      this.hostBridgeSignatures.delete(entry.hostKey);
     }
 
     this.runToHost.delete(entry.runId);
@@ -300,6 +326,7 @@ export class Executor {
       });
       host.close();
       this.hosts.delete(hostKey);
+      this.hostBridgeSignatures.delete(hostKey);
     }
   }
 
@@ -332,6 +359,7 @@ export class Executor {
     }
     host.close();
     this.hosts.delete(hostKey);
+    this.hostBridgeSignatures.delete(hostKey);
   }
 
   resetWorkspace(workspaceRoot: string): void {
@@ -346,6 +374,7 @@ export class Executor {
       }
       host.close();
       this.hosts.delete(hostKey);
+      this.hostBridgeSignatures.delete(hostKey);
     }
 
     for (const pending of listPendingDispatches(this.db)) {
@@ -362,5 +391,6 @@ export class Executor {
       host.close();
     }
     this.hosts.clear();
+    this.hostBridgeSignatures.clear();
   }
 }

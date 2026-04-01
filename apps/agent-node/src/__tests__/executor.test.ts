@@ -185,6 +185,133 @@ describe('Executor recovery', () => {
     executor.close();
   });
 
+  it('channel-bridge 应通过参数和环境变量收到 auth token', async () => {
+    const db = createTestDb();
+    openDbs.push(db);
+
+    const captured: Array<{ channelBridgeMcpEntry?: any }> = [];
+    const executor = new Executor({
+      db,
+      config: createTestConfig(),
+      send: () => {},
+      createHost: ({ channelBridgeMcpEntry }) => {
+        captured.push({ channelBridgeMcpEntry });
+        return {
+          getState: () => 'idle',
+          dispatch: async () => {},
+          cancelRun: async () => false,
+          handlePermissionResponse: async () => false,
+          close: () => {},
+          getCurrentRunId: () => null,
+          getLastError: () => null,
+          getWorkspaceRoot: () => '/tmp',
+          getLastSleepAt: () => Date.now(),
+          hasPendingApproval: () => false,
+          isIdleExpired: () => false,
+        };
+      },
+    });
+
+    await executor.dispatch({
+      type: 'run.dispatch',
+      runId: 'run-bridge-auth-1',
+      conversationId: 'conv-bridge-auth-1',
+      agentType: 'claude_acp',
+      workspacePath: '/tmp',
+      prompt: 'hello',
+      sessionKey: 'session-bridge-auth-1',
+      hostKey: 'conversation:conv-bridge-auth-1:claude_acp',
+      dispatchMode: 'cold_start',
+      channelBridgeConfig: {
+        agentId: 'agent-1',
+        conversationId: 'conv-bridge-auth-1',
+        serverUrl: 'http://127.0.0.1:3100',
+        authToken: 'bridge-secret',
+      },
+    });
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.channelBridgeMcpEntry?.args).toContain('--auth-token');
+    expect(captured[0]?.channelBridgeMcpEntry?.args).toContain('bridge-secret');
+    expect(captured[0]?.channelBridgeMcpEntry?.env).toEqual([
+      { name: 'CHANNEL_BRIDGE_AUTH_TOKEN', value: 'bridge-secret' },
+    ]);
+
+    executor.close();
+  });
+
+  it('idle host 在 channel-bridge 配置变化时应重建', async () => {
+    const db = createTestDb();
+    openDbs.push(db);
+
+    const closes: Array<ReturnType<typeof vi.fn>> = [];
+    const createHost = vi.fn(({ channelBridgeMcpEntry, workspaceRoot: hostWorkspaceRoot }) => {
+      const close = vi.fn();
+      closes.push(close);
+      return {
+        getState: () => 'idle' as const,
+        dispatch: async () => {},
+        cancelRun: async () => false,
+        handlePermissionResponse: async () => false,
+        close,
+        getCurrentRunId: () => null,
+        getLastError: () => null,
+        getWorkspaceRoot: () => hostWorkspaceRoot,
+        getLastSleepAt: () => Date.now(),
+        hasPendingApproval: () => false,
+        isIdleExpired: () => false,
+      };
+    });
+
+    const executor = new Executor({
+      db,
+      config: createTestConfig(),
+      send: () => {},
+      createHost,
+    });
+
+    await executor.dispatch({
+      type: 'run.dispatch',
+      runId: 'run-bridge-refresh-1',
+      conversationId: 'conv-bridge-refresh-1',
+      agentType: 'claude_acp',
+      workspacePath: '/tmp',
+      prompt: 'first',
+      sessionKey: 'session-bridge-refresh-1',
+      hostKey: 'conversation:conv-bridge-refresh-1:claude_acp',
+      dispatchMode: 'cold_start',
+      channelBridgeConfig: {
+        agentId: 'agent-1',
+        conversationId: 'conv-bridge-refresh-1',
+        serverUrl: 'http://127.0.0.1:3100',
+        authToken: 'token-1',
+      },
+    });
+
+    await executor.dispatch({
+      type: 'run.dispatch',
+      runId: 'run-bridge-refresh-2',
+      conversationId: 'conv-bridge-refresh-1',
+      agentType: 'claude_acp',
+      workspacePath: '/tmp',
+      prompt: 'second',
+      sessionKey: 'session-bridge-refresh-1',
+      hostKey: 'conversation:conv-bridge-refresh-1:claude_acp',
+      dispatchMode: 'resume',
+      channelBridgeConfig: {
+        agentId: 'agent-1',
+        conversationId: 'conv-bridge-refresh-1',
+        serverUrl: 'http://127.0.0.1:3100',
+        authToken: 'token-2',
+      },
+    });
+
+    expect(createHost).toHaveBeenCalledTimes(2);
+    expect(closes[0]).toHaveBeenCalledTimes(1);
+
+    executor.close();
+  });
+
   it('awaiting_approval 的 pending dispatch 在恢复时应失败收口', async () => {
     const db = createTestDb();
     openDbs.push(db);

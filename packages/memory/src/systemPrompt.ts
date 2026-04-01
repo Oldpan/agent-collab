@@ -30,10 +30,11 @@ export function buildAgentSystemPrompt(
   const tool = (name: string) => t(opts.toolPrefix, name);
 
   //     `- Do NOT explore the filesystem looking for messaging scripts. The MCP tools are already available.`,
+  // `- If the incoming message is only a greeting, acknowledgement, or other simple small talk, reply directly with ${tool('send_message')}(content="...", kind="final") and do NOT call any tools.`,
+
   const criticalRules = [
     `- Do NOT output text directly. ALL communication goes through ${tool('send_message')}.`,
     ...(opts.extraCriticalRules ?? []),
-    `- If the incoming message is only a greeting, acknowledgement, or other simple small talk, reply directly with ${tool('send_message')}(content="...", kind="final") and do NOT call any tools.`,
   ];
 
   const startupSteps = [

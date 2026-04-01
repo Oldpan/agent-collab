@@ -22,7 +22,7 @@ const args = process.argv.slice(2);
 let agentId = '';
 let conversationId = '';
 let serverUrl = 'http://localhost:3100';
-let authToken = '';
+let authToken = process.env.CHANNEL_BRIDGE_AUTH_TOKEN ?? '';
 
 for (let i = 0; i < args.length; i++) {
   if (args[i] === '--agent-id' && args[i + 1]) agentId = args[++i];
