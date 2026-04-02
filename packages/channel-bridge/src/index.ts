@@ -533,38 +533,48 @@ server.tool(
 
 server.tool(
   'view_file',
-  'Download an attachment by its ID so you can view it. Saves to a local cache and returns the file path — use your Read tool to view the image.',
+  'Download an attachment by its ID and view it directly. Returns the image so you can see its contents immediately.',
   {
     attachment_id: z.string().describe('Attachment UUID returned by upload_file or shown in a message'),
   },
   async ({ attachment_id }) => {
-    // Store inside workspace so the agent can read it; fall back to /tmp if no workspace path
+    // Cache dir for repeat calls
     const cacheDir = workspacePath
       ? join(workspacePath, '.agent-attachments')
       : join(tmpdir(), 'agent-collab-attachments');
     mkdirSync(cacheDir, { recursive: true });
 
-    // Return cached file if already downloaded
-    const existing = readdirSync(cacheDir).find((f) => f.startsWith(attachment_id));
-    if (existing) {
-      return toText(`Cached at: ${join(cacheDir, existing)}\nUse your Read tool to view this image.`);
-    }
-
     const downloadHeaders: Record<string, string> = {};
     if (authToken) downloadHeaders['Authorization'] = `Bearer ${authToken}`;
 
     try {
-      const res = await fetch(`${serverUrl}/api/attachments/${attachment_id}`, { headers: downloadHeaders });
-      if (!res.ok) return toText(`Error: Failed to download attachment (${res.status})`);
+      // Check disk cache first
+      const existing = readdirSync(cacheDir).find((f) => f.startsWith(attachment_id));
+      let imageBuffer: Buffer;
+      let mimeType: string;
 
-      const contentType = res.headers.get('content-type') ?? 'application/octet-stream';
-      const extMap: Record<string, string> = {
-        'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp',
+      if (existing) {
+        imageBuffer = Buffer.from(readFileSync(join(cacheDir, existing)));
+        const extMime: Record<string, string> = { '.jpg': 'image/jpeg', '.png': 'image/png', '.gif': 'image/gif', '.webp': 'image/webp' };
+        mimeType = extMime[existing.slice(existing.lastIndexOf('.'))] ?? 'image/jpeg';
+      } else {
+        const res = await fetch(`${serverUrl}/api/attachments/${attachment_id}`, { headers: downloadHeaders });
+        if (!res.ok) return toText(`Error: Failed to download attachment (${res.status})`);
+        mimeType = res.headers.get('content-type') ?? 'image/jpeg';
+        const extMap: Record<string, string> = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/gif': '.gif', 'image/webp': '.webp' };
+        const ext = extMap[mimeType] ?? '.bin';
+        imageBuffer = Buffer.from(await res.arrayBuffer());
+        writeFileSync(join(cacheDir, `${attachment_id}${ext}`), imageBuffer);
+      }
+
+      // Return image inline as MCP image content so the agent can see it directly.
+      // Also include a text prefix so agents that don't support image blocks still get context.
+      return {
+        content: [
+          { type: 'text' as const, text: `Attachment ${attachment_id} (${mimeType}, ${(imageBuffer.length / 1024).toFixed(1)} KB):` },
+          { type: 'image' as const, data: imageBuffer.toString('base64'), mimeType },
+        ],
       };
-      const ext = extMap[contentType] ?? '.bin';
-      const filePath = join(cacheDir, `${attachment_id}${ext}`);
-      writeFileSync(filePath, Buffer.from(await res.arrayBuffer()));
-      return toText(`Downloaded to: ${filePath}\nUse your Read tool to view this image.`);
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }

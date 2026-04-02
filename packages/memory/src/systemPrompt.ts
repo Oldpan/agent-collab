@@ -307,7 +307,6 @@ Your context will be periodically compressed to stay within limits. When this ha
 
 ## Capabilities
 
-You can work with any files or tools on this computer — you are not confined to any directory.
 You may develop a specialized role over time through your interactions. Embrace it.`;
 
   if (opts.includeStdinNotification) {
