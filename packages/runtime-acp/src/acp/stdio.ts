@@ -18,9 +18,11 @@ export function spawnAcpAgent(
   command: string,
   args: string[],
   env?: NodeJS.ProcessEnv,
+  cwd?: string,
 ): StdioProcess {
   const child = spawn(command, args, {
     stdio: ['pipe', 'pipe', 'pipe'],
+    ...(cwd ? { cwd } : {}),
     env: {
       ...process.env,
       // Unset vars that would prevent Claude Code from starting inside an existing Claude session

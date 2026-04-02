@@ -139,7 +139,7 @@ export class AcpClient {
     this.workspaceLockManager = params.workspaceLockManager ?? new WorkspaceLockManager();
 
     this.rpc =
-      params.rpc ?? spawnAcpAgent(this.agentCommand, this.agentArgs, params.env);
+      params.rpc ?? spawnAcpAgent(this.agentCommand, this.agentArgs, params.env, this.workspaceRoot);
     this.rpc.onMessage((m) => this.handleMessage(m));
     this.rpc.onStderr((line) => this.events.onAgentStderr?.(line));
     this.rpc.onExit?.((info) => {

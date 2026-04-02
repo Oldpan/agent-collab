@@ -254,6 +254,20 @@ function replayHistory(
       });
     }
   }
+
+  // 补发还在队列中（未被处理）的用户消息，避免刷新后消失
+  const queued = db
+    .prepare(
+      `SELECT prompt_text as promptText, created_at as createdAt
+       FROM conversation_prompt_queue
+       WHERE conversation_id = ? AND record_as_user_message = 1
+       ORDER BY created_at ASC`,
+    )
+    .all(conversationId) as Array<{ promptText: string; createdAt: number }>;
+
+  for (const q of queued) {
+    send({ type: 'history.user_message', text: q.promptText });
+  }
 }
 
 /** 从 update 中提取 toolCallId */

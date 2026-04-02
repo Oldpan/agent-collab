@@ -33,6 +33,16 @@ function canMarkSeen(): boolean {
   return typeof document === "undefined" || document.visibilityState === "visible";
 }
 
+/** Split agent-facing prompt text into display text + attachment IDs */
+function parsePromptText(text: string): { displayText: string; attachmentIds: string[] } {
+  const noteIdx = text.indexOf('\n\n[Attached image');
+  if (noteIdx === -1) return { displayText: text, attachmentIds: [] };
+  const displayText = text.slice(0, noteIdx);
+  const noteText = text.slice(noteIdx);
+  const attachmentIds = [...noteText.matchAll(/^ID: ([a-f0-9-]{36})$/gm)].map((m) => m[1]).filter((x): x is string => !!x);
+  return { displayText, attachmentIds };
+}
+
 function isLegacyPlanOrTaskDelta(text: string): boolean {
   const normalized = text.trimStart();
   return normalized.startsWith("[plan] ") || normalized.startsWith("[task] ");
@@ -608,14 +618,16 @@ export function useConversationStream(
           // Channel mode uses REST history — skip WS replay to avoid duplicates
           if (isChannelMode) break;
           const umId = createId();
+          const { displayText, attachmentIds: parsedIds } = parsePromptText((event as any).text ?? "");
           setMessages((prev) => [
             ...prev,
             {
               id: umId,
               role: "user",
-              text: (event as any).text ?? "",
+              text: displayText,
               createdAt: Date.now(),
               isStreaming: false,
+              ...(parsedIds.length ? { attachmentIds: parsedIds } : {}),
             },
           ]);
           break;
