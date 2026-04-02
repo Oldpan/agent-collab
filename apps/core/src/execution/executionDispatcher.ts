@@ -198,6 +198,8 @@ export class ExecutionDispatcher {
       runId,
       conversationId,
       agentType: row.agentType,
+      ...(row.agentId ? { model: this.getAgentById(row.agentId)?.model } : {}),
+      ...(row.agentId ? { reasoningEffort: this.getAgentById(row.agentId)?.reasoningEffort } : {}),
       workspacePath: row.workspacePath,
       ...(row.agentId ? { skillRoots: this.getAgentById(row.agentId)?.skillRoots } : {}),
       envVars: {

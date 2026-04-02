@@ -54,6 +54,12 @@ export function createTestDb(): Db {
   if (!agentCols.some((col) => col.name === 'skill_roots')) {
     db.exec(`ALTER TABLE agents ADD COLUMN skill_roots TEXT;`);
   }
+  if (!agentCols.some((col) => col.name === 'model')) {
+    db.exec(`ALTER TABLE agents ADD COLUMN model TEXT;`);
+  }
+  if (!agentCols.some((col) => col.name === 'reasoning_effort')) {
+    db.exec(`ALTER TABLE agents ADD COLUMN reasoning_effort TEXT;`);
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS target_participants (
       agent_id       TEXT NOT NULL,
@@ -110,7 +116,7 @@ export function createTestDb(): Db {
       next_seq   INTEGER NOT NULL
     );
   `);
-  db.exec(`UPDATE schema_version SET version = MAX(version, 45);`);
+  db.exec(`UPDATE schema_version SET version = MAX(version, 47);`);
   return db;
 }
 

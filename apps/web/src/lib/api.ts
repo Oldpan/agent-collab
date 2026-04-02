@@ -271,6 +271,21 @@ export async function createChannelTask(
   return res.json();
 }
 
+export async function deleteChannelTask(
+  channelId: string,
+  taskNumber: number,
+): Promise<{ ok: true; taskNumber: number }> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks/${taskNumber}`, {
+    method: "DELETE",
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Failed to delete channel task: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function claimMessageAsTask(
   channelId: string,
   messageId: string,

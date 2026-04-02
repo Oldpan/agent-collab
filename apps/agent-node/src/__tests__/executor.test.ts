@@ -240,6 +240,59 @@ describe('Executor recovery', () => {
     executor.close();
   });
 
+  it('codex dispatch 应通过 -c 注入模型与 reasoning 配置', async () => {
+    const db = createTestDb();
+    openDbs.push(db);
+
+    const captured: Array<{ agentCommand: string; agentArgs: string[] }> = [];
+    const executor = new Executor({
+      db,
+      config: createTestConfig(),
+      send: () => {},
+      createHost: ({ agentCommand, agentArgs }) => {
+        captured.push({ agentCommand, agentArgs });
+        return {
+          getState: () => 'idle',
+          dispatch: async () => {},
+          cancelRun: async () => false,
+          handlePermissionResponse: async () => false,
+          close: () => {},
+          getCurrentRunId: () => null,
+          getLastError: () => null,
+          getWorkspaceRoot: () => '/tmp',
+          getLastSleepAt: () => Date.now(),
+          hasPendingApproval: () => false,
+          isIdleExpired: () => false,
+        };
+      },
+    });
+
+    await executor.dispatch({
+      type: 'run.dispatch',
+      runId: 'run-codex-model-1',
+      conversationId: 'conv-codex-model-1',
+      agentType: 'codex_acp',
+      model: 'gpt-5.4',
+      reasoningEffort: 'high',
+      workspacePath: '/tmp',
+      prompt: 'hello',
+      sessionKey: 'session-codex-model-1',
+      hostKey: 'conversation:conv-codex-model-1:codex_acp',
+      dispatchMode: 'cold_start',
+    });
+
+    expect(captured).toHaveLength(1);
+    expect(captured[0]?.agentCommand).toBe('codex-acp');
+    expect(captured[0]?.agentArgs).toEqual([
+      '-c',
+      'model="gpt-5.4"',
+      '-c',
+      'model_reasoning_effort="high"',
+    ]);
+
+    executor.close();
+  });
+
   it('idle host 在 channel-bridge 配置变化时应重建', async () => {
     const db = createTestDb();
     openDbs.push(db);
@@ -304,6 +357,70 @@ describe('Executor recovery', () => {
         serverUrl: 'http://127.0.0.1:3100',
         authToken: 'token-2',
       },
+    });
+
+    expect(createHost).toHaveBeenCalledTimes(2);
+    expect(closes[0]).toHaveBeenCalledTimes(1);
+
+    executor.close();
+  });
+
+  it('idle codex host 在 model 或 reasoning 变化时应重建', async () => {
+    const db = createTestDb();
+    openDbs.push(db);
+
+    const closes: Array<ReturnType<typeof vi.fn>> = [];
+    const createHost = vi.fn(({ agentArgs, workspaceRoot: hostWorkspaceRoot }) => {
+      const close = vi.fn();
+      closes.push(close);
+      return {
+        getState: () => 'idle' as const,
+        dispatch: async () => {},
+        cancelRun: async () => false,
+        handlePermissionResponse: async () => false,
+        close,
+        getCurrentRunId: () => null,
+        getLastError: () => null,
+        getWorkspaceRoot: () => hostWorkspaceRoot,
+        getLastSleepAt: () => Date.now(),
+        hasPendingApproval: () => false,
+        isIdleExpired: () => false,
+      };
+    });
+
+    const executor = new Executor({
+      db,
+      config: createTestConfig(),
+      send: () => {},
+      createHost,
+    });
+
+    await executor.dispatch({
+      type: 'run.dispatch',
+      runId: 'run-codex-model-refresh-1',
+      conversationId: 'conv-codex-model-refresh-1',
+      agentType: 'codex_acp',
+      model: 'gpt-5.3-codex',
+      reasoningEffort: 'medium',
+      workspacePath: '/tmp',
+      prompt: 'first',
+      sessionKey: 'session-codex-model-refresh-1',
+      hostKey: 'conversation:conv-codex-model-refresh-1:codex_acp',
+      dispatchMode: 'cold_start',
+    });
+
+    await executor.dispatch({
+      type: 'run.dispatch',
+      runId: 'run-codex-model-refresh-2',
+      conversationId: 'conv-codex-model-refresh-1',
+      agentType: 'codex_acp',
+      model: 'gpt-5.4',
+      reasoningEffort: 'high',
+      workspacePath: '/tmp',
+      prompt: 'second',
+      sessionKey: 'session-codex-model-refresh-1',
+      hostKey: 'conversation:conv-codex-model-refresh-1:codex_acp',
+      dispatchMode: 'resume',
     });
 
     expect(createHost).toHaveBeenCalledTimes(2);

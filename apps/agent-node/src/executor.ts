@@ -69,6 +69,13 @@ export class Executor {
     const driver = getRuntimeDriver(msg.agentType);
     const workspaceRoot = msg.workspacePath ?? this.config.workspaceRoot;
     const runtimeEnv = { ...(msg.envVars ?? {}) };
+    const agentArgs = [...driver.args];
+    if (msg.agentType === 'codex_acp' && msg.model?.trim()) {
+      agentArgs.push('-c', `model=${JSON.stringify(msg.model.trim())}`);
+    }
+    if (msg.agentType === 'codex_acp' && msg.reasoningEffort?.trim()) {
+      agentArgs.push('-c', `model_reasoning_effort=${JSON.stringify(msg.reasoningEffort.trim())}`);
+    }
 
     if (msg.agentType === 'claude_acp') {
       const claudeConfigDir = ensureIsolatedClaudeConfig(workspaceRoot);
@@ -105,7 +112,7 @@ export class Executor {
       createSession(this.db, {
         sessionKey,
         agentCommand: driver.command,
-        agentArgs: driver.args,
+        agentArgs,
         cwd: workspaceRoot,
         loadSupported: false,
       });
@@ -150,7 +157,13 @@ export class Executor {
       }
     }
 
-    const bridgeSignature = JSON.stringify(channelBridgeMcpEntry ?? null);
+    const hostConfigSignature = JSON.stringify({
+      agentCommand: driver.command,
+      agentArgs,
+      env: runtimeEnv,
+      channelBridge: channelBridgeMcpEntry ?? null,
+      workspaceRoot,
+    });
     let host = this.hosts.get(runtimeKey);
     if (host?.getState() === 'failed') {
       log.warn('[executor] recreating failed host', {
@@ -167,7 +180,7 @@ export class Executor {
     const previousBridgeSignature = this.hostBridgeSignatures.get(runtimeKey);
     if (
       host &&
-      previousBridgeSignature !== bridgeSignature &&
+      previousBridgeSignature !== hostConfigSignature &&
       host.getState() === 'idle' &&
       !host.getCurrentRunId() &&
       !host.hasPendingApproval()
@@ -191,7 +204,7 @@ export class Executor {
         toolAuth: this.toolAuth,
         workspaceRoot,
         agentCommand: driver.command,
-        agentArgs: driver.args,
+        agentArgs,
         env: runtimeEnv,
         disabledToolKinds: msg.disabledToolKinds,
         channelBridgeMcpEntry,
@@ -210,7 +223,7 @@ export class Executor {
         },
       });
       this.hosts.set(runtimeKey, host);
-      this.hostBridgeSignatures.set(runtimeKey, bridgeSignature);
+      this.hostBridgeSignatures.set(runtimeKey, hostConfigSignature);
     }
 
     this.runToHost.set(runId, runtimeKey);

@@ -49,6 +49,8 @@ type AgentRow = {
   agentId: string;
   name: string;
   agentType: AgentType;
+  model: string | null;
+  reasoningEffort: string | null;
   channelId: string;
   systemPrompt: string;
   description: string | null;
@@ -101,6 +103,8 @@ export class ConversationManager {
   createAgent(params: CreateAgentRequest): AgentInfo {
     const agentId = randomUUID();
     const agentType: AgentType = params.agentType ?? 'claude_acp';
+    const model = params.model?.trim() || null;
+    const reasoningEffort = params.reasoningEffort?.trim() || null;
     const channelId = params.channelId ?? 'default';
     const envVarsJson = params.envVars && Object.keys(params.envVars).length > 0
       ? JSON.stringify(params.envVars)
@@ -120,10 +124,10 @@ export class ConversationManager {
     const description = params.description?.trim() || null;
 
     this.db.prepare(
-      `INSERT INTO agents(agent_id, name, agent_type, channel_id, system_prompt, description, memory, env_vars, disabled_tool_kinds, node_id, workspace_path, skill_roots, created_at, updated_at)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO agents(agent_id, name, agent_type, model, reasoning_effort, channel_id, system_prompt, description, memory, env_vars, disabled_tool_kinds, node_id, workspace_path, skill_roots, created_at, updated_at)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
-      agentId, params.name, agentType, channelId,
+      agentId, params.name, agentType, model, reasoningEffort, channelId,
       params.systemPrompt ?? '', description, '',
       envVarsJson, disabledToolKindsJson, params.nodeId ?? null, workspacePath, skillRootsJson,
       now, now,
@@ -134,7 +138,7 @@ export class ConversationManager {
     ).run(agentId, channelId, now);
 
     return {
-      agentId, name: params.name, agentType, channelId, channelIds: [channelId],
+      agentId, name: params.name, agentType, ...(model ? { model } : {}), ...(reasoningEffort ? { reasoningEffort } : {}), channelId, channelIds: [channelId],
       systemPrompt: params.systemPrompt ?? '',
       ...(description ? { description } : {}),
       envVars: params.envVars, disabledToolKinds: params.disabledToolKinds, nodeId: params.nodeId ?? null,
@@ -144,7 +148,7 @@ export class ConversationManager {
 
   listAgents(channelId?: string): AgentInfo[] {
     const sql = channelId
-      ? `SELECT a.agent_id as agentId, a.name, a.agent_type as agentType, a.channel_id as channelId,
+      ? `SELECT a.agent_id as agentId, a.name, a.agent_type as agentType, a.model, a.reasoning_effort as reasoningEffort, a.channel_id as channelId,
                 a.system_prompt as systemPrompt, a.description,
                 a.env_vars as envVarsJson, a.disabled_tool_kinds as disabledToolKindsJson,
                 a.node_id as nodeId, a.workspace_path as workspacePath, a.skill_roots as skillRootsJson,
@@ -152,7 +156,7 @@ export class ConversationManager {
          FROM agents a
          JOIN agent_channel_memberships m ON m.agent_id = a.agent_id
          WHERE m.channel_id = ? ORDER BY a.updated_at DESC`
-      : `SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
+      : `SELECT agent_id as agentId, name, agent_type as agentType, model, reasoning_effort as reasoningEffort, channel_id as channelId,
                 system_prompt as systemPrompt, description,
                 env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
                 node_id as nodeId, workspace_path as workspacePath, skill_roots as skillRootsJson,
@@ -166,7 +170,7 @@ export class ConversationManager {
 
   getAgent(agentId: string): AgentInfo | null {
     const row = this.db.prepare(
-      `SELECT agent_id as agentId, name, agent_type as agentType, channel_id as channelId,
+      `SELECT agent_id as agentId, name, agent_type as agentType, model, reasoning_effort as reasoningEffort, channel_id as channelId,
               system_prompt as systemPrompt, description,
               env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
               node_id as nodeId, workspace_path as workspacePath, skill_roots as skillRootsJson,
@@ -184,6 +188,8 @@ export class ConversationManager {
     const name = req.name ?? existing.name;
     const systemPrompt = req.systemPrompt ?? existing.systemPrompt;
     const description = 'description' in req ? (req.description?.trim() || null) : (existing.description ?? null);
+    const model = 'model' in req ? (req.model?.trim() || null) : (existing.model ?? null);
+    const reasoningEffort = 'reasoningEffort' in req ? (req.reasoningEffort?.trim() || null) : (existing.reasoningEffort ?? null);
     const envVars = req.envVars ?? existing.envVars;
     const disabledToolKinds = req.disabledToolKinds ?? existing.disabledToolKinds;
     const skillRoots = req.skillRoots ?? existing.skillRoots;
@@ -200,9 +206,9 @@ export class ConversationManager {
 
     this.db.prepare(
       `UPDATE agents
-       SET name = ?, system_prompt = ?, description = ?, env_vars = ?, disabled_tool_kinds = ?, channel_id = ?, skill_roots = ?, updated_at = ?
+       SET name = ?, system_prompt = ?, description = ?, model = ?, reasoning_effort = ?, env_vars = ?, disabled_tool_kinds = ?, channel_id = ?, skill_roots = ?, updated_at = ?
        WHERE agent_id = ?`
-    ).run(name, systemPrompt, description, envVarsJson, disabledToolKindsJson, channelId, skillRootsJson, now, agentId);
+    ).run(name, systemPrompt, description, model, reasoningEffort, envVarsJson, disabledToolKindsJson, channelId, skillRootsJson, now, agentId);
 
     // Migrate home channel membership if channelId changed
     if (req.channelId && req.channelId !== existing.channelId) {
@@ -216,7 +222,19 @@ export class ConversationManager {
       ).run(agentId, channelId, now);
     }
 
-    return this.getAgent(agentId) ?? { ...existing, name, systemPrompt, envVars, disabledToolKinds, skillRoots, channelId, updatedAt: now } satisfies AgentInfo;
+    return this.getAgent(agentId) ?? {
+      ...existing,
+      name,
+      systemPrompt,
+      description: description ?? undefined,
+      model: model ?? undefined,
+      reasoningEffort: reasoningEffort ?? undefined,
+      envVars,
+      disabledToolKinds,
+      skillRoots,
+      channelId,
+      updatedAt: now,
+    } satisfies AgentInfo;
   }
 
   deleteAgent(agentId: string): { deletedConversations: number } {
@@ -1049,6 +1067,8 @@ export class ConversationManager {
       agentId: row.agentId,
       name: row.name,
       agentType: row.agentType,
+      ...(row.model ? { model: row.model } : {}),
+      ...(row.reasoningEffort ? { reasoningEffort: row.reasoningEffort } : {}),
       channelId: row.channelId,
       channelIds: memberships.map((m) => m.channelId),
       systemPrompt: row.systemPrompt,

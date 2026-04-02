@@ -40,6 +40,12 @@ export function AgentProfilePanel({ agent }: AgentProfilePanelProps) {
             label="Runtime"
             value={agent.agentType === "claude_acp" ? "Claude Code" : "Codex"}
           />
+          {agent.agentType === "codex_acp" ? (
+            <>
+              <InfoRow label="Codex Model" value={agent.model ?? "Remote default (~/.codex/config.toml)"} mono={!!agent.model} />
+              <InfoRow label="Codex Reasoning" value={agent.reasoningEffort ?? "Remote default (~/.codex/config.toml)"} mono={!!agent.reasoningEffort} />
+            </>
+          ) : null}
           <InfoRow label="Agent ID" value={agent.agentId} mono />
           <InfoRow label="Channels" value={memberships.length > 0 ? memberships.join("\n") : "No channel memberships"} mono />
         </ProfileSection>

@@ -53,19 +53,22 @@ export function useChannelStream(options: UseChannelStreamOptions): {
     }
     let cancelled = false;
 
-    api
-      .getChannelMessages(channelId, 100)
-      .then((d) => {
-        if (!cancelled) {
+    const loadInitialMessages = () => {
+      void api
+        .getChannelMessages(channelId, 100)
+        .then((d) => {
+          if (cancelled) return;
           setMessages(d.messages);
-          if (d.messages.length < 100) setHasMore(false);
+          setHasMore(d.messages.length >= 100);
           const latestSeq = d.messages.reduce((max, message) => Math.max(max, Number(message.seq ?? 0)), 0);
           if (latestSeq > 0 && canMarkSeen()) {
             onSeenSeqRef.current?.(latestSeq);
           }
-        }
-      })
-      .catch(() => {});
+        })
+        .catch(() => {});
+    };
+
+    loadInitialMessages();
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const token = localStorage.getItem("auth_token") ?? "";
@@ -107,8 +110,9 @@ export function useChannelStream(options: UseChannelStreamOptions): {
           setNotices((prev) => [...prev, { message: notice.message, createdAt: notice.createdAt }]);
         } else if (event.type === "channel.history.reset") {
           setMessages([]);
-          setHasMore(false);
+          setHasMore(true);
           setResetVersion((prev) => prev + 1);
+          loadInitialMessages();
         }
       } catch {
         // ignore malformed messages

@@ -5,6 +5,7 @@ import { cn } from "@/lib/utils";
 import defaultSystemPrompt from "@/prompts/default-system-prompt.md?raw";
 import { Textarea } from "@/components/ui/textarea";
 import { parseEnvVarsText } from "@/lib/env-vars";
+import { CODEX_MODEL_OPTIONS, getCodexReasoningOptions } from "@/lib/codex-models";
 
 type Props = {
   onClose: () => void;
@@ -16,11 +17,14 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [agentType, setAgentType] = useState<AgentType>("claude_acp");
+  const [model, setModel] = useState("");
+  const [reasoningEffort, setReasoningEffort] = useState("");
   const [systemPrompt, setSystemPrompt] = useState(defaultSystemPrompt);
   const [envVarsText, setEnvVarsText] = useState("");
   const [creating, setCreating] = useState(false);
   const parsedEnvVars = useMemo(() => parseEnvVarsText(envVarsText), [envVarsText]);
   const envVars = Object.keys(parsedEnvVars.envVars).length > 0 ? parsedEnvVars.envVars : undefined;
+  const reasoningOptions = useMemo(() => getCodexReasoningOptions(model, reasoningEffort), [model, reasoningEffort]);
 
   const handleCreate = useCallback(async () => {
     if (!name.trim()) return;
@@ -30,6 +34,8 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
         name: name.trim(),
         description: description.trim() || undefined,
         agentType,
+        model: agentType === "codex_acp" ? (model.trim() || undefined) : undefined,
+        reasoningEffort: agentType === "codex_acp" ? (reasoningEffort.trim() || undefined) : undefined,
         systemPrompt: systemPrompt.trim() || undefined,
         envVars,
         nodeId: machineNodeId,
@@ -38,7 +44,7 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
     } finally {
       setCreating(false);
     }
-  }, [name, description, agentType, systemPrompt, envVars, machineNodeId, onCreate, onClose]);
+  }, [name, description, agentType, model, reasoningEffort, systemPrompt, envVars, machineNodeId, onCreate, onClose]);
 
   return (
     <div className="space-y-3">
@@ -84,7 +90,13 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
                   ? "border-zinc-900 bg-[#ffd54a] text-zinc-950"
                   : "border-zinc-900 bg-white text-zinc-700 hover:bg-[#fff1a9]",
               )}
-              onClick={() => setAgentType(t)}
+              onClick={() => {
+                setAgentType(t);
+                if (t !== "codex_acp") {
+                  setModel("");
+                  setReasoningEffort("");
+                }
+              }}
             >
               {t === "claude_acp" ? "Claude" : "Codex"}
             </button>
@@ -101,6 +113,52 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
           onChange={(e) => setSystemPrompt(e.target.value)}
         />
       </div>
+
+      {agentType === "codex_acp" && (
+        <div className="space-y-2">
+          <div className="space-y-0.5">
+            <label className="text-[10px] text-zinc-500">Codex Model</label>
+            <select
+              className="h-8 w-full rounded-sm border-2 border-zinc-900 bg-white px-2 text-xs text-zinc-900"
+              value={model}
+              onChange={(e) => {
+                const nextModel = e.target.value;
+                setModel(nextModel);
+                const nextReasoningOptions = getCodexReasoningOptions(nextModel, undefined);
+                if (!nextReasoningOptions.some((option) => option.value === reasoningEffort)) {
+                  setReasoningEffort("");
+                }
+              }}
+            >
+              <option value="">Remote default (~/.codex/config.toml)</option>
+              {CODEX_MODEL_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-0.5">
+            <label className="text-[10px] text-zinc-500">Codex Reasoning</label>
+            <select
+              className="h-8 w-full rounded-sm border-2 border-zinc-900 bg-white px-2 text-xs text-zinc-900"
+              value={reasoningEffort}
+              onChange={(e) => setReasoningEffort(e.target.value)}
+              disabled={!model}
+            >
+              <option value="">Remote default (~/.codex/config.toml)</option>
+              {reasoningOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="text-[10px] text-zinc-500">
+            Uses the remote machine&apos;s <span className="font-mono">~/.codex/config.toml</span> defaults when left empty.
+          </div>
+        </div>
+      )}
 
       <div className="space-y-0.5">
         <label className="text-[10px] text-zinc-500">Environment Variables</label>

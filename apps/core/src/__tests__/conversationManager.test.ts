@@ -791,4 +791,51 @@ describe('ConversationManager', () => {
       expect(JSON.parse(row.skill_roots ?? '[]')).toEqual(['/skills/new', '/skills/tools']);
     });
   });
+
+  describe('model', () => {
+    it('创建 codex agent 时应保留 model 与 reasoningEffort', () => {
+      const agent = manager.createAgent({
+        name: 'Codex Agent',
+        agentType: 'codex_acp',
+        model: 'gpt-5.4',
+        reasoningEffort: 'high',
+      });
+
+      expect(agent.model).toBe('gpt-5.4');
+      expect(agent.reasoningEffort).toBe('high');
+
+      const row = db
+        .prepare('SELECT model, reasoning_effort as reasoningEffort FROM agents WHERE agent_id = ?')
+        .get(agent.agentId) as { model: string | null; reasoningEffort: string | null };
+
+      expect(row.model).toBe('gpt-5.4');
+      expect(row.reasoningEffort).toBe('high');
+      expect(manager.getAgent(agent.agentId)?.model).toBe('gpt-5.4');
+      expect(manager.getAgent(agent.agentId)?.reasoningEffort).toBe('high');
+    });
+
+    it('更新 agent 时应覆盖 model 与 reasoningEffort', () => {
+      const agent = manager.createAgent({
+        name: 'Updated Codex Agent',
+        agentType: 'codex_acp',
+        model: 'gpt-5.3-codex',
+        reasoningEffort: 'medium',
+      });
+
+      const updated = manager.updateAgent(agent.agentId, {
+        model: 'gpt-5.4',
+        reasoningEffort: 'xhigh',
+      });
+
+      expect(updated?.model).toBe('gpt-5.4');
+      expect(updated?.reasoningEffort).toBe('xhigh');
+
+      const row = db
+        .prepare('SELECT model, reasoning_effort as reasoningEffort FROM agents WHERE agent_id = ?')
+        .get(agent.agentId) as { model: string | null; reasoningEffort: string | null };
+
+      expect(row.model).toBe('gpt-5.4');
+      expect(row.reasoningEffort).toBe('xhigh');
+    });
+  });
 });

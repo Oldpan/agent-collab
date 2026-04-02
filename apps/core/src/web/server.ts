@@ -1511,6 +1511,54 @@ export async function startServer(params: {
     },
   );
 
+  // DELETE /api/channels/:id/tasks/:num
+  app.delete<{ Params: { id: string; num: string } }>(
+    '/api/channels/:id/tasks/:num',
+    async (req, reply) => {
+      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const taskNumber = Number(req.params.num);
+      if (!Number.isFinite(taskNumber)) {
+        reply.code(400);
+        return { error: 'Invalid task number' };
+      }
+
+      const task = db.prepare(
+        `SELECT task_id as taskId, message_id as messageId
+         FROM tasks
+         WHERE channel_id = ? AND task_number = ?`,
+      ).get(req.params.id, taskNumber) as { taskId: string; messageId: string | null } | undefined;
+      if (!task) {
+        reply.code(404);
+        return { error: 'Task not found' };
+      }
+
+      const threadRootId = task.messageId ? task.messageId.slice(0, 8) : null;
+
+      db.transaction(() => {
+        db.prepare(`DELETE FROM thread_task_bindings WHERE task_id = ?`).run(task.taskId);
+        db.prepare(`DELETE FROM tasks WHERE task_id = ?`).run(task.taskId);
+        if (task.messageId) {
+          db.prepare(`UPDATE channel_messages SET message_kind = NULL WHERE message_id = ?`).run(task.messageId);
+        }
+        if (threadRootId) {
+          db.prepare(
+            `DELETE FROM target_participants
+             WHERE channel_id = ? AND thread_root_id = ?`,
+          ).run(req.params.id, threadRootId);
+          db.prepare(
+            `DELETE FROM agent_message_checkpoints
+             WHERE channel_id = ? AND thread_root_id = ?`,
+          ).run(req.params.id, threadRootId);
+        }
+      })();
+
+      broadcastToChannel(req.params.id, { type: 'channel.history.reset' });
+      return { ok: true, taskNumber };
+    },
+  );
+
   // ─── Node REST routes ───
 
   // List connected agent nodes (in-memory only, for backward compat)

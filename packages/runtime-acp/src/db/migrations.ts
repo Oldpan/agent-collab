@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 45;
+const LATEST_VERSION = 47;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -823,5 +823,21 @@ export function migrate(db: Db): void {
       db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN client_message_id TEXT;`);
     }
     db.exec(`UPDATE schema_version SET version = 45;`);
+  }
+
+  if (current < 46) {
+    const agentCols = db.prepare("PRAGMA table_info('agents')").all() as Array<{ name: string }>;
+    if (!agentCols.some((c) => c.name === 'model')) {
+      db.exec(`ALTER TABLE agents ADD COLUMN model TEXT;`);
+    }
+    db.exec(`UPDATE schema_version SET version = 46;`);
+  }
+
+  if (current < 47) {
+    const agentCols = db.prepare("PRAGMA table_info('agents')").all() as Array<{ name: string }>;
+    if (!agentCols.some((c) => c.name === 'reasoning_effort')) {
+      db.exec(`ALTER TABLE agents ADD COLUMN reasoning_effort TEXT;`);
+    }
+    db.exec(`UPDATE schema_version SET version = 47;`);
   }
 }

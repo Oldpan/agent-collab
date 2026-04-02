@@ -358,7 +358,7 @@ export function Sidebar({
                     ? <ChevronDownIcon className="size-3 shrink-0 text-zinc-500" />
                     : <ChevronRightIcon className="size-3 shrink-0 text-zinc-500" />
                   }
-                  <span><StatusDot status={machine.status} /></span>
+                  <span className="flex items-center"><StatusDot status={machine.status} /></span>
                   <span className="min-w-0 flex-1 break-words text-xs font-medium leading-tight">{machine.name}</span>
                   {isAdmin && (
                     <div className="flex shrink-0 items-center gap-1 opacity-0 group-hover:opacity-100">

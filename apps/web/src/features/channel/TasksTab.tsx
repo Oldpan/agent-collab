@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import {
   bindThreadTask,
   createChannelTask,
+  deleteChannelTask,
   getChannelTasks,
   unbindThreadTask,
   updateTaskStatus,
@@ -59,6 +60,7 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: Tasks
   const [creating, setCreating] = useState(false);
   const [updatingTaskNumber, setUpdatingTaskNumber] = useState<number | null>(null);
   const [bindingTaskNumber, setBindingTaskNumber] = useState<number | null>(null);
+  const [deletingTaskNumber, setDeletingTaskNumber] = useState<number | null>(null);
   const [showDone, setShowDone] = useState(false);
 
   const loadTasks = useCallback(async () => {
@@ -158,6 +160,20 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: Tasks
       setBindingTaskNumber(null);
     }
   }, [bindingTaskNumber, channelId, loadTasks]);
+
+  const handleDelete = useCallback(async (task: ChannelTask) => {
+    if (deletingTaskNumber === task.taskNumber) return;
+    setDeletingTaskNumber(task.taskNumber);
+    setError(null);
+    try {
+      await deleteChannelTask(channelId, task.taskNumber);
+      setTasks((prev) => prev.filter((item) => item.taskId !== task.taskId));
+    } catch (err) {
+      setError(String((err as Error)?.message ?? err));
+    } finally {
+      setDeletingTaskNumber(null);
+    }
+  }, [channelId, deletingTaskNumber]);
 
   return (
     <div className="flex h-full flex-col">
@@ -353,6 +369,14 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: Tasks
                                   </Button>
                                 )
                               ) : null}
+                              <Button
+                                size="sm"
+                                disabled={deletingTaskNumber === task.taskNumber}
+                                onClick={() => void handleDelete(task)}
+                                className="h-8 rounded-sm border-2 border-zinc-900 bg-[#ffe1e1] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#ffd2d2]"
+                              >
+                                {deletingTaskNumber === task.taskNumber ? "Deleting..." : "Delete"}
+                              </Button>
                             </div>
                           </div>
                         </div>

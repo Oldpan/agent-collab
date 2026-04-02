@@ -430,6 +430,8 @@ export type RunDispatchMsg = {
   runId: string;
   conversationId: string;
   agentType: AgentType;
+  model?: string;
+  reasoningEffort?: string;
   workspacePath: string | null;
   skillRoots?: string[];
   envVars?: Record<string, string>;
@@ -569,6 +571,8 @@ export type AgentInfo = {
   agentId: string;
   name: string;
   agentType: AgentType;
+  model?: string;
+  reasoningEffort?: string;
   channelId: string;
   channelIds: string[];
   systemPrompt: string;
@@ -585,6 +589,8 @@ export type AgentInfo = {
 export type CreateAgentRequest = {
   name: string;
   agentType?: AgentType;
+  model?: string;
+  reasoningEffort?: string;
   channelId?: string;
   systemPrompt?: string;
   description?: string;
@@ -599,6 +605,8 @@ export type UpdateAgentRequest = {
   name?: string;
   systemPrompt?: string;
   description?: string;
+  model?: string;
+  reasoningEffort?: string;
   envVars?: Record<string, string>;
   disabledToolKinds?: AgentPermissionKind[];
   channelId?: string;

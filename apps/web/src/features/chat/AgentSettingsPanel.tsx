@@ -8,6 +8,7 @@ import { AgentPermissionSettings } from "@/features/sidebar/AgentPermissionSetti
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useChannels } from "@/hooks/useChannels";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { getCodexModelOptions, getCodexReasoningOptions } from "@/lib/codex-models";
 
 type Props = {
   agent: AgentInfo;
@@ -21,11 +22,15 @@ type Props = {
 export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart, onClearChat, onReset }: Props) {
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
+  const [model, setModel] = useState(agent.model ?? "");
+  const [reasoningEffort, setReasoningEffort] = useState(agent.reasoningEffort ?? "");
   const [envVars, setEnvVars] = useState<Record<string, string> | undefined>(agent.envVars);
   const [disabledToolKinds, setDisabledToolKinds] = useState(agent.disabledToolKinds);
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
   const { channels } = useChannels();
+  const codexModelOptions = useMemo(() => getCodexModelOptions(model), [model]);
+  const codexReasoningOptions = useMemo(() => getCodexReasoningOptions(model, reasoningEffort), [model, reasoningEffort]);
   const memberChannels = useMemo(
     () => channels.filter((channel) =>
       channel.members?.some((member) => member.agentId === agent.agentId)
@@ -57,11 +62,18 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
-      await onUpdate({ name, description: description.trim() || undefined, envVars, disabledToolKinds });
+      await onUpdate({
+        name,
+        description: description.trim() || undefined,
+        model: agent.agentType === "codex_acp" ? (model.trim() || undefined) : undefined,
+        reasoningEffort: agent.agentType === "codex_acp" ? (reasoningEffort.trim() || undefined) : undefined,
+        envVars,
+        disabledToolKinds,
+      });
     } finally {
       setSaving(false);
     }
-  }, [description, disabledToolKinds, envVars, name, onUpdate]);
+  }, [agent.agentType, description, disabledToolKinds, envVars, model, reasoningEffort, name, onUpdate]);
 
   const handleRestart = useCallback(async () => {
     openDialog({
@@ -229,6 +241,49 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
                 onChange={(e) => setDescription(e.target.value)}
               />
             </div>
+
+            {agent.agentType === "codex_acp" && (
+              <div className="space-y-3">
+                <div className="space-y-1">
+                  <label className="text-xs text-zinc-600">Codex Model</label>
+                  <select
+                    className="h-9 w-full rounded-sm border-2 border-zinc-900 bg-white px-2 text-sm text-zinc-900"
+                    value={model}
+                    onChange={(e) => {
+                      const nextModel = e.target.value;
+                      setModel(nextModel);
+                      const nextReasoningOptions = getCodexReasoningOptions(nextModel, undefined);
+                      if (!nextReasoningOptions.some((option) => option.value === reasoningEffort)) {
+                        setReasoningEffort("");
+                      }
+                    }}
+                  >
+                    <option value="">Remote default (~/.codex/config.toml)</option>
+                    {codexModelOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs text-zinc-600">Codex Reasoning</label>
+                  <select
+                    className="h-9 w-full rounded-sm border-2 border-zinc-900 bg-white px-2 text-sm text-zinc-900"
+                    value={reasoningEffort}
+                    onChange={(e) => setReasoningEffort(e.target.value)}
+                    disabled={!model}
+                  >
+                    <option value="">Remote default (~/.codex/config.toml)</option>
+                    {codexReasoningOptions.map((option) => (
+                      <option key={option.value} value={option.value}>
+                        {option.label}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
 
             <div className="space-y-1">
               <label className="text-xs text-zinc-600">Member Of</label>
