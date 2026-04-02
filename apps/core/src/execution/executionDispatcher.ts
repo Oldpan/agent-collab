@@ -126,10 +126,16 @@ export class ExecutionDispatcher {
             humanUserName,
           ) ?? row.replyTarget?.trim() ?? `dm:@${humanUserName}`;
           const msgSeq = allocateNextChannelMessageSeq(this.db, dmChannelId);
+          // Strip the [Attached image] note from display content; it's only for the agent
+          const attachNoteIdx = promptText.indexOf('\n\n[Attached image');
+          const displayContent = attachNoteIdx >= 0 ? promptText.slice(0, attachNoteIdx) : promptText;
+          const parsedAttachIds = attachNoteIdx >= 0
+            ? [...promptText.slice(attachNoteIdx).matchAll(/^ID: ([a-f0-9-]{36})$/gm)].map((m) => m[1])
+            : [];
           this.db.prepare(
-            `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
-             VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?)`,
-          ).run(options?.clientMessageId ?? randomUUID(), dmChannelId, humanUserName, dmReplyTarget, promptText, msgSeq, Date.now());
+            `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, attachment_ids)
+             VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, ?)`,
+          ).run(options?.clientMessageId ?? randomUUID(), dmChannelId, humanUserName, dmReplyTarget, displayContent, msgSeq, Date.now(), parsedAttachIds.length ? JSON.stringify(parsedAttachIds) : null);
 
           // Checkpoint will be bumped after confirmed delivery to avoid silent message
           // loss if the node is offline or the send fails.

@@ -556,7 +556,8 @@ export async function startServer(params: {
       const rows = db
         .prepare(
           `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                  content, created_at as createdAt, seq, message_source as messageSource
+                  content, created_at as createdAt, seq, message_source as messageSource,
+                  attachment_ids as attachmentIds
            FROM channel_messages
            WHERE channel_id = ? AND (target = ? OR target LIKE ?)
            ORDER BY seq DESC LIMIT ?`,
@@ -569,6 +570,7 @@ export async function startServer(params: {
         createdAt: number;
         seq: number;
         messageSource: string | null;
+        attachmentIds: string | null;
       }>;
 
       const messages = rows.reverse().map((r) => ({
@@ -579,6 +581,7 @@ export async function startServer(params: {
         createdAt: new Date(r.createdAt).toISOString(),
         seq: r.seq,
         ...(r.messageSource ? { messageSource: r.messageSource } : {}),
+        ...(r.attachmentIds ? { attachmentIds: JSON.parse(r.attachmentIds) as string[] } : {}),
       }));
 
       return { messages };

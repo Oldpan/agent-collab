@@ -112,6 +112,7 @@ function toLiveChannelMessage(message: Awaited<ReturnType<typeof api.getConversa
     createdAt: new Date(message.createdAt).getTime(),
     isStreaming: false,
     ...(message.messageSource ? { messageSource: message.messageSource } : {}),
+    ...(message.attachmentIds?.length ? { attachmentIds: message.attachmentIds } : {}),
   };
 }
 
