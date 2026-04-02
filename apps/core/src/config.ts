@@ -58,7 +58,7 @@ function createConfigSchema(defaults: {
     acpAgentArgs: z
       .array(z.string())
       .default(['-y', '@zed-industries/codex-acp@latest']),
-    acpPromptTimeoutMs: z.number().int().min(1_000).max(3_600_000).default(300_000),
+    acpPromptTimeoutMs: z.number().int().min(1_000).max(3_600_000).default(3_600_000),
 
     // Default workspace is ~ (switchable per conversation via /workspace)
     workspaceRoot: absPath.default(defaults.defaultWorkspaceRoot),
@@ -155,7 +155,7 @@ function createDefaultConfig(defaults: {
     dbPath: defaults.defaultDbPath,
     acpAgentCommand: 'npx',
     acpAgentArgs: ['-y', '@zed-industries/codex-acp@latest'],
-    acpPromptTimeoutMs: 300_000,
+    acpPromptTimeoutMs: 3_600_000,
     uiDefaultMode: 'summary',
     webPort: 3100,
     webHost: '0.0.0.0',
@@ -223,7 +223,7 @@ async function runFirstTimeSetup(params: {
       dbPath,
       acpAgentCommand,
       acpAgentArgs: splitArgs(acpArgsRaw),
-      acpPromptTimeoutMs: 300_000,
+      acpPromptTimeoutMs: 3_600_000,
       uiDefaultMode: 'summary',
       webPort,
       webHost: '0.0.0.0',
