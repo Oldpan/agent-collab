@@ -8,12 +8,21 @@ import { uploadAttachment } from "@/lib/api";
 export type PromptComposerProps = {
   status: ChatStatus;
   ready?: boolean;
+  showCancel?: boolean;
+  disableInput?: boolean;
   onSend: (text: string, attachmentIds?: string[]) => boolean;
   onCancel: () => void;
 };
 
 /** Auto-resizing textarea with send/cancel and file upload buttons */
-export function PromptComposer({ status, ready = true, onSend, onCancel }: PromptComposerProps) {
+export function PromptComposer({
+  status,
+  ready = true,
+  showCancel,
+  disableInput,
+  onSend,
+  onCancel,
+}: PromptComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [pendingFiles, setPendingFiles] = useState<Array<{ id: string; name: string }>>([]);
@@ -77,7 +86,9 @@ export function PromptComposer({ status, ready = true, onSend, onCancel }: Promp
     status === "recovering" ||
     status === "awaiting_approval";
 
-  const showCancel = status === "submitted" || status === "streaming" || status === "recovering" || status === "awaiting_approval";
+  const shouldShowCancel =
+    showCancel ?? (status === "submitted" || status === "streaming" || status === "recovering" || status === "awaiting_approval");
+  const shouldDisableInput = disableInput ?? isBusy;
 
   return (
     <div className="border-t-2 border-black bg-[#fff5c2] px-4 py-3 shadow-[0_-2px_0_0_rgba(0,0,0,0.08)]">
@@ -117,7 +128,7 @@ export function PromptComposer({ status, ready = true, onSend, onCancel }: Promp
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
-          disabled={isBusy || uploading}
+          disabled={shouldDisableInput || uploading}
           className="shrink-0 rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40"
           title="Attach image"
         >
@@ -136,13 +147,13 @@ export function PromptComposer({ status, ready = true, onSend, onCancel }: Promp
               ? "Send a message... (Shift+Enter for newline)"
               : "Connection is reconnecting... You can still type."
           }
-          disabled={isBusy}
+          disabled={shouldDisableInput}
           onKeyDown={handleKeyDown}
           onInput={handleInput}
           rows={1}
         />
 
-        {showCancel ? (
+        {shouldShowCancel ? (
           <Button
             size="icon"
             variant="outline"

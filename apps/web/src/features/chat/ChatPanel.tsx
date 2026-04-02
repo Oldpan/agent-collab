@@ -106,6 +106,7 @@ export function ChatPanel({
     runs,
     status,
     connectionReady,
+    hasActiveRun,
     pendingApproval,
     sendPrompt,
     respondApproval,
@@ -122,9 +123,21 @@ export function ChatPanel({
   const latestRun = runs.at(-1);
   const hasDispatchFailure = Boolean(latestRun?.error && isDispatchFailureError(latestRun.error));
   const hasPendingActivity =
-    runs.some((r) => r.isActive) ||
+    hasActiveRun ||
     status === "submitted" ||
     status === "queued" ||
+    status === "streaming" ||
+    status === "recovering" ||
+    status === "awaiting_approval";
+  const shouldShowCancel =
+    hasActiveRun ||
+    status === "submitted" ||
+    status === "streaming" ||
+    status === "recovering" ||
+    status === "awaiting_approval";
+  const shouldDisableInput =
+    status === "queued" ||
+    status === "submitted" ||
     status === "streaming" ||
     status === "recovering" ||
     status === "awaiting_approval";
@@ -345,7 +358,14 @@ export function ChatPanel({
             <ConversationScrollButton />
           </Conversation>
 
-          <PromptComposer status={status} ready={connectionReady} onSend={sendPrompt} onCancel={cancel} />
+          <PromptComposer
+            status={status}
+            ready={connectionReady}
+            showCancel={shouldShowCancel}
+            disableInput={shouldDisableInput}
+            onSend={sendPrompt}
+            onCancel={cancel}
+          />
         </>
       )}
     </div>

@@ -96,6 +96,20 @@ beforeAll(async () => {
     });
   });
 
+  app.post<{ Params: { id: string } }>('/api/conversations/:id/cancel', async (req, reply) => {
+    const conv = manager.getConversation(req.params.id);
+    if (!conv) {
+      reply.code(404);
+      return { error: 'Not found' };
+    }
+    const result = manager.cancelConversationRun(req.params.id);
+    if (!result.ok) {
+      reply.code(409);
+      return { error: result.message };
+    }
+    return { ok: true, ...(result.runId ? { runId: result.runId } : {}) };
+  });
+
   app.get<{ Params: { id: string }; Querystring: { limit?: string } }>(
     '/api/conversations/:id/channel-messages',
     async (req, reply) => {

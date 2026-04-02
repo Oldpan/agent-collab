@@ -128,6 +128,7 @@ type UseConversationStreamReturn = {
   runs: LiveRun[];
   status: ChatStatus;
   connectionReady: boolean;
+  hasActiveRun: boolean;
   pendingApproval: PendingApproval | null;
   sendPrompt: (text: string, attachmentIds?: string[]) => boolean;
   respondApproval: (requestId: string, decision: "allow" | "deny") => void;
@@ -151,6 +152,7 @@ export function useConversationStream(
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [connectionReady, setConnectionReady] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
+  const hasActiveRun = runs.some((run) => run.isActive);
 
   // Refs for streaming accumulators
   const wsRef = useRef<WebSocket | null>(null);
@@ -935,16 +937,38 @@ export function useConversationStream(
   );
 
   const cancel = useCallback(() => {
-    if (!sendEvent({ type: "cancel" })) {
-      setStatus("error");
+    const ws = wsRef.current;
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify({ type: "cancel" } satisfies ClientEvent));
+      return;
     }
-  }, [sendEvent]);
+    if (!conversationId) {
+      setStatus("error");
+      return;
+    }
+    void api
+      .cancelConversationPrompt(conversationId)
+      .catch((error) => {
+        setStatus("error");
+        setMessages((prev) => [
+          ...prev,
+          {
+            id: createId(),
+            role: "system",
+            text: String(error?.message ?? error),
+            createdAt: Date.now(),
+            isStreaming: false,
+          },
+        ]);
+      });
+  }, [conversationId]);
 
   return {
     messages,
     runs,
     status,
     connectionReady,
+    hasActiveRun,
     pendingApproval,
     sendPrompt,
     respondApproval,

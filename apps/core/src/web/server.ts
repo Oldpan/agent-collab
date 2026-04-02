@@ -468,6 +468,31 @@ export async function startServer(params: {
     },
   );
 
+  app.post<{ Params: { id: string } }>(
+    '/api/conversations/:id/cancel',
+    async (req, reply) => {
+      const user = requireUser(req, reply);
+      if (!user) return { error: 'Unauthorized' };
+
+      const conv = conversationManager.getConversation(req.params.id);
+      if (!conv) {
+        reply.code(404);
+        return { error: 'Not found' };
+      }
+      if (!canAccessConversation(user, req.params.id)) {
+        reply.code(403);
+        return { error: 'Access denied' };
+      }
+
+      const result = conversationManager.cancelConversationRun(req.params.id);
+      if (!result.ok) {
+        reply.code(409);
+        return { error: result.message };
+      }
+      return { ok: true, ...(result.runId ? { runId: result.runId } : {}) };
+    },
+  );
+
   // Get conversation history (stored events from DB)
   app.get<{ Params: { id: string } }>('/api/conversations/:id/history', async (req, reply) => {
     const conv = conversationManager.getConversation(req.params.id);

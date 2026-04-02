@@ -63,6 +63,18 @@ export async function sendConversationPrompt(id: string, text: string, clientMes
   return res.json();
 }
 
+export async function cancelConversationPrompt(id: string): Promise<{ ok: boolean; runId?: string }> {
+  const res = await fetch(`${API_BASE}/conversations/${id}/cancel`, {
+    method: "POST",
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Failed to cancel conversation: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export type ConversationRunSummary = {
   runId: string;
   promptText: string;
