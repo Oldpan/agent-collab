@@ -14,6 +14,13 @@ let nextId = 1;
 const createId = () => `msg-${nextId++}`;
 const ACTIVE_CONVERSATION_SYNC_INTERVAL_MS = 1500;
 
+function createClientMessageId(): string {
+  if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+    return `client-${crypto.randomUUID()}`;
+  }
+  return `client-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
 function getDisplayRunId(turnId: string): string {
   return turnId.startsWith("replay-") ? turnId.slice("replay-".length) : turnId;
 }
@@ -856,7 +863,7 @@ export function useConversationStream(
 
   const sendPrompt = useCallback(
     (text: string, attachmentIds?: string[]) => {
-      const id = createId();
+      const id = createClientMessageId();
       // Append attachment references to prompt so the agent can use view_file
       const attachmentNote = attachmentIds?.length
         ? `\n\n[Attached image${attachmentIds.length > 1 ? 's' : ''}]\n` +
@@ -879,7 +886,7 @@ export function useConversationStream(
 
       setStatus("submitted");
       void api
-        .sendConversationPrompt(conversationId, promptText)
+        .sendConversationPrompt(conversationId, promptText, id)
         .then((result) => {
           setStatus(result.queued ? "queued" : "submitted");
         })

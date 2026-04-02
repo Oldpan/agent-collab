@@ -3,13 +3,20 @@ import { create } from "zustand";
 import type { ChannelInfo } from "@agent-collab/protocol";
 import * as api from "@/lib/api";
 
+type ChannelStoreInfo = ChannelInfo & {
+  members?: Array<{
+    agentId: string;
+    name: string;
+  }>;
+};
+
 type ChannelsState = {
-  channels: ChannelInfo[];
+  channels: ChannelStoreInfo[];
   loading: boolean;
-  setChannels: (channels: ChannelInfo[]) => void;
+  setChannels: (channels: ChannelStoreInfo[]) => void;
   setLoading: (loading: boolean) => void;
-  addChannel: (channel: ChannelInfo) => void;
-  replaceChannel: (channel: ChannelInfo) => void;
+  addChannel: (channel: ChannelStoreInfo) => void;
+  replaceChannel: (channel: ChannelStoreInfo) => void;
 };
 
 const useChannelsStore = create<ChannelsState>((set) => ({
@@ -38,12 +45,12 @@ export function useChannels() {
   const createChannel = useCallback(async (
     req: { name: string; workspacePath?: string; description?: string; agentIds?: string[] },
   ) => {
-    const channel = await api.createChannel(req);
+    const channel = await api.createChannel(req) as ChannelStoreInfo;
     addChannel(channel);
     return channel;
   }, [addChannel]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const updateChannel = useCallback((channel: ChannelInfo) => {
+  const updateChannel = useCallback((channel: ChannelStoreInfo) => {
     replaceChannel(channel);
   }, [replaceChannel]);
 

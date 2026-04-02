@@ -426,7 +426,7 @@ export async function startServer(params: {
     return;
   });
 
-  app.post<{ Params: { id: string }; Body: { text?: string } }>(
+  app.post<{ Params: { id: string }; Body: { text?: string; clientMessageId?: string } }>(
     '/api/conversations/:id/prompt',
     async (req, reply) => {
       const user = requireUser(req, reply);
@@ -456,6 +456,9 @@ export async function startServer(params: {
       try {
         const result = await conversationManager.submitPrompt(req.params.id, text, {
           senderName: user.username,
+          clientMessageId: typeof req.body?.clientMessageId === 'string' && req.body.clientMessageId.trim()
+            ? req.body.clientMessageId.trim()
+            : undefined,
         });
         return result;
       } catch (error: any) {
@@ -687,6 +690,30 @@ export async function startServer(params: {
       const updated = conversationManager.updateChannel(req.params.id, req.body ?? {});
       if (!updated) { reply.code(404); return { error: 'Not found' }; }
       return updated;
+    },
+  );
+
+  app.post<{ Params: { id: string; agentId: string } }>(
+    '/api/channels/:id/agents/:agentId',
+    async (req, reply) => {
+      if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const agent = conversationManager.getAgent(req.params.agentId);
+      if (!agent) { reply.code(404); return { error: 'Agent not found' }; }
+      conversationManager.joinChannel(req.params.agentId, req.params.id);
+      return conversationManager.getChannel(req.params.id);
+    },
+  );
+
+  app.delete<{ Params: { id: string; agentId: string } }>(
+    '/api/channels/:id/agents/:agentId',
+    async (req, reply) => {
+      if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      conversationManager.leaveChannel(req.params.agentId, req.params.id);
+      return conversationManager.getChannel(req.params.id);
     },
   );
 

@@ -572,14 +572,19 @@ describe('ConversationManager', () => {
       manager.joinChannel(agent.agentId, chanB.channelId);
       expect(manager.getAgent(agent.agentId)?.channelIds.sort()).toEqual([chanA.channelId, chanB.channelId].sort());
       expect(manager.listAgents(chanB.channelId).map((item) => item.agentId)).toContain(agent.agentId);
+      expect(manager.getChannel(chanB.channelId)?.members?.map((item) => item.agentId)).toContain(agent.agentId);
 
       manager.leaveChannel(agent.agentId, chanA.channelId);
       expect(manager.getAgent(agent.agentId)?.channelIds).toEqual([chanB.channelId]);
+      expect(manager.getAgent(agent.agentId)?.channelId).toBe(chanB.channelId);
       expect(manager.listAgents(chanA.channelId).map((item) => item.agentId)).not.toContain(agent.agentId);
+      expect(manager.getChannel(chanA.channelId)?.members?.map((item) => item.agentId)).not.toContain(agent.agentId);
 
       manager.leaveChannel(agent.agentId, chanB.channelId);
       expect(manager.getAgent(agent.agentId)?.channelIds).toEqual([]);
+      expect(manager.getAgent(agent.agentId)?.channelId).toBe('default');
       expect(manager.listAgents(chanB.channelId).map((item) => item.agentId)).not.toContain(agent.agentId);
+      expect(manager.getChannel(chanB.channelId)?.members).toEqual([]);
     });
 
     it('createChannel 应保留 description', () => {

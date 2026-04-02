@@ -82,6 +82,26 @@
   - 目标：仅当节点的 ACP session 确实丢失时才构建 replay
   - 路径：同上；或在 `RunDispatchMsg` 协议中增加 `contextNeeded` 标志，让节点先告知 core 是否需要 context
 
+- [ ] **auto compact 后缺少 resume 轻量上下文补发**
+  - 现状：Codex / Claude Code 在长会话里会做内部 compact，但 Agent Collab 对该步骤基本无感；当前 `contextText` 只在 `isFreshSession=true` 时注入，同一 ACP session 内 compact 后不会自动补发最近上下文
+  - 风险：runtime 虽能继续同一 session，但更容易丢掉较早轮次里的 thread/task/participants/recent messages 等运行态细节
+  - 目标：在 `resume` 路径按需补发一层轻量上下文，而不是只在 cold start 注入整份 `contextText`
+  - 建议内容：当前 `reply_target/target`、最近 3-5 条消息、thread root、bound task、participants、unread summary
+  - 路径：`apps/core/src/execution/executionDispatcher.ts` + `packages/runtime-acp/src/gateway/bindingRuntime.ts`
+
+- [ ] **将关键协作状态从 prompt 临时上下文提升为持久 memory**
+  - 现状：channel/thread 的大量关键事实只存在于 activation context 或 runtime 当前上下文中，未必会写进 `MEMORY.md` / `notes/*.md`
+  - 风险：一旦 runtime 内部 compact，或 session 真正重建，这些临时事实容易丢失，只能依赖模型内部摘要保住
+  - 目标：把对长期协作有价值的信息结构化写回 workspace memory，降低对 runtime in-context continuity 的依赖
+  - 建议落盘：`MEMORY.md` 的 Active Context、`notes/channels.md`、`notes/tasks.md`、`notes/work-log.md`
+  - 路径：`packages/memory/src/systemPrompt.ts`、memory note 写入路径，以及后续 agent 行为约束
+
+- [ ] **compact 后的自恢复策略需要更明确**
+  - 现状：当前 prompt 只建议“需要更多上下文时调用 `read_history`”，但没有把 compact 后的恢复流程当成默认工作流
+  - 目标：把“先确认 target / 必要时读 history / 长任务先看 MEMORY.md”升级为更强的默认约束，减少 compact 后的隐性失忆
+  - 建议：对 channel/thread 更明确要求优先 `read_history(channel="<exact target>")`；对长任务和恢复场景更明确要求检查 `MEMORY.md`
+  - 路径：`packages/memory/src/systemPrompt.ts`、`apps/core/src/web/channelActivationPrompt.ts`、`apps/core/src/web/directActivationPrompt.ts`
+
 ---
 
 ## P3 — 体验优化

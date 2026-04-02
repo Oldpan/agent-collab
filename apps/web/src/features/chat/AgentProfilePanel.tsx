@@ -17,6 +17,7 @@ export function AgentProfilePanel({ agent }: AgentProfilePanelProps) {
   }
 
   const envKeys = Object.keys(agent.envVars ?? {}).sort((a, b) => a.localeCompare(b));
+  const memberships = [...(agent.channelIds ?? [])].sort((a, b) => a.localeCompare(b));
   const disabledToolKinds = [...(agent.disabledToolKinds ?? [])].sort((a, b) => a.localeCompare(b));
   const skillRoots = [...(agent.skillRoots ?? [])].sort((a, b) => a.localeCompare(b));
   const memoryPath = agent.workspacePath ? `${agent.workspacePath}/MEMORY.md` : null;
@@ -40,7 +41,7 @@ export function AgentProfilePanel({ agent }: AgentProfilePanelProps) {
             value={agent.agentType === "claude_acp" ? "Claude Code" : "Codex"}
           />
           <InfoRow label="Agent ID" value={agent.agentId} mono />
-          <InfoRow label="Channel" value={agent.channelId} mono />
+          <InfoRow label="Channels" value={memberships.length > 0 ? memberships.join("\n") : "No channel memberships"} mono />
         </ProfileSection>
 
         <ProfileSection title="Runtime Host">

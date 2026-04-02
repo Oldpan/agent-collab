@@ -240,6 +240,29 @@ describe('ExecutionDispatcher', () => {
     expect(checkpointRow?.lastSeq).toBe(msgRow?.seq);
   });
 
+  it('私聊用户消息应保留前端传入的 clientMessageId，避免当前页重复气泡', async () => {
+    const agent = manager.createAgent({
+      name: 'Stable Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/stable-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    await manager.submitPrompt(conv.id, '你好', {
+      senderName: 'oldpan',
+      clientMessageId: 'client-msg-1',
+    });
+
+    const row = db.prepare(
+      'SELECT message_id as messageId, content FROM channel_messages WHERE channel_id = ? ORDER BY seq DESC LIMIT 1'
+    ).get(`dm:${agent.agentId}`) as { messageId: string; content: string } | undefined;
+
+    expect(row?.messageId).toBe('client-msg-1');
+    expect(row?.content).toBe('你好');
+  });
+
   it('cancelConversationRun 应发送 run.cancel 到节点', () => {
     const conv = manager.createConversation({
       title: 'Cancel Test',

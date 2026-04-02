@@ -200,12 +200,43 @@ beforeAll(async () => {
         if (manager.getAgent(agentId)) manager.joinChannel(agentId, channel.channelId);
       }
       reply.code(201);
-      return channel;
+      return manager.getChannel(channel.channelId) ?? channel;
     } catch {
       reply.code(409);
       return { error: 'Channel name already exists' };
     }
   });
+
+  app.post<{ Params: { id: string; agentId: string } }>(
+    '/api/channels/:id/agents/:agentId',
+    async (req, reply) => {
+      const channel = manager.getChannel(req.params.id);
+      if (!channel) {
+        reply.code(404);
+        return { error: 'Channel not found' };
+      }
+      const agent = manager.getAgent(req.params.agentId);
+      if (!agent) {
+        reply.code(404);
+        return { error: 'Agent not found' };
+      }
+      manager.joinChannel(req.params.agentId, req.params.id);
+      return manager.getChannel(req.params.id);
+    },
+  );
+
+  app.delete<{ Params: { id: string; agentId: string } }>(
+    '/api/channels/:id/agents/:agentId',
+    async (req, reply) => {
+      const channel = manager.getChannel(req.params.id);
+      if (!channel) {
+        reply.code(404);
+        return { error: 'Channel not found' };
+      }
+      manager.leaveChannel(req.params.agentId, req.params.id);
+      return manager.getChannel(req.params.id);
+    },
+  );
 
   app.post<{ Params: { id: string } }>('/api/channels/:id/clear-chat', async (req, reply) => {
     const channel = manager.getChannel(req.params.id);
@@ -893,11 +924,36 @@ describe('REST API', () => {
 
     expect(status).toBe(201);
     expect(body.description).toBe('Engineering channel');
+    expect(body.members.map((item: { agentId: string }) => item.agentId).sort()).toEqual([a1.agentId, a2.agentId].sort());
 
     const bob = manager.getAgent(a1.agentId);
     const tab = manager.getAgent(a2.agentId);
     expect(bob?.channelIds).toContain(body.channelId);
     expect(tab?.channelIds).toContain(body.channelId);
+  });
+
+  it('POST/DELETE /api/channels/:id/agents/:agentId 应以 channel 为中心管理成员', async () => {
+    const channel = manager.createChannel({ name: 'membership-room' });
+    const agent = manager.createAgent({
+      name: 'JoinMe',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/join-me',
+    });
+
+    const joined = await fetchJson(`/api/channels/${channel.channelId}/agents/${agent.agentId}`, {
+      method: 'POST',
+    });
+    expect(joined.status).toBe(200);
+    expect(joined.body.members.map((item: { agentId: string }) => item.agentId)).toContain(agent.agentId);
+    expect(manager.getAgent(agent.agentId)?.channelIds).toContain(channel.channelId);
+
+    const left = await fetchJson(`/api/channels/${channel.channelId}/agents/${agent.agentId}`, {
+      method: 'DELETE',
+    });
+    expect(left.status).toBe(200);
+    expect(left.body.members.map((item: { agentId: string }) => item.agentId)).not.toContain(agent.agentId);
+    expect(manager.getAgent(agent.agentId)?.channelIds).not.toContain(channel.channelId);
   });
 
   it('POST /api/channels/:id/clear-chat 应清空 channel 消息并重置 branch 历史，但保留 tasks', async () => {

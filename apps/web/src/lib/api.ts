@@ -50,11 +50,11 @@ export async function deleteConversation(id: string): Promise<void> {
   if (!res.ok) throw new Error(`Failed to delete conversation: ${res.statusText}`);
 }
 
-export async function sendConversationPrompt(id: string, text: string): Promise<{ queued: boolean }> {
+export async function sendConversationPrompt(id: string, text: string, clientMessageId?: string): Promise<{ queued: boolean }> {
   const res = await fetch(`${API_BASE}/conversations/${id}/prompt`, {
     method: "POST",
     headers: withAuthHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ text }),
+    body: JSON.stringify({ text, clientMessageId }),
   });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { error?: string };
@@ -201,6 +201,24 @@ export async function unsubscribeChannelAgent(channelId: string, agentId: string
     headers: withAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to unsubscribe agent: ${res.statusText}`);
+  return res.json();
+}
+
+export async function addAgentToChannel(channelId: string, agentId: string): Promise<ChannelInfo> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/agents/${encodeURIComponent(agentId)}`, {
+    method: "POST",
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to add agent to channel: ${res.statusText}`);
+  return res.json();
+}
+
+export async function removeAgentFromChannel(channelId: string, agentId: string): Promise<ChannelInfo> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/agents/${encodeURIComponent(agentId)}`, {
+    method: "DELETE",
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to remove agent from channel: ${res.statusText}`);
   return res.json();
 }
 

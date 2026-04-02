@@ -1,4 +1,4 @@
-import { useState, useCallback } from "react";
+import { useState, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import { RefreshCwIcon, MessageSquareOffIcon, Trash2Icon, SaveIcon } from "lucide-react";
 import type { AgentInfo, UpdateAgentRequest } from "@agent-collab/protocol";
@@ -7,7 +7,6 @@ import { AgentEnvVarsKeyValueEditor } from "@/features/sidebar/AgentEnvVarsKeyVa
 import { AgentPermissionSettings } from "@/features/sidebar/AgentPermissionSettings";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { useChannels } from "@/hooks/useChannels";
-import { joinAgentChannel, leaveAgentChannel } from "@/lib/api";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
 type Props = {
@@ -22,14 +21,18 @@ type Props = {
 export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart, onClearChat, onReset }: Props) {
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
-  const [joinedChannelIds, setJoinedChannelIds] = useState<Set<string>>(
-    new Set(agent.channelIds && agent.channelIds.length > 0 ? agent.channelIds : [agent.channelId]),
-  );
   const [envVars, setEnvVars] = useState<Record<string, string> | undefined>(agent.envVars);
   const [disabledToolKinds, setDisabledToolKinds] = useState(agent.disabledToolKinds);
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
   const { channels } = useChannels();
+  const memberChannels = useMemo(
+    () => channels.filter((channel) =>
+      channel.members?.some((member) => member.agentId === agent.agentId)
+      ?? (agent.channelIds?.includes(channel.channelId) ?? false),
+    ),
+    [agent.agentId, agent.channelIds, channels],
+  );
 
   // Dialog states
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -54,26 +57,11 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
   const handleSave = useCallback(async () => {
     setSaving(true);
     try {
-      const prevIds = new Set(agent.channelIds && agent.channelIds.length > 0 ? agent.channelIds : [agent.channelId]);
-      const toJoin = [...joinedChannelIds].filter((id) => !prevIds.has(id));
-      const toLeave = [...prevIds].filter((id) => !joinedChannelIds.has(id));
-      await Promise.all([
-        onUpdate({ name, description: description.trim() || undefined, envVars, disabledToolKinds }),
-        ...toJoin.map((id) => joinAgentChannel(agent.agentId, id)),
-        ...toLeave.map((id) => leaveAgentChannel(agent.agentId, id)),
-      ]);
+      await onUpdate({ name, description: description.trim() || undefined, envVars, disabledToolKinds });
     } finally {
       setSaving(false);
     }
-  }, [agent.agentId, agent.channelId, agent.channelIds, description, disabledToolKinds, envVars, joinedChannelIds, name, onUpdate]);
-
-  const toggleChannel = useCallback((id: string) => {
-    setJoinedChannelIds((prev) => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  }, []);
+  }, [description, disabledToolKinds, envVars, name, onUpdate]);
 
   const handleRestart = useCallback(async () => {
     openDialog({
@@ -139,6 +127,23 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
         <div className="space-y-4 px-4 py-4">
           <section className="rounded-sm border-2 border-zinc-900 bg-[#fff8d8] px-3 py-3 text-sm text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
             Agent settings are read-only for non-admin users. You can chat with this agent, but only admins can change its configuration or lifecycle.
+          </section>
+          <section className="rounded-sm border-2 border-zinc-900 bg-[#fff8d8] px-3 py-2 text-xs text-zinc-600">
+            <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Member Of</div>
+            {memberChannels.length > 0 ? (
+              <div className="mt-2 flex flex-wrap gap-1.5">
+                {memberChannels.map((channel) => (
+                  <span
+                    key={channel.channelId}
+                    className="rounded-full border border-zinc-300 bg-white px-2 py-0.5 text-[11px] text-zinc-700"
+                  >
+                    #{channel.name}
+                  </span>
+                ))}
+              </div>
+            ) : (
+              <div className="mt-1 text-xs text-zinc-500">No channel memberships.</div>
+            )}
           </section>
           {workspaceMemoryPath && (
             <section className="rounded-sm border-2 border-zinc-900 bg-[#fff8d8] px-3 py-2 text-xs text-zinc-600">
@@ -225,31 +230,25 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
               />
             </div>
 
-            {/* Channel membership */}
-            {channels.length > 0 && (
-              <div className="space-y-1">
-                <label className="text-xs text-zinc-600">Channels</label>
-                <div className="max-h-32 overflow-y-auto rounded-sm border-2 border-zinc-900 bg-white p-1.5">
-                  {channels.map((c) => {
-                    const isJoined = joinedChannelIds.has(c.channelId);
-                    return (
-                      <label
-                        key={c.channelId}
-                        className="flex items-center gap-2 px-1.5 py-1 text-sm cursor-pointer rounded hover:bg-zinc-50"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={isJoined}
-                          onChange={() => toggleChannel(c.channelId)}
-                          className="size-3.5 shrink-0"
-                        />
-                        <span className="truncate">#{c.name}</span>
-                      </label>
-                    );
-                  })}
+            <div className="space-y-1">
+              <label className="text-xs text-zinc-600">Member Of</label>
+              {memberChannels.length > 0 ? (
+                <div className="flex flex-wrap gap-1.5 rounded-sm border-2 border-zinc-900 bg-white px-2 py-2">
+                  {memberChannels.map((channel) => (
+                    <span
+                      key={channel.channelId}
+                      className="rounded-full border border-zinc-300 bg-zinc-50 px-2 py-0.5 text-[11px] text-zinc-700"
+                    >
+                      #{channel.name}
+                    </span>
+                  ))}
                 </div>
-              </div>
-            )}
+              ) : (
+                <div className="rounded-sm border-2 border-dashed border-zinc-900/30 bg-white/60 px-3 py-2 text-xs text-zinc-500">
+                  No channel memberships. Manage memberships from a channel panel.
+                </div>
+              )}
+            </div>
 
             {/* Workspace local memory path (read-only info) */}
             {workspaceMemoryPath && (

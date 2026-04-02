@@ -28,6 +28,7 @@ export function createTestDb(): Db {
       prompt_text      TEXT NOT NULL,
       record_as_user_message INTEGER NOT NULL DEFAULT 1,
       activation_context_text TEXT,
+      client_message_id TEXT,
       created_at       INTEGER NOT NULL,
       updated_at       INTEGER NOT NULL
     );
@@ -38,6 +39,9 @@ export function createTestDb(): Db {
   }
   if (!queueCols.some((col) => col.name === 'activation_context_text')) {
     db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN activation_context_text TEXT;`);
+  }
+  if (!queueCols.some((col) => col.name === 'client_message_id')) {
+    db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN client_message_id TEXT;`);
   }
   const channelCols = db.prepare("PRAGMA table_info('channels')").all() as Array<{ name: string }>;
   if (!channelCols.some((col) => col.name === 'collaboration_mode')) {
@@ -106,7 +110,7 @@ export function createTestDb(): Db {
       next_seq   INTEGER NOT NULL
     );
   `);
-  db.exec(`UPDATE schema_version SET version = MAX(version, 43);`);
+  db.exec(`UPDATE schema_version SET version = MAX(version, 45);`);
   return db;
 }
 

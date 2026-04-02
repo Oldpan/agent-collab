@@ -28,6 +28,13 @@ type PendingDispatchAcceptance = {
   timer: NodeJS.Timeout;
 };
 
+type PromptSubmitOptions = {
+  recordAsUserMessage?: boolean;
+  activationContextText?: string;
+  senderName?: string;
+  clientMessageId?: string;
+};
+
 export class ExecutionDispatcher {
   private readonly db: Db;
   private readonly config: AppConfig;
@@ -50,7 +57,7 @@ export class ExecutionDispatcher {
   async dispatchPrompt(
     conversationId: string,
     promptText: string,
-    options?: { recordAsUserMessage?: boolean; activationContextText?: string; senderName?: string },
+    options?: PromptSubmitOptions,
   ): Promise<{ runId: string; dispatchMode: RuntimeDispatchMode; hostKey: string }> {
     const row = this.db.prepare(
       `SELECT session_key as sessionKey, agent_type as agentType,
@@ -122,7 +129,7 @@ export class ExecutionDispatcher {
           this.db.prepare(
             `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
              VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?)`,
-          ).run(randomUUID(), dmChannelId, humanUserName, dmReplyTarget, promptText, msgSeq, Date.now());
+          ).run(options?.clientMessageId ?? randomUUID(), dmChannelId, humanUserName, dmReplyTarget, promptText, msgSeq, Date.now());
 
           // Checkpoint will be bumped after confirmed delivery to avoid silent message
           // loss if the node is offline or the send fails.
@@ -227,7 +234,7 @@ export class ExecutionDispatcher {
   async submitPrompt(
     conversationId: string,
     promptText: string,
-    options?: { recordAsUserMessage?: boolean; activationContextText?: string; senderName?: string },
+    options?: PromptSubmitOptions,
   ): Promise<{ queued: boolean; runId?: string }> {
     const row = this.db.prepare(
       `SELECT agent_id as agentId
@@ -315,7 +322,8 @@ export class ExecutionDispatcher {
     const next = this.db.prepare(
       `SELECT queue_id as queueId, agent_id as agentId, conversation_id as conversationId,
               prompt_text as promptText, record_as_user_message as recordAsUserMessage,
-              activation_context_text as activationContextText, sender_name as senderName
+              activation_context_text as activationContextText, sender_name as senderName,
+              client_message_id as clientMessageId
        FROM conversation_prompt_queue
        WHERE conversation_id = ?
        ORDER BY created_at ASC, queue_id ASC
@@ -328,6 +336,7 @@ export class ExecutionDispatcher {
       recordAsUserMessage: number;
       activationContextText: string | null;
       senderName: string | null;
+      clientMessageId: string | null;
     } | undefined;
 
     if (!next) return;
@@ -338,6 +347,7 @@ export class ExecutionDispatcher {
         recordAsUserMessage: next.recordAsUserMessage !== 0,
         activationContextText: next.activationContextText ?? undefined,
         senderName: next.senderName ?? undefined,
+        clientMessageId: next.clientMessageId ?? undefined,
       });
     } catch {
       this.updateStatus(next.conversationId, 'failed');
@@ -490,14 +500,14 @@ export class ExecutionDispatcher {
     agentId: string,
     conversationId: string,
     promptText: string,
-    options?: { recordAsUserMessage?: boolean; activationContextText?: string; senderName?: string },
+    options?: PromptSubmitOptions,
   ): void {
     const now = Date.now();
     this.db.prepare(
       `INSERT INTO conversation_prompt_queue(
-         agent_id, conversation_id, prompt_text, record_as_user_message, activation_context_text, sender_name, created_at, updated_at
+         agent_id, conversation_id, prompt_text, record_as_user_message, activation_context_text, sender_name, client_message_id, created_at, updated_at
        )
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       agentId,
       conversationId,
@@ -505,6 +515,7 @@ export class ExecutionDispatcher {
       (options?.recordAsUserMessage ?? true) ? 1 : 0,
       options?.activationContextText?.trim() || null,
       options?.senderName ?? null,
+      options?.clientMessageId ?? null,
       now,
       now,
     );

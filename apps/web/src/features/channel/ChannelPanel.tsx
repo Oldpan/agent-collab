@@ -4,7 +4,7 @@ import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquare
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ChannelInfo, AgentInfo } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
-import { clearChannelChat, subscribeChannelAgent, unsubscribeChannelAgent, updateChannel, claimMessageAsTask, uploadAttachment } from "@/lib/api";
+import { addAgentToChannel, clearChannelChat, removeAgentFromChannel, subscribeChannelAgent, unsubscribeChannelAgent, updateChannel, claimMessageAsTask, uploadAttachment } from "@/lib/api";
 import { useChannelStream, type ChannelNotice } from "@/hooks/useChannelStream";
 import { ThreadPanel } from "./ThreadPanel";
 import { Streamdown } from "streamdown";
@@ -20,12 +20,21 @@ import { ChatAvatar } from "@/features/chat/ChatAvatar";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { MessageSourceBadge } from "@/components/MessageSourceBadge";
 
+type ChannelPanelInfo = ChannelInfo & {
+  members?: Array<{
+    agentId: string;
+    name: string;
+  }>;
+};
+
 type ChannelPanelProps = {
-  channel: ChannelInfo;
+  channel: ChannelPanelInfo;
   agents: AgentInfo[];
+  isAdmin?: boolean;
+  onAgentsUpdated?: () => Promise<AgentInfo[]> | void;
   onOpenSidebar?: () => void;
   onSeenSeq?: (seq: number) => void;
-  onChannelUpdated?: (channel: ChannelInfo) => void;
+  onChannelUpdated?: (channel: ChannelPanelInfo) => void;
 };
 
 const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -614,19 +623,27 @@ function MembersTab({ members }: { members: AgentInfo[] }) {
 function SettingsTab({
   channel,
   members,
+  allAgents,
+  isAdmin = false,
+  onAgentsUpdated,
   onClearChat,
   onChannelUpdated,
 }: {
-  channel: ChannelInfo;
+  channel: ChannelPanelInfo;
   members: AgentInfo[];
+  allAgents: AgentInfo[];
+  isAdmin?: boolean;
+  onAgentsUpdated?: () => Promise<AgentInfo[]> | void;
   onClearChat: () => Promise<void>;
-  onChannelUpdated?: (channel: ChannelInfo) => void;
+  onChannelUpdated?: (channel: ChannelPanelInfo) => void;
 }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [submittingAgentId, setSubmittingAgentId] = useState<string | null>(null);
+  const [membershipAgentId, setMembershipAgentId] = useState<string | null>(null);
   const [updatingMode, setUpdatingMode] = useState(false);
+  const [membershipError, setMembershipError] = useState<string | null>(null);
   const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
   const [modeError, setModeError] = useState<string | null>(null);
 
@@ -634,7 +651,10 @@ function SettingsTab({
     () => new Set((channel.subscribedAgents ?? []).map((agent) => agent.agentId)),
     [channel.subscribedAgents],
   );
-
+  const memberAgentIds = useMemo(
+    () => new Set(members.map((agent) => agent.agentId)),
+    [members],
+  );
   const handleConfirm = useCallback(async () => {
     setClearing(true);
     try {
@@ -661,7 +681,23 @@ function SettingsTab({
     }
   }, [channel.channelId, onChannelUpdated]);
 
-  const handleModeChange = useCallback(async (mode: ChannelInfo["collaborationMode"]) => {
+  const handleMembershipToggle = useCallback(async (agentId: string, join: boolean) => {
+    setMembershipAgentId(agentId);
+    setMembershipError(null);
+    try {
+      const next = join
+        ? await addAgentToChannel(channel.channelId, agentId)
+        : await removeAgentFromChannel(channel.channelId, agentId);
+      onChannelUpdated?.(next);
+      await onAgentsUpdated?.();
+    } catch (err) {
+      setMembershipError(String((err as Error)?.message ?? err));
+    } finally {
+      setMembershipAgentId(null);
+    }
+  }, [channel.channelId, onAgentsUpdated, onChannelUpdated]);
+
+  const handleModeChange = useCallback(async (mode: ChannelPanelInfo["collaborationMode"]) => {
     if (mode === channel.collaborationMode) return;
     setUpdatingMode(true);
     setModeError(null);
@@ -700,7 +736,7 @@ function SettingsTab({
               <div className="mt-2 grid grid-cols-2 gap-2">
                 <Button
                   type="button"
-                  disabled={updatingMode}
+                  disabled={updatingMode || !isAdmin}
                   onClick={() => void handleModeChange("mention_only")}
                   className={cn(
                     "h-auto min-h-16 flex-col items-start rounded-sm border-2 border-zinc-900 px-3 py-2 text-left shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
@@ -716,7 +752,7 @@ function SettingsTab({
                 </Button>
                 <Button
                   type="button"
-                  disabled={updatingMode}
+                  disabled={updatingMode || !isAdmin}
                   onClick={() => void handleModeChange("subscribed_agents")}
                   className={cn(
                     "h-auto min-h-16 flex-col items-start rounded-sm border-2 border-zinc-900 px-3 py-2 text-left shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
@@ -732,7 +768,9 @@ function SettingsTab({
                 </Button>
               </div>
               <div className="mt-2 text-xs text-zinc-500">
-                {updatingMode
+                {!isAdmin
+                  ? "Channel settings are read-only for non-admin users."
+                  : updatingMode
                   ? "Saving collaboration mode..."
                   : channel.collaborationMode === "subscribed_agents"
                     ? "This channel can passively wake subscribed agents on non-thread top-level messages."
@@ -745,6 +783,73 @@ function SettingsTab({
               ) : null}
             </div>
             <div className="mt-3">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Members</div>
+              {members.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {members.map((agent) => (
+                    <span
+                      key={agent.agentId}
+                      className="rounded-full border border-zinc-300 bg-white px-2 py-0.5 text-[11px] text-zinc-700"
+                    >
+                      @{agent.name}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-2 text-xs text-zinc-500">No channel members yet.</div>
+              )}
+            </div>
+            <div className="mt-4 border-t border-zinc-900/10 pt-3">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Manage members</div>
+              {isAdmin ? (
+                <div className="mt-2 space-y-2">
+                  {allAgents.length > 0 ? (
+                    allAgents.map((agent) => {
+                      const joined = memberAgentIds.has(agent.agentId);
+                      const pending = membershipAgentId === agent.agentId;
+                      return (
+                        <div
+                          key={agent.agentId}
+                          className="flex items-center justify-between gap-3 rounded-sm border border-zinc-900/10 bg-white/70 px-3 py-2"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-sm font-medium text-zinc-900">@{agent.name}</div>
+                            <div className="text-[11px] text-zinc-500">
+                              {joined ? "Member of this channel" : "Not in this channel"}
+                            </div>
+                          </div>
+                          <Button
+                            size="sm"
+                            disabled={pending}
+                            onClick={() => void handleMembershipToggle(agent.agentId, !joined)}
+                            className={cn(
+                              "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+                              joined
+                                ? "bg-[#fff0d0] text-zinc-950 hover:bg-[#ffe4b0]"
+                                : "bg-[#d8f8c8] text-zinc-950 hover:bg-[#c8efb8]",
+                            )}
+                          >
+                            {pending ? "Saving..." : joined ? "Remove" : "Add"}
+                          </Button>
+                        </div>
+                      );
+                    })
+                  ) : (
+                    <div className="text-xs text-zinc-500">No agents available.</div>
+                  )}
+                </div>
+              ) : (
+                <div className="mt-2 rounded-sm border border-zinc-900/10 bg-white/60 px-3 py-2 text-xs text-zinc-500">
+                  Channel membership is managed by admins from this panel.
+                </div>
+              )}
+              {membershipError ? (
+                <div className="mt-2 rounded-sm border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700">
+                  {membershipError}
+                </div>
+              ) : null}
+            </div>
+            <div className="mt-4 border-t border-zinc-900/10 pt-3">
               <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Subscribed agents</div>
               {channel.subscribedAgents && channel.subscribedAgents.length > 0 ? (
                 <div className="mt-2 flex flex-wrap gap-1.5">
@@ -782,7 +887,7 @@ function SettingsTab({
                           </div>
                           <Button
                             size="sm"
-                            disabled={pending}
+                            disabled={pending || !isAdmin}
                             onClick={() => void handleSubscriptionToggle(agent.agentId, !subscribed)}
                             className={cn(
                               "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
@@ -829,7 +934,7 @@ function SettingsTab({
               size="sm"
               className="mt-3 rounded-sm border-2 border-zinc-900 bg-[#ffd8d8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#ffc6c6]"
               onClick={() => setDialogOpen(true)}
-              disabled={clearing}
+              disabled={clearing || !isAdmin}
             >
               <MessageSquareOffIcon className="mr-1.5 size-3.5" />
               Clear chat history
@@ -854,16 +959,22 @@ function SettingsTab({
   );
 }
 
-export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq, onChannelUpdated }: ChannelPanelProps) {
+export function ChannelPanel({ channel, agents, isAdmin = false, onAgentsUpdated, onOpenSidebar, onSeenSeq, onChannelUpdated }: ChannelPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "members" | "settings">("chat");
   const { messages, notices, sendMessage, loadMore, hasMore, resetVersion } = useChannelStream({
     channelId: channel.channelId,
     onSeenSeq,
   });
   const scrollRef = useRef<HTMLDivElement>(null);
+  const channelMemberIds = useMemo(
+    () => new Set((channel.members ?? []).map((member) => member.agentId)),
+    [channel.members],
+  );
   const channelMembers = useMemo(
-    () => agents.filter((a) => a.channelIds?.includes(channel.channelId) ?? false),
-    [agents, channel.channelId],
+    () => channelMemberIds.size > 0
+      ? agents.filter((agent) => channelMemberIds.has(agent.agentId))
+      : agents.filter((agent) => agent.channelIds?.includes(channel.channelId) ?? false),
+    [agents, channel.channelId, channelMemberIds],
   );
   const [openThread, setOpenThread] = useState<ChannelMessage | null>(null);
   // Local task overrides: messageId → partial fields added after claim-message
@@ -1054,6 +1165,9 @@ export function ChannelPanel({ channel, agents, onOpenSidebar, onSeenSeq, onChan
         <SettingsTab
           channel={channel}
           members={channelMembers}
+          allAgents={agents}
+          isAdmin={isAdmin}
+          onAgentsUpdated={onAgentsUpdated}
           onClearChat={handleClearChat}
           onChannelUpdated={onChannelUpdated}
         />

@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 44;
+const LATEST_VERSION = 45;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -815,5 +815,13 @@ export function migrate(db: Db): void {
       db.exec(`ALTER TABLE channel_messages ADD COLUMN attachment_ids TEXT;`);
     }
     db.exec(`UPDATE schema_version SET version = 44;`);
+  }
+
+  if (current < 45) {
+    const queueCols = db.prepare("PRAGMA table_info('conversation_prompt_queue')").all() as Array<{ name: string }>;
+    if (!queueCols.some((c) => c.name === 'client_message_id')) {
+      db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN client_message_id TEXT;`);
+    }
+    db.exec(`UPDATE schema_version SET version = 45;`);
   }
 }

@@ -30,16 +30,21 @@ const useAgentsStore = create<AgentsState>((set) => ({
 export function useAgents() {
   const store = useAgentsStore();
 
-  useEffect(() => {
-    let cancelled = false;
+  const refreshAgents = useCallback(async () => {
     store.setLoading(true);
-    api
-      .listAgents()
-      .then((agents) => { if (!cancelled) { store.setAgents(agents); store.setLoading(false); } })
-      .catch(() => { if (!cancelled) store.setLoading(false); });
-    return () => { cancelled = true; };
+    try {
+      const agents = await api.listAgents();
+      store.setAgents(agents);
+      return agents;
+    } finally {
+      store.setLoading(false);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    void refreshAgents();
+  }, [refreshAgents]);
 
   const createAgent = useCallback(async (req: CreateAgentRequest) => {
     const agent = await api.createAgent(req);
@@ -67,5 +72,6 @@ export function useAgents() {
     createAgent,
     updateAgent,
     deleteAgent,
+    refreshAgents,
   };
 }

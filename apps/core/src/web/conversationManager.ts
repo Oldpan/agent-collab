@@ -683,7 +683,7 @@ export class ConversationManager {
   async submitPrompt(
     conversationId: string,
     promptText: string,
-    options?: { recordAsUserMessage?: boolean; activationContextText?: string; senderName?: string },
+    options?: { recordAsUserMessage?: boolean; activationContextText?: string; senderName?: string; clientMessageId?: string },
   ): Promise<{ queued: boolean; runId?: string }> {
     return this.executionDispatcher.submitPrompt(conversationId, promptText, options);
   }
@@ -704,18 +704,45 @@ export class ConversationManager {
 
   joinChannel(agentId: string, channelId: string): void {
     const now = Date.now();
+    const membershipCount = this.db.prepare(
+      `SELECT COUNT(*) as count FROM agent_channel_memberships WHERE agent_id = ?`,
+    ).get(agentId) as { count: number };
+    const makeHome = Number(membershipCount?.count ?? 0) === 0;
     this.db.prepare(
       `INSERT OR IGNORE INTO agent_channel_memberships(agent_id, channel_id, is_home, joined_at)
-       VALUES(?, ?, 0, ?)`
-    ).run(agentId, channelId, now);
+       VALUES(?, ?, ?, ?)`
+    ).run(agentId, channelId, makeHome ? 1 : 0, now);
+    if (makeHome) {
+      this.db.prepare(`UPDATE agents SET channel_id = ?, updated_at = ? WHERE agent_id = ?`)
+        .run(channelId, now, agentId);
+    }
     upsertChannelSubscription(this.db, { agentId, channelId, subscribedAt: now, lastActiveAt: now });
   }
 
   leaveChannel(agentId: string, channelId: string): void {
+    const agent = this.getAgent(agentId);
     this.db.prepare(
       `DELETE FROM agent_channel_memberships WHERE agent_id = ? AND channel_id = ?`
     ).run(agentId, channelId);
     deleteChannelSubscription(this.db, channelId, agentId);
+    if (agent?.channelId === channelId) {
+      const nextHome = this.db.prepare(
+        `SELECT channel_id as channelId
+         FROM agent_channel_memberships
+         WHERE agent_id = ?
+         ORDER BY is_home DESC, joined_at ASC
+         LIMIT 1`,
+      ).get(agentId) as { channelId: string } | undefined;
+      const nextChannelId = nextHome?.channelId ?? 'default';
+      this.db.prepare(
+        `UPDATE agents SET channel_id = ?, updated_at = ? WHERE agent_id = ?`,
+      ).run(nextChannelId, Date.now(), agentId);
+      this.db.prepare(
+        `UPDATE agent_channel_memberships
+         SET is_home = CASE WHEN channel_id = ? THEN 1 ELSE 0 END
+         WHERE agent_id = ?`,
+      ).run(nextChannelId, agentId);
+    }
   }
 
   createChannel(params: {
@@ -739,6 +766,7 @@ export class ConversationManager {
       workspacePath: params.workspacePath ?? null,
       description: params.description,
       collaborationMode,
+      members: [],
       subscribedAgents: [],
       createdAt: now,
       updatedAt: now,
@@ -830,6 +858,7 @@ export class ConversationManager {
       .all() as Array<Omit<ChannelInfo, 'subscribedAgents'>>;
     return rows.map((row) => ({
       ...row,
+      members: this.listChannelMembers(row.channelId),
       subscribedAgents: listChannelSubscriptions(this.db, row.channelId).map((item) => ({
         agentId: item.agentId,
         name: item.name,
@@ -849,6 +878,7 @@ export class ConversationManager {
     if (!row) return null;
     return {
       ...row,
+      members: this.listChannelMembers(channelId),
       subscribedAgents: listChannelSubscriptions(this.db, channelId).map((item) => ({
         agentId: item.agentId,
         name: item.name,
@@ -1031,6 +1061,16 @@ export class ConversationManager {
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,
     };
+  }
+
+  private listChannelMembers(channelId: string): Array<{ agentId: string; name: string }> {
+    return this.db.prepare(
+      `SELECT a.agent_id as agentId, a.name
+       FROM agent_channel_memberships m
+       JOIN agents a ON a.agent_id = m.agent_id
+       WHERE m.channel_id = ?
+       ORDER BY a.name COLLATE NOCASE ASC`,
+    ).all(channelId) as Array<{ agentId: string; name: string }>;
   }
 }
 
