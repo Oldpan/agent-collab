@@ -568,6 +568,20 @@ export class ConversationManager {
     this.db.prepare('DELETE FROM conversations WHERE id = ?').run(id);
   }
 
+  private deleteRunStateForSession(sessionKey: string): void {
+    const runIds = this.db.prepare(
+      `SELECT run_id as runId FROM runs WHERE session_key = ?`,
+    ).all(sessionKey) as Array<{ runId: string }>;
+
+    for (const run of runIds) {
+      this.db.prepare('DELETE FROM events WHERE run_id = ?').run(run.runId);
+      this.db.prepare('DELETE FROM run_debug_inputs WHERE run_id = ?').run(run.runId);
+    }
+
+    this.db.prepare('DELETE FROM run_debug_inputs WHERE session_key = ?').run(sessionKey);
+    this.db.prepare('DELETE FROM runs WHERE session_key = ?').run(sessionKey);
+  }
+
   /** Returns hostKeys (conversation:{id}:{agentType}) for all conversations of this agent */
   getAgentHostKeys(agentId: string): Array<{ nodeId: string; hostKey: string }> {
     const rows = this.db.prepare(
@@ -621,14 +635,7 @@ export class ConversationManager {
       ).run(`dm:${row.agentId}`, directTarget, directTargetPrefix);
     }
 
-    const runIds = this.db.prepare(
-      `SELECT run_id as runId FROM runs WHERE session_key = ?`,
-    ).all(row.sessionKey) as Array<{ runId: string }>;
-
-    for (const run of runIds) {
-      this.db.prepare('DELETE FROM events WHERE run_id = ?').run(run.runId);
-    }
-    this.db.prepare('DELETE FROM runs WHERE session_key = ?').run(row.sessionKey);
+    this.deleteRunStateForSession(row.sessionKey);
 
     const newSessionKey = randomUUID();
     const preset = getRuntimeDriver(row.agentType);
@@ -677,12 +684,7 @@ export class ConversationManager {
     this.db.prepare(`DELETE FROM agent_message_checkpoints WHERE agent_id = ?`).run(agentId);
 
     for (const row of rows) {
-      const runIds = this.db.prepare(`SELECT run_id as runId FROM runs WHERE session_key = ?`)
-        .all(row.sessionKey) as Array<{ runId: string }>;
-      for (const run of runIds) {
-        this.db.prepare('DELETE FROM events WHERE run_id = ?').run(run.runId);
-      }
-      this.db.prepare('DELETE FROM runs WHERE session_key = ?').run(row.sessionKey);
+      this.deleteRunStateForSession(row.sessionKey);
 
       const newSessionKey = randomUUID();
       const preset = getRuntimeDriver(row.agentType);
@@ -737,14 +739,7 @@ export class ConversationManager {
     this.db.prepare(`DELETE FROM agent_message_checkpoints WHERE agent_id = ?`).run(agentId);
 
     for (const row of rows) {
-      const runIds = this.db.prepare(
-        `SELECT run_id as runId FROM runs WHERE session_key = ?`,
-      ).all(row.sessionKey) as Array<{ runId: string }>;
-
-      for (const run of runIds) {
-        this.db.prepare('DELETE FROM events WHERE run_id = ?').run(run.runId);
-      }
-      this.db.prepare('DELETE FROM runs WHERE session_key = ?').run(row.sessionKey);
+      this.deleteRunStateForSession(row.sessionKey);
 
       const newSessionKey = randomUUID();
       const preset = getRuntimeDriver(row.agentType);
@@ -908,16 +903,8 @@ export class ConversationManager {
     deleteTargetParticipantsForChannel(this.db, channelId);
 
     for (const row of rows) {
-      const runIds = this.db.prepare(
-        `SELECT run_id as runId FROM runs WHERE session_key = ?`,
-      ).all(row.sessionKey) as Array<{ runId: string }>;
-
       this.db.prepare('DELETE FROM conversation_prompt_queue WHERE conversation_id = ?').run(row.id);
-
-      for (const run of runIds) {
-        this.db.prepare('DELETE FROM events WHERE run_id = ?').run(run.runId);
-      }
-      this.db.prepare('DELETE FROM runs WHERE session_key = ?').run(row.sessionKey);
+      this.deleteRunStateForSession(row.sessionKey);
 
       const newSessionKey = randomUUID();
       const preset = getRuntimeDriver(row.agentType);

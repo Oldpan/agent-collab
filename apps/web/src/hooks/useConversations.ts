@@ -130,6 +130,22 @@ export function useConversations(userId?: string | null) {
   const setError = useConversationsStore((state) => state.setError);
   const checkAndResetUser = useConversationsStore((state) => state.checkAndResetUser);
 
+  const refreshConversations = useCallback(async () => {
+    setLoading(true);
+    try {
+      const next = await api.listConversations();
+      setConversations(next);
+      setError(null);
+      return next;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to list conversations";
+      setError(message);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  }, [setConversations, setError, setLoading]);
+
   // Check for user change and clear selection if needed
   useEffect(() => {
     checkAndResetUser(userId ?? null);
@@ -238,5 +254,7 @@ export function useConversations(userId?: string | null) {
     openAgentChannelSession,
     deleteConversation,
     selectConversation,
+    upsertConversation,
+    refreshConversations,
   };
 }

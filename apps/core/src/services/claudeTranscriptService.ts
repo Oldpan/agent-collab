@@ -264,11 +264,16 @@ function extractClaudeToolUses(content: unknown): Array<{ id: string; name: stri
 }
 
 function parseClaudeTokenUsage(usage: Record<string, unknown>): CodexTokenUsage {
+  const inputTokens = numberValue(usage.input_tokens) ?? numberValue(usage.prompt_tokens);
+  const cachedInputTokens = numberValue(usage.cache_read_input_tokens) ?? numberValue(usage.cached_tokens);
   return {
-    inputTokens: numberValue(usage.input_tokens) ?? numberValue(usage.prompt_tokens),
-    cachedInputTokens: numberValue(usage.cache_read_input_tokens) ?? numberValue(usage.cached_tokens),
+    currentInputTokens: inputTokens,
+    inputTokens,
+    cachedInputTokens,
+    currentCachedInputTokens: cachedInputTokens,
     outputTokens: numberValue(usage.output_tokens),
-    totalTokens: addNumbers(numberValue(usage.input_tokens) ?? numberValue(usage.prompt_tokens), numberValue(usage.output_tokens)),
+    totalTokens: addNumbers(inputTokens, numberValue(usage.output_tokens)),
+    modelContextWindow: 256000,
   };
 }
 

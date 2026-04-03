@@ -285,6 +285,11 @@ describe('ConversationManager', () => {
         'INSERT INTO events(run_id, seq, method, payload_json, created_at) VALUES(?, ?, ?, ?, ?)',
       ).run('run-reset-1', 1, 'node/event', JSON.stringify({ type: 'content.delta', text: 'hi' }), Date.now());
       db.prepare(
+        `INSERT INTO run_debug_inputs(
+           run_id, conversation_id, session_key, dispatch_mode, prompt_text, dispatched_prompt_text, created_at, updated_at
+         ) VALUES(?, ?, ?, 'resume', ?, ?, ?, ?)`,
+      ).run('run-reset-1', conv.id, before.sessionKey, 'remember this', 'remember this', Date.now(), Date.now());
+      db.prepare(
         'INSERT INTO conversation_prompt_queue(agent_id, conversation_id, prompt_text, created_at, updated_at) VALUES(?, ?, ?, ?, ?)',
       ).run(agent.agentId, conv.id, 'queued prompt', Date.now(), Date.now());
 
@@ -309,6 +314,9 @@ describe('ConversationManager', () => {
       const oldEvents = db.prepare(
         'SELECT count(*) as count FROM events WHERE run_id = ?',
       ).get('run-reset-1') as { count: number };
+      const oldDebugInputs = db.prepare(
+        'SELECT count(*) as count FROM run_debug_inputs WHERE run_id = ?',
+      ).get('run-reset-1') as { count: number };
       const queueRows = db.prepare(
         'SELECT count(*) as count FROM conversation_prompt_queue WHERE agent_id = ?',
       ).get(agent.agentId) as { count: number };
@@ -318,6 +326,7 @@ describe('ConversationManager', () => {
 
       expect(oldRuns.count).toBe(0);
       expect(oldEvents.count).toBe(0);
+      expect(oldDebugInputs.count).toBe(0);
       expect(queueRows.count).toBe(0);
       expect(newSession.count).toBe(1);
     });
@@ -373,6 +382,11 @@ describe('ConversationManager', () => {
         'INSERT INTO events(run_id, seq, method, payload_json, created_at) VALUES(?, ?, ?, ?, ?)',
       ).run('run-alice-1', 1, 'node/event', JSON.stringify({ type: 'content.delta', text: 'alice output' }), Date.now());
       db.prepare(
+        `INSERT INTO run_debug_inputs(
+           run_id, conversation_id, session_key, dispatch_mode, prompt_text, dispatched_prompt_text, created_at, updated_at
+         ) VALUES(?, ?, ?, 'resume', ?, ?, ?, ?)`,
+      ).run('run-alice-1', aliceConv.id, aliceBefore.sessionKey, 'remember alice', 'remember alice', Date.now(), Date.now());
+      db.prepare(
         'INSERT INTO conversation_prompt_queue(agent_id, conversation_id, prompt_text, created_at, updated_at) VALUES(?, ?, ?, ?, ?)',
       ).run(agent.agentId, aliceConv.id, 'queued alice', Date.now(), Date.now());
       db.prepare(
@@ -405,6 +419,9 @@ describe('ConversationManager', () => {
       const aliceEvents = db.prepare(
         'SELECT count(*) as count FROM events WHERE run_id = ?',
       ).get('run-alice-1') as { count: number };
+      const aliceDebugInputs = db.prepare(
+        'SELECT count(*) as count FROM run_debug_inputs WHERE run_id = ?',
+      ).get('run-alice-1') as { count: number };
       const aliceQueue = db.prepare(
         'SELECT count(*) as count FROM conversation_prompt_queue WHERE conversation_id = ?',
       ).get(aliceConv.id) as { count: number };
@@ -414,6 +431,7 @@ describe('ConversationManager', () => {
       expect(aliceRuns.count).toBe(0);
       expect(yanzongRuns.count).toBe(1);
       expect(aliceEvents.count).toBe(0);
+      expect(aliceDebugInputs.count).toBe(0);
       expect(aliceQueue.count).toBe(0);
     });
 

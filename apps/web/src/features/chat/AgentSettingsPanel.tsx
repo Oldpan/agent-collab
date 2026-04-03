@@ -28,6 +28,7 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
   const [disabledToolKinds, setDisabledToolKinds] = useState(agent.disabledToolKinds);
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
   const { channels } = useChannels();
   const codexModelOptions = useMemo(() => getCodexModelOptions(model), [model]);
   const codexReasoningOptions = useMemo(() => getCodexReasoningOptions(model, reasoningEffort), [model, reasoningEffort]);
@@ -76,6 +77,7 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
   }, [agent.agentType, description, disabledToolKinds, envVars, model, reasoningEffort, name, onUpdate]);
 
   const handleRestart = useCallback(async () => {
+    setActionError(null);
     openDialog({
       title: "Restart Conversation",
       message: `Restart the current ${agent.name} conversation?\n\nThe current conversation runtime will be restarted. Chat history and workspace files are preserved.`,
@@ -85,15 +87,19 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
         setBusy(true);
         try {
           await onRestart();
+          closeDialog();
+        } catch (error) {
+          setActionError(String((error as Error)?.message ?? error));
+          closeDialog();
         } finally {
           setBusy(false);
-          closeDialog();
         }
       },
     });
   }, [agent.name, onRestart]);
 
   const handleClearChat = useCallback(async () => {
+    setActionError(null);
     openDialog({
       title: "Clear Chat History",
       message: `Clear chat history for the current ${agent.name} conversation?\n\nThis conversation will get a fresh session. Workspace files are preserved.`,
@@ -103,15 +109,19 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
         setBusy(true);
         try {
           await onClearChat();
+          closeDialog();
+        } catch (error) {
+          setActionError(String((error as Error)?.message ?? error));
+          closeDialog();
         } finally {
           setBusy(false);
-          closeDialog();
         }
       },
     });
   }, [agent.name, onClearChat]);
 
   const handleReset = useCallback(async () => {
+    setActionError(null);
     openDialog({
       title: "Full Reset",
       message: `Full reset of ${agent.name}?\n\nThis will clear ALL chat history AND delete all workspace files. This cannot be undone.`,
@@ -121,9 +131,12 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
         setBusy(true);
         try {
           await onReset();
+          closeDialog();
+        } catch (error) {
+          setActionError(String((error as Error)?.message ?? error));
+          closeDialog();
         } finally {
           setBusy(false);
-          closeDialog();
         }
       },
     });
@@ -139,6 +152,11 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
         <div className="space-y-4 px-4 py-4">
           <section className="space-y-3">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Actions</div>
+            {actionError ? (
+              <div className="rounded-sm border-2 border-red-700 bg-[#ffe3e3] px-3 py-2 text-xs text-red-800 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
+                Action failed: {actionError}
+              </div>
+            ) : null}
             <div className="flex gap-2">
               <Button
                 size="sm"
@@ -219,6 +237,11 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
           {/* Action Buttons */}
           <section className="space-y-3">
             <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Actions</div>
+            {actionError ? (
+              <div className="rounded-sm border-2 border-red-700 bg-[#ffe3e3] px-3 py-2 text-xs text-red-800 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
+                Action failed: {actionError}
+              </div>
+            ) : null}
             <div className="flex gap-2">
               <Button
                 size="sm"

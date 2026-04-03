@@ -110,6 +110,20 @@ export async function startServer(params: {
     },
   });
 
+  const getAgentConversationResetState = (agentId: string) =>
+    db.prepare(
+      `SELECT id,
+              session_key as sessionKey,
+              history_reset_at as historyResetAt
+       FROM conversations
+       WHERE agent_id = ?
+       ORDER BY updated_at DESC`,
+    ).all(agentId) as Array<{
+      id: string;
+      sessionKey: string;
+      historyResetAt: number | null;
+    }>;
+
   const app = Fastify({ logger: false });
 
   const broadcastChannelTasksChanged = (channelId: string) => {
@@ -371,14 +385,69 @@ export async function startServer(params: {
       return { error: 'Agent has no workspace configured.' };
     }
 
+    const beforeState = getAgentConversationResetState(req.params.id);
+    log.info('[agent-reset] start', {
+      agentId: req.params.id,
+      nodeId: agent.nodeId,
+      workspacePath: agent.workspacePath,
+      conversations: beforeState,
+    });
+
     try {
       await workspaceBroker.resetWorkspace(agent.nodeId, agent.workspacePath);
+      log.info('[agent-reset] workspace reset succeeded', {
+        agentId: req.params.id,
+        nodeId: agent.nodeId,
+        workspacePath: agent.workspacePath,
+      });
     } catch (error) {
+      log.warn('[agent-reset] workspace reset failed', {
+        agentId: req.params.id,
+        nodeId: agent.nodeId,
+        workspacePath: agent.workspacePath,
+        error: String((error as Error)?.message ?? error),
+      });
       reply.code(409);
       return { error: String((error as Error)?.message ?? error) };
     }
 
-    const conversations = conversationManager.resetAgent(req.params.id);
+    let conversations;
+    try {
+      conversations = conversationManager.resetAgent(req.params.id);
+    } catch (error) {
+      log.warn('[agent-reset] conversation rotation threw', {
+        agentId: req.params.id,
+        error: String((error as Error)?.message ?? error),
+      });
+      reply.code(500);
+      return { error: String((error as Error)?.message ?? error) };
+    }
+    const afterState = getAgentConversationResetState(req.params.id);
+    const failedConversationIds = beforeState
+      .filter((before) => {
+        const after = afterState.find((item) => item.id === before.id);
+        if (!after) return true;
+        return after.sessionKey === before.sessionKey || after.historyResetAt == null;
+      })
+      .map((item) => item.id);
+
+    if (conversations.length === 0 || failedConversationIds.length > 0) {
+      log.warn('[agent-reset] conversation rotation validation failed', {
+        agentId: req.params.id,
+        beforeState,
+        afterState,
+        failedConversationIds,
+      });
+      reply.code(500);
+      return { error: 'Full reset did not rotate conversation history as expected.' };
+    }
+
+    log.info('[agent-reset] conversation rotation succeeded', {
+      agentId: req.params.id,
+      beforeState,
+      afterState,
+    });
+
     for (const conversation of conversations) {
       broadcast(conversation.id, { type: 'history.reset' });
       broadcast(conversation.id, {

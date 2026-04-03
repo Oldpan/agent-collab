@@ -250,6 +250,8 @@ describe('ClaudeTranscriptService', () => {
     expect(result.rollouts[0]?.turns[0]?.inputBlocks).toHaveLength(2);
     expect(result.rollouts[0]?.turns[0]?.functionCalls[0]?.name).toBe('mcp__chat__send_message');
     expect(result.rollouts[0]?.turns[0]?.functionCalls[0]?.output).toContain('Message sent');
+    expect(result.rollouts[0]?.turns[0]?.tokenUsage?.currentInputTokens).toBe(16033);
+    expect(result.rollouts[0]?.turns[0]?.tokenUsage?.modelContextWindow).toBe(256000);
     expect(result.rollouts[0]?.turns[0]?.platformInput?.systemPromptText).toBe('SYSTEM PROMPT');
   });
 });

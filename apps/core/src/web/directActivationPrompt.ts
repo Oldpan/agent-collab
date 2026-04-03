@@ -20,7 +20,7 @@ export function buildDirectActivationPrompt(params: DirectActivationPromptParams
   const lines = [
     `[System: ${params.senderName} sent you a direct message.]`,
     'The triggering message is included below. Do not call check_messages just to retrieve this same message again.',
-    `This execution is bound to reply_target="${replyTarget}". Prefer mcp__chat__send_message(content="...") with no target to reply there.`,
+    'Prefer mcp__chat__send_message(content="...") with no target to reply on this direct conversation.',
     `If you need more context, call read_history(channel="${replyTarget}") for this direct conversation.`,
     '',
     '[Current conversation target]',
@@ -30,7 +30,6 @@ export function buildDirectActivationPrompt(params: DirectActivationPromptParams
 
   lines.push(
     '[Triggered message metadata]',
-    `target: ${replyTarget}`,
     `recipient: @${params.agentName}`,
     `sender: @${params.senderName}`,
     '',

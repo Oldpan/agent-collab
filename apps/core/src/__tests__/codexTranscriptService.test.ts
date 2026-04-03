@@ -220,6 +220,13 @@ describe('CodexTranscriptService', () => {
               reasoning_output_tokens: 5,
               total_tokens: 110,
             },
+            last_token_usage: {
+              input_tokens: 70,
+              cached_input_tokens: 12,
+              output_tokens: 3,
+              reasoning_output_tokens: 1,
+              total_tokens: 73,
+            },
             model_context_window: 258400,
           },
         },
@@ -288,6 +295,8 @@ describe('CodexTranscriptService', () => {
       output: '[{"type":"text","text":"Message sent"}]',
     });
     expect(result.rollouts[0]?.turns[0]?.tokenUsage?.totalTokens).toBe(110);
+    expect(result.rollouts[0]?.turns[0]?.tokenUsage?.currentInputTokens).toBe(70);
+    expect(result.rollouts[0]?.turns[0]?.tokenUsage?.currentCachedInputTokens).toBe(12);
     expect(result.rollouts[0]?.turns[0]?.platformInput).toMatchObject({
       runId: 'run-1',
       source: 'exact_snapshot',
@@ -299,6 +308,134 @@ describe('CodexTranscriptService', () => {
     expect(result.matchMode).toBe('heuristic');
     expect(result.sessionMatchMissed).toBe(false);
     expect(result.unmatchedPlatformInputs).toEqual([]);
+    db.close();
+  });
+
+  it('应在 transcript 缺少 model_context_window 时按模型回填 Codex context window', async () => {
+    const db = createTestDb();
+    const conversation: ConversationInfo = {
+      id: 'conv-1',
+      channelId: 'dm:agent-1',
+      replyTarget: 'dm:@alice',
+      title: 'Alice DM',
+      agentType: 'codex_acp',
+      threadKind: 'direct',
+      isPrimaryThread: true,
+      workspacePath: '/root/.agent-collab/agents/bob',
+      status: 'idle',
+      createdAt: 1,
+      updatedAt: 1,
+      nodeId: 'node-1',
+      agentId: 'agent-1',
+      userId: 'user-1',
+    };
+    const agent: AgentInfo = {
+      agentId: 'agent-1',
+      name: 'Bob',
+      agentType: 'codex_acp',
+      channelId: 'dm:agent-1',
+      channelIds: ['dm:agent-1'],
+      workspacePath: '/root/.agent-collab/agents/bob',
+      createdAt: 1,
+      updatedAt: 1,
+      systemPrompt: '',
+    };
+
+    insertConversationFixtures(db, {
+      conversation,
+      sessionKey: 'session-1',
+      agent,
+    });
+
+    const transcript = [
+      JSON.stringify({
+        timestamp: '2026-04-01T10:47:12.721Z',
+        type: 'session_meta',
+        payload: {
+          id: 'session-1',
+          cwd: '/root/.agent-collab/agents/bob',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-04-01T10:47:18.054Z',
+        type: 'turn_context',
+        payload: {
+          turn_id: 'turn-1',
+          cwd: '/root/.agent-collab/agents/bob',
+          model: 'gpt-5.4',
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-04-01T10:47:18.054Z',
+        type: 'response_item',
+        payload: {
+          type: 'message',
+          role: 'user',
+          content: [
+            {
+              type: 'input_text',
+              text: '[Current conversation target]\nreply_target: dm:@alice',
+            },
+          ],
+        },
+      }),
+      JSON.stringify({
+        timestamp: '2026-04-01T10:47:18.400Z',
+        type: 'event_msg',
+        payload: {
+          type: 'token_count',
+          info: {
+            total_token_usage: {
+              input_tokens: 100,
+              cached_input_tokens: 20,
+              output_tokens: 10,
+              reasoning_output_tokens: 5,
+              total_tokens: 110,
+            },
+            last_token_usage: {
+              input_tokens: 88,
+              cached_input_tokens: 14,
+              output_tokens: 2,
+              reasoning_output_tokens: 1,
+              total_tokens: 90,
+            },
+          },
+        },
+      }),
+    ].join('\n');
+
+    const service = new CodexTranscriptService({
+      db,
+      broker: {
+        listFiles: async () => ({
+          rootPath: '/root/.codex/sessions',
+          truncated: false,
+          files: [
+            {
+              path: '2026/04/01/rollout-1.jsonl',
+              size: transcript.length,
+              modifiedAt: Date.parse('2026-04-01T10:47:20.000Z'),
+            },
+          ],
+        }),
+        readFile: async () => ({
+          rootPath: '/root/.codex/sessions',
+          path: '2026/04/01/rollout-1.jsonl',
+          content: transcript,
+          size: transcript.length,
+          modifiedAt: Date.parse('2026-04-01T10:47:20.000Z'),
+        }),
+      } as any,
+      getConversationById: (conversationId) => conversationId === conversation.id ? conversation : null,
+      getAgentById: (agentId) => agentId === agent.agentId ? agent : null,
+      getAcpSessionIdByConversationId: () => null,
+      getCodexContextWindowByModel: (model) => model === 'gpt-5.4' ? 258400 : undefined,
+    });
+
+    const result = await service.getConversationDebug(conversation.id);
+    expect(result.rollouts[0]?.model).toBe('gpt-5.4');
+    expect(result.rollouts[0]?.turns[0]?.tokenUsage?.modelContextWindow).toBe(258400);
+    expect(result.rollouts[0]?.turns[0]?.tokenUsage?.currentInputTokens).toBe(88);
     db.close();
   });
 

@@ -104,8 +104,10 @@ export type CodexDebugFunctionCall = {
 };
 
 export type CodexDebugTokenUsage = {
+  currentInputTokens?: number;
   inputTokens?: number;
   cachedInputTokens?: number;
+  currentCachedInputTokens?: number;
   outputTokens?: number;
   reasoningOutputTokens?: number;
   totalTokens?: number;

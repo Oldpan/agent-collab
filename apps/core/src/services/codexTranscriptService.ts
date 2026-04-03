@@ -2,6 +2,7 @@ import { buildAgentSessionSystemPromptText } from '@agent-collab/memory';
 import type { AgentInfo, ConversationInfo, RuntimeDispatchMode } from '@agent-collab/protocol';
 import { log } from '@agent-collab/runtime-acp';
 import type { Db } from '@agent-collab/runtime-acp';
+import { readFileSync } from 'node:fs';
 import type { CodexTranscriptBroker } from './codexTranscriptBroker.js';
 
 const MAX_INLINE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
@@ -16,8 +17,10 @@ export type CodexFunctionCall = {
 };
 
 export type CodexTokenUsage = {
+  currentInputTokens?: number;
   inputTokens?: number;
   cachedInputTokens?: number;
+  currentCachedInputTokens?: number;
   outputTokens?: number;
   reasoningOutputTokens?: number;
   totalTokens?: number;
@@ -62,6 +65,7 @@ export type CodexDebugRollout = {
   size: number;
   sessionId?: string;
   cwd?: string;
+  model?: string;
   baseInstructions?: string;
   preludeDeveloperMessages: string[];
   preludeUserMessages: string[];
@@ -88,6 +92,7 @@ export class CodexTranscriptService {
   private readonly getConversationById: (conversationId: string) => ConversationInfo | null;
   private readonly getAgentById: (agentId: string) => AgentInfo | null;
   private readonly getAcpSessionIdByConversationId: (conversationId: string) => string | null;
+  private readonly getCodexContextWindowByModel: (model?: string) => number | undefined;
 
   constructor(params: {
     db: Db;
@@ -95,12 +100,14 @@ export class CodexTranscriptService {
     getConversationById: (conversationId: string) => ConversationInfo | null;
     getAgentById: (agentId: string) => AgentInfo | null;
     getAcpSessionIdByConversationId?: (conversationId: string) => string | null;
+    getCodexContextWindowByModel?: (model?: string) => number | undefined;
   }) {
     this.db = params.db;
     this.broker = params.broker;
     this.getConversationById = params.getConversationById;
     this.getAgentById = params.getAgentById;
     this.getAcpSessionIdByConversationId = params.getAcpSessionIdByConversationId ?? (() => null);
+    this.getCodexContextWindowByModel = params.getCodexContextWindowByModel ?? defaultGetCodexContextWindowByModel;
   }
 
   async getConversationDebug(conversationId: string): Promise<CodexConversationDebugResult> {
@@ -139,6 +146,7 @@ export class CodexTranscriptService {
         modifiedAt: file.modifiedAt,
         size: file.size,
       });
+      applyCodexContextWindowFallback(parsed, this.getCodexContextWindowByModel);
       const sessionCwd = parsed.cwd?.trim();
       if (!sessionCwd || sessionCwd !== conversation.workspacePath) continue;
 
@@ -212,6 +220,14 @@ type ParseContext = {
   size: number;
 };
 
+type CachedCodexModel = {
+  slug?: string;
+  context_window?: number;
+  effective_context_window_percent?: number;
+};
+
+let cachedCodexModelWindows: Map<string, number> | null = null;
+
 type CodexJsonlLine = {
   timestamp?: string;
   type?: string;
@@ -225,6 +241,7 @@ function parseCodexRollout(
   const lines = content.split(/\r?\n/).filter((line) => line.trim().length > 0);
   let sessionId: string | undefined;
   let cwd: string | undefined;
+  let model: string | undefined;
   let baseInstructions: string | undefined;
   const preludeDeveloperMessages: string[] = [];
   const preludeUserMessages: string[] = [];
@@ -259,6 +276,7 @@ function parseCodexRollout(
 
     if (parsedLine.type === 'turn_context') {
       pushCurrentTurn();
+      model = model ?? stringValue(payload.model);
       currentTurn = {
         turnId: stringValue(payload.turn_id) ?? `turn-${turns.length + 1}`,
         timestamp,
@@ -361,6 +379,7 @@ function parseCodexRollout(
     size: meta.size,
     sessionId,
     cwd,
+    model,
     baseInstructions,
     preludeDeveloperMessages,
     preludeUserMessages,
@@ -499,16 +518,60 @@ export function parseTriggerTarget(text: string): string | undefined {
 function parseTokenUsage(payload: Record<string, unknown>): CodexTokenUsage | undefined {
   const info = payload.info as Record<string, unknown> | undefined;
   const total = info?.total_token_usage as Record<string, unknown> | undefined;
+  const last = info?.last_token_usage as Record<string, unknown> | undefined;
   const contextWindow = numberValue(info?.model_context_window);
-  if (!total && contextWindow === undefined) return undefined;
+  if (!total && !last && contextWindow === undefined) return undefined;
   return {
+    currentInputTokens: numberValue(last?.input_tokens) ?? numberValue(total?.input_tokens),
     inputTokens: numberValue(total?.input_tokens),
     cachedInputTokens: numberValue(total?.cached_input_tokens),
+    currentCachedInputTokens: numberValue(last?.cached_input_tokens) ?? numberValue(total?.cached_input_tokens),
     outputTokens: numberValue(total?.output_tokens),
     reasoningOutputTokens: numberValue(total?.reasoning_output_tokens),
     totalTokens: numberValue(total?.total_tokens),
     modelContextWindow: contextWindow,
   };
+}
+
+function applyCodexContextWindowFallback(
+  rollout: CodexDebugRollout,
+  getCodexContextWindowByModel: (model?: string) => number | undefined,
+): void {
+  const fallbackWindow = getCodexContextWindowByModel(rollout.model);
+  if (fallbackWindow == null) return;
+  for (const turn of rollout.turns) {
+    if (!turn.tokenUsage) continue;
+    turn.tokenUsage.modelContextWindow = turn.tokenUsage.modelContextWindow ?? fallbackWindow;
+  }
+}
+
+function defaultGetCodexContextWindowByModel(model?: string): number | undefined {
+  if (!model) return undefined;
+  const windows = loadCodexModelWindows();
+  return windows.get(model);
+}
+
+function loadCodexModelWindows(): Map<string, number> {
+  if (cachedCodexModelWindows) return cachedCodexModelWindows;
+  const windows = new Map<string, number>();
+  try {
+    const raw = readFileSync('/root/.codex/models_cache.json', 'utf8');
+    const parsed = JSON.parse(raw) as { models?: CachedCodexModel[] };
+    for (const model of parsed.models ?? []) {
+      const slug = stringValue(model.slug);
+      const contextWindow = numberValue(model.context_window);
+      if (!slug || contextWindow == null) continue;
+      const effectivePercent = numberValue(model.effective_context_window_percent);
+      const effectiveWindow = effectivePercent != null
+        ? Math.round(contextWindow * (effectivePercent / 100))
+        : contextWindow;
+      windows.set(slug, effectiveWindow);
+    }
+  } catch {
+    // Best-effort fallback only.
+  }
+  cachedCodexModelWindows = windows;
+  return windows;
 }
 
 function stringValue(value: unknown): string | undefined {

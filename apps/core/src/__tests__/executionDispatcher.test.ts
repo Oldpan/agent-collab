@@ -245,11 +245,14 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.prompt).toContain('[Triggered message metadata]');
     expect(dispatch.prompt).toContain('[Current conversation target]');
     expect(dispatch.prompt).toContain('reply_target: dm:@oldpan');
-    expect(dispatch.prompt).toContain('target: dm:@oldpan');
     expect(dispatch.prompt).toContain('recipient: @Direct Bob');
     expect(dispatch.prompt).toContain('[Triggered message body]');
     expect(dispatch.prompt).toContain('你好，帮我总结一下刚才的结论');
     expect(dispatch.prompt).toContain('Reply only via mcp__chat__send_message(...)');
+    expect(dispatch.prompt).toContain('Prefer mcp__chat__send_message(content="...") with no target to reply on this direct conversation.');
+    expect(dispatch.prompt).toContain('If you need more context, call read_history(channel="dm:@oldpan") for this direct conversation.');
+    expect(dispatch.prompt).not.toContain('This execution is bound to reply_target=');
+    expect(dispatch.prompt).not.toContain('[Triggered message metadata]\ntarget: dm:@oldpan');
     expect(dispatch.prompt).not.toContain('[Recent messages on this exact target]');
     expect(dispatch.prompt).not.toContain('[Unread summary]');
     expect(dispatch.prompt).not.toContain('Call check_messages to read them when you\'re ready');

@@ -63,6 +63,8 @@ export function App() {
     openAgentThread,
     openAgentChannelSession,
     selectConversation,
+    upsertConversation,
+    refreshConversations,
   } = useConversations(user?.id);
 
   const { agents, createAgent, updateAgent, deleteAgent, refreshAgents } = useAgents();
@@ -118,25 +120,31 @@ export function App() {
 
   const handleRestartConversation = useCallback(
     async (conversationId: string) => {
-      await api.restartConversation(conversationId);
+      const result = await api.restartConversation(conversationId);
+      upsertConversation(result.conversation);
     },
-    [],
+    [upsertConversation],
   );
 
   const handleClearConversationChat = useCallback(
     async (conversationId: string) => {
-      await api.clearConversationChat(conversationId);
+      const result = await api.clearConversationChat(conversationId);
+      upsertConversation(result.conversation);
       setViewMode("chat");
     },
-    [],
+    [upsertConversation],
   );
 
   const handleResetAgent = useCallback(
     async (agentId: string) => {
-      await api.resetAgent(agentId);
+      const result = await api.resetAgent(agentId);
+      for (const conversation of result.conversations) {
+        upsertConversation(conversation);
+      }
+      await refreshConversations();
       setViewMode("chat");
     },
-    [],
+    [refreshConversations, upsertConversation],
   );
 
   const handleOpenAgentThread = useCallback(

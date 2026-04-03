@@ -23,6 +23,28 @@ const timeFormatter = new Intl.DateTimeFormat(undefined, {
   second: "2-digit",
 });
 
+const integerFormatter = new Intl.NumberFormat(undefined);
+const percentFormatter = new Intl.NumberFormat(undefined, {
+  minimumFractionDigits: 1,
+  maximumFractionDigits: 1,
+});
+
+function getContextUsage(tokenUsage?: {
+  currentInputTokens?: number;
+  modelContextWindow?: number;
+}) {
+  const currentInputTokens = tokenUsage?.currentInputTokens;
+  const modelContextWindow = tokenUsage?.modelContextWindow;
+  if (currentInputTokens == null || modelContextWindow == null || modelContextWindow <= 0) return null;
+  const usedRatio = Math.min(Math.max(currentInputTokens / modelContextWindow, 0), 1);
+  return {
+    currentInputTokens,
+    modelContextWindow,
+    usedPercent: usedRatio * 100,
+    remainingPercent: (1 - usedRatio) * 100,
+  };
+}
+
 function DebugBlock({ title, text }: { title: string; text: string }) {
   if (!text.trim()) return null;
   return (
@@ -65,6 +87,7 @@ function PlatformInputSection({ input }: { input: CodexPlatformInput }) {
     ? String(input.startedAt)
     : timeFormatter.format(input.startedAt);
   const [open, setOpen] = useState(false);
+  const isWarmSession = input.isFreshSession === false;
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className="flex w-full items-center gap-2 rounded border border-sky-300 bg-sky-50 px-3 py-2 text-left hover:bg-sky-100/60">
@@ -99,7 +122,13 @@ function PlatformInputSection({ input }: { input: CodexPlatformInput }) {
               session and was not retransmitted as a new turn input.
             </div>
           ) : null}
-          {input.systemPromptText ? <DebugBlock title="Platform System Prompt" text={input.systemPromptText} /> : null}
+          {input.systemPromptText ? (
+            isWarmSession ? (
+              <FoldedDebugBlock title="Session-held System Prompt" text={input.systemPromptText} />
+            ) : (
+              <DebugBlock title="Platform System Prompt (transmitted this turn)" text={input.systemPromptText} />
+            )
+          ) : null}
           {input.contextText ? <DebugBlock title="Platform Context Text" text={input.contextText} /> : null}
           <FoldedDebugBlock title="Platform Prompt Text" text={input.promptText} />
           {input.dispatchedPromptText ? (
@@ -122,6 +151,7 @@ function TurnCard({ turn, provider }: { turn: CodexDebugTurn; provider: "codex" 
     const parsed = Date.parse(turn.timestamp);
     return Number.isNaN(parsed) ? turn.timestamp : timeFormatter.format(parsed);
   }, [turn.timestamp]);
+  const contextUsage = useMemo(() => getContextUsage(turn.tokenUsage), [turn.tokenUsage]);
 
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -135,7 +165,11 @@ function TurnCard({ turn, provider }: { turn: CodexDebugTurn; provider: "codex" 
             <span className="text-zinc-600">{timestampLabel}</span>
             {turn.replyTarget ? <span className="rounded border border-zinc-300 bg-[#fff8d8] px-1.5 py-0.5 text-[10px] text-zinc-600">{turn.replyTarget}</span> : null}
             {turn.functionCalls.length > 0 ? <span className="text-zinc-500">{turn.functionCalls.length} call{turn.functionCalls.length !== 1 ? "s" : ""}</span> : null}
-            {turn.tokenUsage?.totalTokens ? <span className="text-zinc-500">{turn.tokenUsage.totalTokens} tokens</span> : null}
+            {contextUsage ? (
+              <span className="text-zinc-500">
+                used {percentFormatter.format(contextUsage.usedPercent)}%
+              </span>
+            ) : turn.tokenUsage?.totalTokens ? <span className="text-zinc-500">{turn.tokenUsage.totalTokens} tokens</span> : null}
           </div>
           {turn.triggerTarget ? (
             <div className="mt-1 text-[11px] text-zinc-500">trigger target {turn.triggerTarget}</div>
@@ -145,6 +179,18 @@ function TurnCard({ turn, provider }: { turn: CodexDebugTurn; provider: "codex" 
       <CollapsibleContent>
         <div className="mt-2 space-y-2 pl-5">
           {turn.platformInput ? <PlatformInputSection input={turn.platformInput} /> : null}
+          {contextUsage ? (
+            <div className="rounded border border-emerald-300 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-900">
+              <div className="text-[10px] font-semibold uppercase tracking-wide text-emerald-700">Approx Context Usage</div>
+              <div className="mt-1 flex flex-wrap gap-x-4 gap-y-1">
+                <span>Used: {percentFormatter.format(contextUsage.usedPercent)}%</span>
+                <span>Remaining: {percentFormatter.format(contextUsage.remainingPercent)}%</span>
+                <span>
+                  {integerFormatter.format(contextUsage.currentInputTokens)} / {integerFormatter.format(contextUsage.modelContextWindow)} tokens
+                </span>
+              </div>
+            </div>
+          ) : null}
           {turn.combinedUserMessage ? (
             <DebugBlock title="Combined User Message" text={turn.combinedUserMessage} />
           ) : null}
@@ -192,8 +238,14 @@ function TurnCard({ turn, provider }: { turn: CodexDebugTurn; provider: "codex" 
             <div className="rounded border border-zinc-200 bg-[#fffdf0] px-3 py-2 text-[11px] text-zinc-600">
               <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Token Usage</div>
               <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1">
-                {turn.tokenUsage.inputTokens != null ? <span>input {turn.tokenUsage.inputTokens}</span> : null}
-                {turn.tokenUsage.cachedInputTokens != null ? <span>cached {turn.tokenUsage.cachedInputTokens}</span> : null}
+                {turn.tokenUsage.currentInputTokens != null ? <span>current input {integerFormatter.format(turn.tokenUsage.currentInputTokens)}</span> : null}
+                {turn.tokenUsage.currentCachedInputTokens != null ? <span>current cached {integerFormatter.format(turn.tokenUsage.currentCachedInputTokens)}</span> : null}
+                {turn.tokenUsage.inputTokens != null && turn.tokenUsage.inputTokens !== turn.tokenUsage.currentInputTokens ? (
+                  <span>cumulative input {integerFormatter.format(turn.tokenUsage.inputTokens)}</span>
+                ) : null}
+                {turn.tokenUsage.cachedInputTokens != null && turn.tokenUsage.cachedInputTokens !== turn.tokenUsage.currentCachedInputTokens ? (
+                  <span>cumulative cached {integerFormatter.format(turn.tokenUsage.cachedInputTokens)}</span>
+                ) : null}
                 {turn.tokenUsage.outputTokens != null ? <span>output {turn.tokenUsage.outputTokens}</span> : null}
                 {turn.tokenUsage.reasoningOutputTokens != null ? <span>reasoning {turn.tokenUsage.reasoningOutputTokens}</span> : null}
                 {turn.tokenUsage.totalTokens != null ? <span>total {turn.tokenUsage.totalTokens}</span> : null}
@@ -374,7 +426,10 @@ export function CodexDebugPanel({
           <span className="font-medium">turn #xxxxxxxx</span>: the provider transcript turn id, not our platform run id.
         </div>
         <div className="mt-1">
-          <span className="font-medium">Platform System Prompt</span>: the platform-level system prompt held on the ACP session. On warm-session runs it may be shown here even though it was not retransmitted in this turn.
+          <span className="font-medium">Platform System Prompt</span>: shown as a transmitted turn input only on fresh-session runs.
+        </div>
+        <div className="mt-1">
+          <span className="font-medium">Session-held System Prompt</span>: on warm-session runs, this is the prompt already held on the ACP session. It is shown for reference and was not retransmitted in that turn.
         </div>
         <div className="mt-1">
           <span className="font-medium">Platform Context Text</span>: background context the platform prepends for this turn, such as memory, replay, recent messages, unread summary, or history cursor.
@@ -390,6 +445,9 @@ export function CodexDebugPanel({
         </div>
         <div className="mt-1">
           <span className="font-medium">Combined User Message</span>: the provider transcript&apos;s merged view of the user-side blocks for that turn. It is a log view, not an extra injected prompt.
+        </div>
+        <div className="mt-1">
+          <span className="font-medium">Approx Context Usage</span>: a best-effort estimate of current context-window occupancy for that request, shown as current input tokens over the model context window.
         </div>
       </div>
       <div className="space-y-3">
