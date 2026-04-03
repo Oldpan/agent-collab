@@ -297,7 +297,7 @@ export function AgentActivityPanel({ runs }: AgentActivityPanelProps) {
   }
 
   return (
-    <div className="flex-1 overflow-y-auto px-3 py-4">
+    <div className="h-full min-h-0 flex-1 overflow-y-auto px-3 py-4">
       <div className="flex flex-col gap-2">
         {runs.map((run) => (
           <RunRow key={run.id} run={run} />

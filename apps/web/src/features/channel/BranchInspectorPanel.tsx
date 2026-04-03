@@ -42,7 +42,7 @@ function BranchControlPanel({
   const branchLabel = conversation.threadRootId ? "Thread Branch" : "Channel Branch";
 
   return (
-    <div className="flex-1 overflow-y-auto p-4">
+    <div className="h-full min-h-0 overflow-y-auto p-4">
       <div className="space-y-4">
         <section className="rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-4 py-4 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
           <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Branch Scope</div>
@@ -99,7 +99,7 @@ export function BranchInspectorPanel({
   onClearChat,
   onClose,
 }: BranchInspectorPanelProps) {
-  const canShowDebug = isAdmin && conversation.agentType === "codex_acp";
+  const canShowDebug = isAdmin && (conversation.agentType === "codex_acp" || conversation.agentType === "claude_acp");
   const [activeTab, setActiveTab] = useState<"debug" | "activity" | "control">(
     canShowDebug ? "debug" : "activity",
   );
@@ -164,8 +164,8 @@ export function BranchInspectorPanel({
   const branchLabel = conversation.threadRootId ? "Thread Branch" : "Channel Branch";
 
   return (
-    <div className="flex h-full min-h-0 flex-col border-l-2 border-black bg-[#fffdf5]">
-      <div className="border-b-2 border-black bg-[#fff8d8] px-4 py-3 shadow-[0_2px_0_0_rgba(0,0,0,0.08)]">
+    <div className="flex h-full min-h-0 flex-col overflow-hidden border-l-2 border-black bg-[#fffdf5]">
+      <div className="shrink-0 border-b-2 border-black bg-[#fff8d8] px-4 py-3 shadow-[0_2px_0_0_rgba(0,0,0,0.08)]">
         <div className="flex items-start gap-3">
           <div className="min-w-0 flex-1">
             <div className="text-sm font-semibold text-zinc-950">{agent?.name ?? "Agent"} · Branch Inspector</div>
@@ -223,7 +223,7 @@ export function BranchInspectorPanel({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1">
+      <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
         {activeTab === "debug" && canShowDebug ? (
           <CodexDebugPanel conversationId={conversation.id} />
         ) : activeTab === "activity" ? (

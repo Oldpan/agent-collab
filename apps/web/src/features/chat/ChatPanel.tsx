@@ -142,7 +142,7 @@ export function ChatPanel({
     status === "streaming" ||
     status === "recovering" ||
     status === "awaiting_approval";
-  const canShowCodexDebug = isAdmin && conversation.agentType === "codex_acp";
+  const canShowCodexDebug = isAdmin && (conversation.agentType === "codex_acp" || conversation.agentType === "claude_acp");
 
   const displayStatus =
     hasDispatchFailure && status !== "submitted" && status !== "streaming"

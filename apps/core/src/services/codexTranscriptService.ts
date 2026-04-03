@@ -6,7 +6,7 @@ import type { CodexTranscriptBroker } from './codexTranscriptBroker.js';
 
 const MAX_INLINE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 
-type CodexFunctionCall = {
+export type CodexFunctionCall = {
   callId: string;
   name: string;
   arguments: string;
@@ -15,7 +15,7 @@ type CodexFunctionCall = {
   outputTimestamp?: string;
 };
 
-type CodexTokenUsage = {
+export type CodexTokenUsage = {
   inputTokens?: number;
   cachedInputTokens?: number;
   outputTokens?: number;
@@ -69,6 +69,7 @@ export type CodexDebugRollout = {
 };
 
 export type CodexConversationDebugResult = {
+  provider: 'codex' | 'claude';
   conversationId: string;
   agentType: string;
   workspacePath: string;
@@ -173,6 +174,7 @@ export class CodexTranscriptService {
     const unmatchedPlatformInputs = attachPlatformInputsToTurns(rollouts, platformInputs);
 
     return {
+      provider: 'codex',
       conversationId: conversation.id,
       agentType: conversation.agentType,
       workspacePath: conversation.workspacePath,
@@ -366,7 +368,7 @@ function parseCodexRollout(
   };
 }
 
-function getRolloutSortTime(rollout: CodexDebugRollout): number {
+export function getRolloutSortTime(rollout: CodexDebugRollout): number {
   const turnTimes = rollout.turns
     .map((turn) => Date.parse(turn.timestamp))
     .filter((value) => Number.isFinite(value));
@@ -376,7 +378,7 @@ function getRolloutSortTime(rollout: CodexDebugRollout): number {
   return rollout.modifiedAt;
 }
 
-function attachPlatformInputsToTurns(
+export function attachPlatformInputsToTurns(
   rollouts: CodexDebugRollout[],
   platformInputs: CodexPlatformInput[],
 ): CodexPlatformInput[] {
@@ -395,7 +397,7 @@ function attachPlatformInputsToTurns(
   return platformInputs.slice(pairCount);
 }
 
-function listPlatformInputsForConversation(
+export function listPlatformInputsForConversation(
   db: Db,
   params: {
     conversation: ConversationInfo;
@@ -484,12 +486,12 @@ function extractMessageText(payload: Record<string, unknown>): string | undefine
   return undefined;
 }
 
-function parseReplyTarget(text: string): string | undefined {
+export function parseReplyTarget(text: string): string | undefined {
   const match = /\[Current conversation target\][\s\S]*?reply_target:\s*([^\n]+)/.exec(text);
   return match?.[1]?.trim() || undefined;
 }
 
-function parseTriggerTarget(text: string): string | undefined {
+export function parseTriggerTarget(text: string): string | undefined {
   const match = /\[Triggered message metadata\][\s\S]*?target:\s*([^\n]+)/.exec(text);
   return match?.[1]?.trim() || undefined;
 }

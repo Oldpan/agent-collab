@@ -1290,7 +1290,7 @@ export function ChannelPanel({
           </div>
 
           {branchInspectorConversation ? (
-            <div className="flex h-full shrink-0 overflow-hidden">
+            <div className="flex h-full min-h-0 shrink-0 overflow-hidden">
               <div
                 className={cn(
                   "w-1.5 cursor-col-resize bg-zinc-300 transition-colors hover:bg-zinc-400 active:bg-zinc-500",
@@ -1299,7 +1299,7 @@ export function ChannelPanel({
                 onMouseDown={handleResizeStart}
                 title="Drag to resize"
               />
-              <div className="h-full" style={{ width: threadPanelWidth }}>
+              <div className="h-full min-h-0 overflow-hidden" style={{ width: threadPanelWidth }}>
                 <BranchInspectorPanel
                   conversation={branchInspectorConversation}
                   agent={branchInspectorAgent}
@@ -1315,7 +1315,7 @@ export function ChannelPanel({
               </div>
             </div>
           ) : openThread ? (
-            <div className="flex h-full shrink-0 overflow-hidden">
+            <div className="flex h-full min-h-0 shrink-0 overflow-hidden">
               {/* Resize handle */}
               <div
                 className={cn(
@@ -1325,7 +1325,7 @@ export function ChannelPanel({
                 onMouseDown={handleResizeStart}
                 title="Drag to resize"
               />
-              <div className="h-full" style={{ width: threadPanelWidth }}>
+              <div className="h-full min-h-0 overflow-hidden" style={{ width: threadPanelWidth }}>
                 <ThreadPanel
                   channelId={channel.channelId}
                   channelName={channel.name}

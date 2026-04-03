@@ -13,6 +13,11 @@ import {
   readCodexTranscriptFile,
 } from './codexTranscriptFs.js';
 import {
+  ClaudeTranscriptFsError,
+  listClaudeTranscriptFiles,
+  readClaudeTranscriptFile,
+} from './claudeTranscriptFs.js';
+import {
   listWorkspaceDirectory,
   readWorkspaceFile,
   resetWorkspaceDirectory,
@@ -161,6 +166,38 @@ async function main(): Promise<void> {
           });
         } catch (error) {
           connection.send(codexTranscriptReadErrorResponse(msg.requestId, msg.path, error));
+        }
+        break;
+
+      case 'claude.transcript.list.request':
+        try {
+          const result = listClaudeTranscriptFiles(msg.workspaceRoot, msg.maxFiles);
+          connection.send({
+            type: 'claude.transcript.list.response',
+            requestId: msg.requestId,
+            rootPath: result.rootPath,
+            files: result.files,
+            truncated: result.truncated,
+          });
+        } catch (error) {
+          connection.send(claudeTranscriptListErrorResponse(msg.requestId, error));
+        }
+        break;
+
+      case 'claude.transcript.read.request':
+        try {
+          const result = readClaudeTranscriptFile(msg.workspaceRoot, msg.path);
+          connection.send({
+            type: 'claude.transcript.read.response',
+            requestId: msg.requestId,
+            rootPath: result.rootPath,
+            path: result.path,
+            content: result.content,
+            size: result.size,
+            modifiedAt: result.modifiedAt,
+          });
+        } catch (error) {
+          connection.send(claudeTranscriptReadErrorResponse(msg.requestId, msg.path, error));
         }
         break;
 
@@ -421,6 +458,51 @@ function codexTranscriptReadErrorResponse(
 
   return {
     type: 'codex.transcript.read.response' as const,
+    requestId,
+    path: transcriptPath,
+    error: String((error as Error)?.message ?? error),
+    errorCode: 'io_error' as const,
+  };
+}
+
+function claudeTranscriptListErrorResponse(
+  requestId: string,
+  error: unknown,
+) {
+  if (error instanceof ClaudeTranscriptFsError) {
+    return {
+      type: 'claude.transcript.list.response' as const,
+      requestId,
+      error: error.message,
+      errorCode: error.code,
+    };
+  }
+
+  return {
+    type: 'claude.transcript.list.response' as const,
+    requestId,
+    error: String((error as Error)?.message ?? error),
+    errorCode: 'io_error' as const,
+  };
+}
+
+function claudeTranscriptReadErrorResponse(
+  requestId: string,
+  transcriptPath: string,
+  error: unknown,
+) {
+  if (error instanceof ClaudeTranscriptFsError) {
+    return {
+      type: 'claude.transcript.read.response' as const,
+      requestId,
+      path: transcriptPath,
+      error: error.message,
+      errorCode: error.code,
+    };
+  }
+
+  return {
+    type: 'claude.transcript.read.response' as const,
     requestId,
     path: transcriptPath,
     error: String((error as Error)?.message ?? error),

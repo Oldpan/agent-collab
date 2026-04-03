@@ -7,6 +7,7 @@ import type { NodeRegistry } from '../services/nodeRegistry.js';
 import type { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import type { AgentSkillsBroker } from '../services/agentSkillsBroker.js';
 import type { CodexTranscriptBroker } from '../services/codexTranscriptBroker.js';
+import type { ClaudeTranscriptBroker } from '../services/claudeTranscriptBroker.js';
 import type { ConversationManager } from './conversationManager.js';
 import { resolveConversationReplyTarget } from './directReplyTargets.js';
 import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
@@ -468,6 +469,7 @@ export function handleNodeWebSocket(
   workspaceBroker?: AgentWorkspaceBroker,
   skillsBroker?: AgentSkillsBroker,
   codexTranscriptBroker?: CodexTranscriptBroker,
+  claudeTranscriptBroker?: ClaudeTranscriptBroker,
 ): void {
   let nodeId: string | null = null;
   // Sequence counter per runId for node/event persistence
@@ -721,6 +723,16 @@ export function handleNodeWebSocket(
         break;
       }
 
+      case 'claude.transcript.list.response': {
+        claudeTranscriptBroker?.handleListResponse(msg);
+        break;
+      }
+
+      case 'claude.transcript.read.response': {
+        claudeTranscriptBroker?.handleReadResponse(msg);
+        break;
+      }
+
       default: {
         log.warn('[node-ws] unknown message type', (msg as any).type);
       }
@@ -733,6 +745,7 @@ export function handleNodeWebSocket(
       workspaceBroker?.rejectPendingForNode(nodeId);
       skillsBroker?.rejectPendingForNode(nodeId);
       codexTranscriptBroker?.rejectPendingForNode(nodeId);
+      claudeTranscriptBroker?.rejectPendingForNode(nodeId);
       manager.rejectPendingDispatchesForNode(nodeId, disconnectMessage);
       registry.unregister(nodeId);
       db.prepare(`UPDATE nodes SET status='offline', last_seen=? WHERE node_id=?`)

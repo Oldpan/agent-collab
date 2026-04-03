@@ -458,6 +458,42 @@ export type CodexTranscriptReadResponseMsg = {
   errorCode?: WorkspaceErrorCode;
 };
 
+export type ClaudeTranscriptListRequestMsg = {
+  type: 'claude.transcript.list.request';
+  requestId: string;
+  workspaceRoot: string;
+  maxFiles?: number;
+};
+
+export type ClaudeTranscriptListResponseMsg = {
+  type: 'claude.transcript.list.response';
+  requestId: string;
+  rootPath?: string;
+  files?: CodexTranscriptFileEntry[];
+  truncated?: boolean;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
+export type ClaudeTranscriptReadRequestMsg = {
+  type: 'claude.transcript.read.request';
+  requestId: string;
+  workspaceRoot: string;
+  path: string;
+};
+
+export type ClaudeTranscriptReadResponseMsg = {
+  type: 'claude.transcript.read.response';
+  requestId: string;
+  path: string;
+  rootPath?: string;
+  content?: string;
+  size?: number;
+  modifiedAt?: number | null;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
 export type RunDebugSnapshotMsg = {
   type: 'run.debug.snapshot';
   runId: string;
@@ -485,6 +521,8 @@ export type NodeToCore =
   | SkillsReadResponseMsg
   | CodexTranscriptListResponseMsg
   | CodexTranscriptReadResponseMsg
+  | ClaudeTranscriptListResponseMsg
+  | ClaudeTranscriptReadResponseMsg
   | RunDebugSnapshotMsg;
 
 // Core → Node
@@ -575,6 +613,8 @@ export type CoreToNode =
   | SkillsReadCoreRequestMsg
   | CodexTranscriptListRequestMsg
   | CodexTranscriptReadRequestMsg
+  | ClaudeTranscriptListRequestMsg
+  | ClaudeTranscriptReadRequestMsg
   | HostCloseMsg;
 
 // ─── REST API 类型 ───

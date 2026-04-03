@@ -22,6 +22,8 @@ import { AgentSkillsBroker } from '../services/agentSkillsBroker.js';
 import { AgentSkillsService, AgentSkillsServiceError } from '../services/agentSkillsService.js';
 import { CodexTranscriptBroker } from '../services/codexTranscriptBroker.js';
 import { CodexTranscriptService } from '../services/codexTranscriptService.js';
+import { ClaudeTranscriptBroker } from '../services/claudeTranscriptBroker.js';
+import { ClaudeTranscriptService } from '../services/claudeTranscriptService.js';
 import { findMentionedAgents } from './channelMentions.js';
 import { buildChannelActivationPrompt, buildChannelActivationContextText } from './channelActivationPrompt.js';
 import { appendChannelResetMarkers } from './channelMemoryNotes.js';
@@ -68,6 +70,7 @@ export async function startServer(params: {
   const workspaceBroker = params.workspaceBroker ?? new AgentWorkspaceBroker({ nodeRegistry });
   const skillsBroker = params.skillsBroker ?? new AgentSkillsBroker({ nodeRegistry });
   const codexTranscriptBroker = new CodexTranscriptBroker({ nodeRegistry });
+  const claudeTranscriptBroker = new ClaudeTranscriptBroker({ nodeRegistry });
   const workspaceService = new AgentWorkspaceService({
     getAgentById: (agentId) => conversationManager.getAgent(agentId),
     broker: workspaceBroker,
@@ -79,6 +82,21 @@ export async function startServer(params: {
   const codexTranscriptService = new CodexTranscriptService({
     db,
     broker: codexTranscriptBroker,
+    getConversationById: (conversationId) => conversationManager.getConversation(conversationId),
+    getAgentById: (agentId) => conversationManager.getAgent(agentId),
+    getAcpSessionIdByConversationId: (conversationId) => {
+      const row = db.prepare(
+        `SELECT s.acp_session_id as acpSessionId
+           FROM conversations c
+           JOIN sessions s ON s.session_key = c.session_key
+          WHERE c.id = ?`,
+      ).get(conversationId) as { acpSessionId: string | null } | undefined;
+      return row?.acpSessionId ?? null;
+    },
+  });
+  const claudeTranscriptService = new ClaudeTranscriptService({
+    db,
+    broker: claudeTranscriptBroker,
     getConversationById: (conversationId) => conversationManager.getConversation(conversationId),
     getAgentById: (agentId) => conversationManager.getAgent(agentId),
     getAcpSessionIdByConversationId: (conversationId) => {
@@ -605,13 +623,16 @@ export async function startServer(params: {
     }
 
     try {
-      return await codexTranscriptService.getConversationDebug(req.params.id);
+      return conv.agentType === 'claude_acp'
+        ? await claudeTranscriptService.getConversationDebug(req.params.id)
+        : await codexTranscriptService.getConversationDebug(req.params.id);
     } catch (error) {
       const message = String((error as Error)?.message ?? error);
       if (message === 'Conversation not found.') {
         reply.code(404);
       } else if (
         message === 'Codex debug is only supported for codex_acp conversations.'
+        || message === 'Claude debug is only supported for claude_acp conversations.'
         || message === 'Conversation is not assigned to a remote node.'
         || message === 'Conversation has no workspace path.'
         || message === 'Conversation has no reply target.'
@@ -1765,6 +1786,7 @@ export async function startServer(params: {
         workspaceBroker,
         skillsBroker,
         codexTranscriptBroker,
+        claudeTranscriptBroker,
       );
     },
   );

@@ -116,7 +116,7 @@ function PlatformInputSection({ input }: { input: CodexPlatformInput }) {
   );
 }
 
-function TurnCard({ turn }: { turn: CodexDebugTurn }) {
+function TurnCard({ turn, provider }: { turn: CodexDebugTurn; provider: "codex" | "claude" }) {
   const [open, setOpen] = useState(false);
   const timestampLabel = useMemo(() => {
     const parsed = Date.parse(turn.timestamp);
@@ -131,7 +131,7 @@ function TurnCard({ turn }: { turn: CodexDebugTurn }) {
         <ChevronRightIcon className={cn("size-3 shrink-0 transition-transform", open && "rotate-90")} />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-            <span className="font-mono text-[10px] text-zinc-500">codex turn #{turn.turnId.slice(0, 8)}</span>
+            <span className="font-mono text-[10px] text-zinc-500">{provider} turn #{turn.turnId.slice(0, 8)}</span>
             <span className="text-zinc-600">{timestampLabel}</span>
             {turn.replyTarget ? <span className="rounded border border-zinc-300 bg-[#fff8d8] px-1.5 py-0.5 text-[10px] text-zinc-600">{turn.replyTarget}</span> : null}
             {turn.functionCalls.length > 0 ? <span className="text-zinc-500">{turn.functionCalls.length} call{turn.functionCalls.length !== 1 ? "s" : ""}</span> : null}
@@ -151,7 +151,7 @@ function TurnCard({ turn }: { turn: CodexDebugTurn }) {
           {turn.inputBlocks.map((block, index) => (
             <FoldedDebugBlock
               key={`${turn.turnId}-input-${index}`}
-              title={`Codex Input Block ${index + 1} · ${block.length} chars`}
+              title={`Transcript Input Block ${index + 1} · ${block.length} chars`}
               text={block}
             />
           ))}
@@ -236,7 +236,7 @@ function PlatformOnlyCard({ input }: { input: CodexPlatformInput }) {
   );
 }
 
-function RolloutCard({ rollout }: { rollout: CodexDebugRollout }) {
+function RolloutCard({ rollout, provider }: { rollout: CodexDebugRollout; provider: "codex" | "claude" }) {
   const [open, setOpen] = useState(true);
   return (
     <Collapsible open={open} onOpenChange={setOpen}>
@@ -247,7 +247,7 @@ function RolloutCard({ rollout }: { rollout: CodexDebugRollout }) {
         <div className="min-w-0 flex-1">
           <div className="truncate font-mono text-[11px] text-zinc-700">{rollout.path}</div>
           <div className="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-[10px] text-zinc-500">
-            {rollout.sessionId ? <span>codex session_meta.id {rollout.sessionId.slice(0, 8)}</span> : null}
+            {rollout.sessionId ? <span>session {rollout.sessionId.slice(0, 8)}</span> : null}
             {rollout.cwd ? <span className="truncate">cwd {rollout.cwd}</span> : null}
             <span>{rollout.turns.length} matched turn{rollout.turns.length !== 1 ? "s" : ""}</span>
             <span>{rollout.size} bytes</span>
@@ -256,7 +256,7 @@ function RolloutCard({ rollout }: { rollout: CodexDebugRollout }) {
       </CollapsibleTrigger>
         <CollapsibleContent>
           <div className="mt-2 space-y-3 pl-5">
-          {rollout.baseInstructions ? <FoldedDebugBlock title="Codex Base Instructions" text={rollout.baseInstructions} /> : null}
+          {rollout.baseInstructions ? <FoldedDebugBlock title="Base Instructions" text={rollout.baseInstructions} /> : null}
           {rollout.preludeDeveloperMessages.map((text, index) => (
             <FoldedDebugBlock
               key={`${rollout.path}-dev-${index}`}
@@ -272,7 +272,7 @@ function RolloutCard({ rollout }: { rollout: CodexDebugRollout }) {
             />
           ))}
           {rollout.turns.map((turn) => (
-            <TurnCard key={`${rollout.path}-${turn.turnId}`} turn={turn} />
+            <TurnCard key={`${rollout.path}-${turn.turnId}`} turn={turn} provider={provider} />
           ))}
         </div>
       </CollapsibleContent>
@@ -318,7 +318,7 @@ export function CodexDebugPanel({
     return (
       <div className="flex items-center gap-2 p-4 text-sm text-zinc-600">
         <Loader size={12} />
-        Loading Codex transcript debug view...
+        Loading transcript debug view...
       </div>
     );
   }
@@ -334,15 +334,17 @@ export function CodexDebugPanel({
   if (!data || (data.rollouts.length === 0 && data.unmatchedPlatformInputs.length === 0)) {
     return (
       <div className="m-4 rounded border border-zinc-200 bg-white/70 px-3 py-2 text-sm text-zinc-600">
-        No Codex transcript matched this conversation.
+        No transcript matched this conversation.
       </div>
     );
   }
 
   return (
-    <div className="flex-1 overflow-y-auto p-4">
+    <div className="h-full min-h-0 flex-1 overflow-y-auto p-4">
       <div className="mb-3 rounded border border-zinc-300 bg-white/70 px-3 py-2 text-xs text-zinc-600">
-        <div className="font-medium text-zinc-800">Codex transcript only</div>
+        <div className="font-medium text-zinc-800">
+          {data.provider === "claude" ? "Claude transcript + platform inputs" : "Codex transcript + platform inputs"}
+        </div>
         <div className="mt-1">
           {data.matchMode === "acp_session_id"
             ? "Matched by exact ACP session id, then exact reply target."
@@ -363,13 +365,13 @@ export function CodexDebugPanel({
       <div className="mb-3 rounded border border-sky-300 bg-sky-50/70 px-3 py-2 text-xs text-sky-900">
         <div className="font-medium">Field guide</div>
         <div className="mt-1">
-          <span className="font-medium">platform acp_session_id</span>: the session id our platform saved for the live ACP/Codex session.
+          <span className="font-medium">platform acp_session_id</span>: the session id our platform saved for the live ACP runtime session.
         </div>
         <div className="mt-1">
-          <span className="font-medium">codex session_meta.id</span>: the session id recorded inside the Codex rollout JSONL. We match these when possible.
+          <span className="font-medium">{data.provider === "claude" ? "transcript sessionId" : "codex session_meta.id"}</span>: the session id recorded inside the provider transcript. We match these when possible.
         </div>
         <div className="mt-1">
-          <span className="font-medium">codex turn #xxxxxxxx</span>: the Codex transcript turn id, not our platform run id.
+          <span className="font-medium">turn #xxxxxxxx</span>: the provider transcript turn id, not our platform run id.
         </div>
         <div className="mt-1">
           <span className="font-medium">Platform System Prompt</span>: the platform-level system prompt held on the ACP session. On warm-session runs it may be shown here even though it was not retransmitted in this turn.
@@ -384,15 +386,15 @@ export function CodexDebugPanel({
           <span className="font-medium">Platform Dispatched Prompt</span>: the final prompt block the platform sent to runtime, usually reply contract plus Platform Prompt Text.
         </div>
         <div className="mt-1">
-          <span className="font-medium">Codex Input Block</span>: the actual ordered input blocks Codex received in that turn. Multiple blocks usually mean one turn with separate context and prompt blocks, not multiple sends.
+          <span className="font-medium">Transcript Input Block</span>: the actual ordered input blocks recorded by the provider transcript for that turn. Multiple blocks usually mean one turn with separate context and prompt blocks, not multiple sends.
         </div>
         <div className="mt-1">
-          <span className="font-medium">Combined User Message</span>: Codex transcript&apos;s merged view of the user-side blocks for that turn. It is a log view, not an extra injected prompt.
+          <span className="font-medium">Combined User Message</span>: the provider transcript&apos;s merged view of the user-side blocks for that turn. It is a log view, not an extra injected prompt.
         </div>
       </div>
       <div className="space-y-3">
         {data.rollouts.map((rollout) => (
-          <RolloutCard key={rollout.path} rollout={rollout} />
+          <RolloutCard key={rollout.path} rollout={rollout} provider={data.provider} />
         ))}
         {data.unmatchedPlatformInputs.length > 0 ? (
           <div className="rounded border border-sky-300 bg-sky-50/50 px-3 py-3">

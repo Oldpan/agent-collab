@@ -157,6 +157,7 @@ export type CodexDebugRollout = {
 };
 
 export type CodexConversationDebug = {
+  provider: 'codex' | 'claude';
   conversationId: string;
   agentType: string;
   workspacePath: string;
