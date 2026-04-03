@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import { createTestDb } from './helpers.js';
-import { bindTaskToThread, getThreadCollaborationSummary } from '../web/threadTaskBindings.js';
+import {
+  bindTaskToThread,
+  getThreadBindingForTask,
+  getThreadCollaborationSummary,
+  getBoundTaskForThread,
+  unbindTaskFromThread,
+} from '../web/threadTaskBindings.js';
 import { upsertTargetParticipant } from '../web/targetParticipants.js';
 
 describe('threadTaskBindings', () => {
@@ -53,6 +59,41 @@ describe('threadTaskBindings', () => {
     expect(summary.boundTask?.taskNumber).toBe(3);
     expect(summary.ownerName).toBe('Bob');
     expect(summary.participants).toEqual(['Bob', 'Alice']);
+
+    db.close();
+  });
+
+  it('隐式 task-root 线程 unbind 后应不可再命中，重新绑定原 thread 时恢复', () => {
+    const db = createTestDb();
+    const now = Date.now();
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES(?, 'default', 'system', 'system', 'system', '#default', 'Implicit task', 1, ?)`,
+    ).run('abc12345-0000-0000-0000-000000000000', now);
+
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
+       VALUES(?, 'default', 4, 'Implicit task', 'todo', ?, ?, ?)`,
+    ).run('task-implicit', 'abc12345-0000-0000-0000-000000000000', now, now);
+
+    expect(getBoundTaskForThread(db, { channelId: 'default', threadRootId: 'abc12345' })?.taskId).toBe('task-implicit');
+    expect(getThreadBindingForTask(db, 'task-implicit')).toEqual({ channelId: 'default', threadRootId: 'abc12345' });
+
+    unbindTaskFromThread(db, { channelId: 'default', threadRootId: 'abc12345' });
+
+    expect(getBoundTaskForThread(db, { channelId: 'default', threadRootId: 'abc12345' })).toBeUndefined();
+    expect(getThreadBindingForTask(db, 'task-implicit')).toBeUndefined();
+
+    expect(bindTaskToThread(db, {
+      channelId: 'default',
+      threadRootId: 'abc12345',
+      taskId: 'task-implicit',
+      boundAt: now,
+    })).toEqual({ ok: true });
+
+    expect(getBoundTaskForThread(db, { channelId: 'default', threadRootId: 'abc12345' })?.taskId).toBe('task-implicit');
+    expect(getThreadBindingForTask(db, 'task-implicit')).toEqual({ channelId: 'default', threadRootId: 'abc12345' });
 
     db.close();
   });

@@ -29,6 +29,7 @@ import { deleteChannelSubscription, listChannelSubscriptions, upsertChannelSubsc
 import { listTargetParticipants, setTargetOwner, upsertTargetParticipant } from './targetParticipants.js';
 import { bindTaskToThread, getBoundTaskForThread, getThreadCollaborationSummary, unbindTaskFromThread } from './threadTaskBindings.js';
 import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
+import { isValidTransition } from './taskStatusTransitions.js';
 import type { User } from '../services/auth.js';
 import {
   hasAdminUser,
@@ -74,6 +75,14 @@ export async function startServer(params: {
   });
 
   const app = Fastify({ logger: false });
+
+  const broadcastChannelTasksChanged = (channelId: string) => {
+    broadcastToChannel(channelId, {
+      type: 'channel.tasks.changed',
+      channelId,
+      changedAt: Date.now(),
+    });
+  };
 
   await app.register(fastifyCors, { origin: true });
   await app.register(fastifyWebSocket);
@@ -1028,6 +1037,8 @@ export async function startServer(params: {
         });
       }
 
+      broadcastChannelTasksChanged(req.params.id);
+
       return getThreadCollaborationSummary(db, {
         channelId: req.params.id,
         threadRootId: req.params.shortId,
@@ -1056,6 +1067,7 @@ export async function startServer(params: {
         threadRootId: req.params.shortId,
         agentId: null,
       });
+      broadcastChannelTasksChanged(req.params.id);
 
       return getThreadCollaborationSummary(db, {
         channelId: req.params.id,
@@ -1184,14 +1196,15 @@ export async function startServer(params: {
             recordAsUserMessage: false,
             activationContextText: buildChannelActivationContextText({
               target: historyTarget,
-            recentMessages: activationContext.recentMessages,
-            rootMessage: activationContext.rootMessage,
-            unreadCount: activationContext.unreadCount,
-            participants: activationContext.participants,
-            boundTask: activationContext.boundTask,
-            openTasks: activationContext.openTasks,
-          }) || undefined,
-        },
+              recentMessages: activationContext.recentMessages,
+              rootMessage: activationContext.rootMessage,
+              unreadCount: activationContext.unreadCount,
+              oldestVisibleSeq: activationContext.oldestVisibleSeq,
+              participants: activationContext.participants,
+              boundTask: activationContext.boundTask,
+              openTasks: activationContext.openTasks,
+            }) || undefined,
+          },
         ).then(() => {
           bumpAgentMessageCheckpoint(db, agentId, req.params.id, seq, threadRootId ?? null);
         }).catch(() => {});
@@ -1443,6 +1456,7 @@ export async function startServer(params: {
       });
 
       reply.code(201);
+      broadcastChannelTasksChanged(req.params.id);
       return { taskId, channelId: req.params.id, taskNumber, title, description, status: 'todo', assigneeId: null, assigneeName: null, messageId, linkedThreadId: shortId, linkedThreadShortId: shortId, createdAt: now, updatedAt: now };
     },
   );
@@ -1477,6 +1491,7 @@ export async function startServer(params: {
       // Update the message kind to 'task'
       db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.message_id);
       const shortId = msg.message_id.slice(0, 8);
+      broadcastChannelTasksChanged(req.params.id);
       reply.code(201);
       return { taskId, channelId: req.params.id, taskNumber, title: taskTitle, status: 'todo', messageId: msg.message_id, linkedThreadId: shortId, linkedThreadShortId: shortId, assigneeId: null, assigneeName: null, createdAt: now, updatedAt: now };
     },
@@ -1493,11 +1508,20 @@ export async function startServer(params: {
       const { status } = req.body ?? {};
       const validStatuses = ['todo', 'in_progress', 'in_review', 'done'];
       if (!validStatuses.includes(status)) { reply.code(400); return { error: `Invalid status: ${status}` }; }
+      const nextStatus = status as 'todo' | 'in_progress' | 'in_review' | 'done';
+      const current = db.prepare(
+        `SELECT task_id as taskId, status as currentStatus
+         FROM tasks WHERE channel_id = ? AND task_number = ?`,
+      ).get(req.params.id, taskNumber) as { taskId: string; currentStatus: 'todo' | 'in_progress' | 'in_review' | 'done' } | undefined;
+      if (!current) { reply.code(404); return { error: 'Task not found' }; }
+      if (!isValidTransition(current.currentStatus, nextStatus)) {
+        reply.code(400);
+        return { error: `Invalid transition: ${current.currentStatus} → ${nextStatus}` };
+      }
       const now = Date.now();
-      const result = db.prepare(
+      db.prepare(
         `UPDATE tasks SET status = ?, updated_at = ? WHERE channel_id = ? AND task_number = ?`,
-      ).run(status, now, req.params.id, taskNumber);
-      if (result.changes === 0) { reply.code(404); return { error: 'Task not found' }; }
+      ).run(nextStatus, now, req.params.id, taskNumber);
       const row = db.prepare(
         `SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
                 title, description, status, claimed_by_agent_id as assigneeId,
@@ -1507,6 +1531,7 @@ export async function startServer(params: {
                 created_at as createdAt, updated_at as updatedAt
          FROM tasks WHERE channel_id = ? AND task_number = ?`,
       ).get(req.params.id, taskNumber);
+      broadcastChannelTasksChanged(req.params.id);
       return row;
     },
   );
@@ -1554,6 +1579,7 @@ export async function startServer(params: {
         }
       })();
 
+      broadcastChannelTasksChanged(req.params.id);
       broadcastToChannel(req.params.id, { type: 'channel.history.reset' });
       return { ok: true, taskNumber };
     },

@@ -21,6 +21,7 @@ import { resolveConversationReplyTarget } from './directReplyTargets.js';
 import { setTargetOwner, upsertTargetParticipant } from './targetParticipants.js';
 import { bindTaskToThread, getThreadBindingForTask } from './threadTaskBindings.js';
 import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
+import { isValidTransition } from './taskStatusTransitions.js';
 
 const AGENT_MENTION_COOLDOWN_MS = 60_000;
 
@@ -87,6 +88,14 @@ export function registerInternalAgentRoutes(
   internalAuthToken?: string,
   attachmentsDir?: string,
 ): void {
+  const broadcastChannelTasksChanged = (channelId: string) => {
+    broadcastToChannel(channelId, {
+      type: 'channel.tasks.changed',
+      channelId,
+      changedAt: Date.now(),
+    });
+  };
+
   app.addHook('onRequest', async (req, reply) => {
     if (!req.url.startsWith('/api/internal/agent/')) return;
     if (!internalAuthToken) return;
@@ -287,6 +296,7 @@ export function registerInternalAgentRoutes(
               recentMessages: activationContext.recentMessages,
               rootMessage: activationContext.rootMessage,
               unreadCount: activationContext.unreadCount,
+              oldestVisibleSeq: activationContext.oldestVisibleSeq,
               participants: activationContext.participants,
               boundTask: activationContext.boundTask,
               openTasks: activationContext.openTasks,
@@ -778,6 +788,8 @@ export function registerInternalAgentRoutes(
       });
     }
 
+    if (created.length > 0) broadcastChannelTasksChanged(channelId);
+
     reply.code(201);
     return { tasks: created };
   });
@@ -806,6 +818,7 @@ export function registerInternalAgentRoutes(
 
     const now = Date.now();
     const results: Array<{ messageId: string; taskNumber?: number; success: boolean; reason?: string; context?: ContextMsg[] }> = [];
+    let changed = false;
 
     for (const msgShortId of message_ids) {
       // Accept both full UUIDs and 8-char short IDs
@@ -829,12 +842,15 @@ export function registerInternalAgentRoutes(
          VALUES(?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?)`,
       ).run(taskId, channelId, taskNumber, taskTitle, msg.message_id, agentId, agent.name, agentId, agent.name, now, now);
       db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.message_id);
+      changed = true;
 
       results.push({
         messageId: msg.message_id, taskNumber, success: true,
         context: fetchTaskContext(db, channelId, msg.message_id),
       });
     }
+
+    if (changed) broadcastChannelTasksChanged(channelId);
 
     reply.code(201);
     return { results };
@@ -871,6 +887,7 @@ export function registerInternalAgentRoutes(
     const now = Date.now();
     const results: Array<{ taskNumber: number; success: boolean; reason?: string; messageId?: string | null; context?: ContextMsg[] }> = [];
     const threadBinding = resolveThreadBindingContext(db, conversationId, channelId);
+    let changed = false;
 
     for (const taskNumber of task_numbers) {
       const row = db
@@ -916,11 +933,15 @@ export function registerInternalAgentRoutes(
         `UPDATE tasks SET claimed_by_agent_id = ?, claimed_by_name = ?, status = ?, updated_at = ?
          WHERE task_id = ?`,
       ).run(agentId, agent.name, newStatus, now, row.taskId);
+      changed = true;
 
-      if (threadBinding.threadRootId) {
+      const ownerBinding = threadBinding.threadRootId
+        ? { channelId, threadRootId: threadBinding.threadRootId }
+        : getThreadBindingForTask(db, row.taskId);
+      if (ownerBinding) {
         setTargetOwner(db, {
-          channelId,
-          threadRootId: threadBinding.threadRootId,
+          channelId: ownerBinding.channelId,
+          threadRootId: ownerBinding.threadRootId,
           agentId,
           lastActiveAt: now,
         });
@@ -931,6 +952,8 @@ export function registerInternalAgentRoutes(
         context: row.messageId ? fetchTaskContext(db, channelId, row.messageId) : [],
       });
     }
+
+    if (changed) broadcastChannelTasksChanged(channelId);
 
     return { results };
   });
@@ -964,10 +987,10 @@ export function registerInternalAgentRoutes(
 
     const row = db
       .prepare(
-        `SELECT task_id as taskId, claimed_by_agent_id as claimedByAgentId
+        `SELECT task_id as taskId, claimed_by_agent_id as claimedByAgentId, status
          FROM tasks WHERE channel_id = ? AND task_number = ?`,
       )
-      .get(channelId, task_number) as { taskId: string; claimedByAgentId: string | null } | undefined;
+      .get(channelId, task_number) as { taskId: string; claimedByAgentId: string | null; status: 'todo' | 'in_progress' | 'in_review' | 'done' } | undefined;
 
     if (!row) {
       reply.code(404);
@@ -978,10 +1001,11 @@ export function registerInternalAgentRoutes(
       return { error: 'You do not own this task' };
     }
 
+    const newStatus = row.status === 'in_progress' ? 'todo' : row.status;
     db.prepare(
-      `UPDATE tasks SET claimed_by_agent_id = NULL, claimed_by_name = NULL, updated_at = ?
+      `UPDATE tasks SET claimed_by_agent_id = NULL, claimed_by_name = NULL, status = ?, updated_at = ?
        WHERE task_id = ?`,
-    ).run(Date.now(), row.taskId);
+    ).run(newStatus, Date.now(), row.taskId);
 
     const binding = getThreadBindingForTask(db, row.taskId);
     if (binding) {
@@ -992,6 +1016,8 @@ export function registerInternalAgentRoutes(
         lastActiveAt: Date.now(),
       });
     }
+
+    broadcastChannelTasksChanged(channelId);
 
     return { ok: true };
   });
@@ -1024,6 +1050,7 @@ export function registerInternalAgentRoutes(
       reply.code(400);
       return { error: `Invalid status: ${status}` };
     }
+    const nextStatus = status as 'todo' | 'in_progress' | 'in_review' | 'done';
 
     const channelId = resolveChannelFromTarget(channel, db);
     if (!channelId) {
@@ -1038,7 +1065,7 @@ export function registerInternalAgentRoutes(
       )
       .get(channelId, task_number) as {
         taskId: string;
-        currentStatus: string;
+        currentStatus: 'todo' | 'in_progress' | 'in_review' | 'done';
         claimedByAgentId: string | null;
       } | undefined;
 
@@ -1046,16 +1073,20 @@ export function registerInternalAgentRoutes(
       reply.code(404);
       return { error: 'Task not found' };
     }
+    if (!isValidTransition(row.currentStatus, nextStatus)) {
+      reply.code(400);
+      return { error: `Invalid transition: ${row.currentStatus} → ${nextStatus}` };
+    }
 
     // in_review→done is allowed by anyone; other transitions require the assignee
-    const isReviewToDone = row.currentStatus === 'in_review' && status === 'done';
+    const isReviewToDone = row.currentStatus === 'in_review' && nextStatus === 'done';
     if (!isReviewToDone && row.claimedByAgentId !== agentId) {
       reply.code(403);
       return { error: 'You must be the task assignee to update its status' };
     }
 
     db.prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?`).run(
-      status,
+      nextStatus,
       Date.now(),
       row.taskId,
     );
@@ -1065,12 +1096,14 @@ export function registerInternalAgentRoutes(
       setTargetOwner(db, {
         channelId: binding.channelId,
         threadRootId: binding.threadRootId,
-        agentId: status === 'done' ? null : (row.claimedByAgentId ?? null),
+        agentId: nextStatus === 'done' ? null : (row.claimedByAgentId ?? null),
         lastActiveAt: Date.now(),
       });
     }
 
-    return { ok: true, taskNumber: task_number, status };
+    broadcastChannelTasksChanged(channelId);
+
+    return { ok: true, taskNumber: task_number, status: nextStatus };
   });
 }
 

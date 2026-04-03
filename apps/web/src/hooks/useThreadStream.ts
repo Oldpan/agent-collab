@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useLayoutEffect } from "react";
+import { useState, useCallback, useRef, useLayoutEffect, useEffect } from "react";
 import type { ChannelMessage, ThreadCollaborationSummary } from "@/lib/api";
 import * as api from "@/lib/api";
 
@@ -18,6 +18,7 @@ function readUserName(): string {
 export function useThreadStream(
   channelId: string | null,
   threadRootId: string | null,
+  taskVersion = 0,
 ): {
   messages: ChannelMessage[];
   summary: ThreadCollaborationSummary | null;
@@ -68,10 +69,12 @@ export function useThreadStream(
     ws.onmessage = (evt) => {
       if (wsRef.current !== ws) return;
       try {
-        const event = JSON.parse(evt.data as string) as { type: string; message?: ChannelMessage };
+        const event = JSON.parse(evt.data as string) as { type: string; message?: ChannelMessage; channelId?: string };
         if (event.type === "channel.message" && event.message?.threadRootId === threadRootId) {
           const msg = event.message;
           setMessages((prev) => (prev.some((m) => m.id === msg.id) ? prev : [...prev, msg]));
+          loadSummary();
+        } else if (event.type === "channel.tasks.changed" && event.channelId === channelId) {
           loadSummary();
         }
       } catch {
@@ -87,6 +90,11 @@ export function useThreadStream(
       if (wsRef.current === ws) wsRef.current = null;
     };
   }, [channelId, threadRootId]);
+
+  useEffect(() => {
+    if (!channelId || !threadRootId) return;
+    void api.getThreadSummary(channelId, threadRootId).then(setSummary).catch(() => {});
+  }, [channelId, threadRootId, taskVersion]);
 
   const loadMore = useCallback(async () => {
     if (!channelId || !threadRootId || !hasMore) return;

@@ -21,10 +21,10 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('schema_version 应为最新版本 44', () => {
+  it('schema_version 应为最新版本', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBeGreaterThanOrEqual(42);
+    expect(row.version).toBeGreaterThanOrEqual(48);
     db.close();
   });
 
@@ -159,10 +159,11 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('tasks 表应包含 message_id 列', () => {
+  it('tasks 表应包含 message_id 与 thread_unbound 列', () => {
     const db = createTestDb();
     const cols = db.prepare("PRAGMA table_info('tasks')").all() as Array<{ name: string }>;
     expect(cols.map((c) => c.name)).toContain('message_id');
+    expect(cols.map((c) => c.name)).toContain('thread_unbound');
     db.close();
   });
 });

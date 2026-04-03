@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 47;
+const LATEST_VERSION = 48;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -839,5 +839,13 @@ export function migrate(db: Db): void {
       db.exec(`ALTER TABLE agents ADD COLUMN reasoning_effort TEXT;`);
     }
     db.exec(`UPDATE schema_version SET version = 47;`);
+  }
+
+  if (current < 48) {
+    const taskCols = db.prepare("PRAGMA table_info('tasks')").all() as Array<{ name: string }>;
+    if (!taskCols.some((c) => c.name === 'thread_unbound')) {
+      db.exec(`ALTER TABLE tasks ADD COLUMN thread_unbound INTEGER NOT NULL DEFAULT 0;`);
+    }
+    db.exec(`UPDATE schema_version SET version = 48;`);
   }
 }

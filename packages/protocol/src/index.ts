@@ -181,6 +181,12 @@ export type ChannelHistoryResetEvent = {
   type: 'channel.history.reset';
 };
 
+export type ChannelTasksChangedEvent = {
+  type: 'channel.tasks.changed';
+  channelId: string;
+  changedAt: number;
+};
+
 export type SystemNoticeEvent = {
   type: 'system.notice';
   message: string;
@@ -204,6 +210,7 @@ export type ServerEvent =
   | ChannelMessageEvent
   | ChannelNoticeEvent
   | ChannelHistoryResetEvent
+  | ChannelTasksChangedEvent
   | SystemNoticeEvent;
 
 // ─── 客户端 → 服务端 事件 ───

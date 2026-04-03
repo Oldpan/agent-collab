@@ -118,14 +118,14 @@ function ThreadSummaryCard({
     <div className="shrink-0 max-h-48 overflow-y-auto border-b-2 border-zinc-300 bg-[#fff7cc] px-4 py-3">
       <div className="grid gap-2 md:grid-cols-3">
         <div className="rounded-md border-2 border-zinc-900 bg-[#fffdf4] px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
-          <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Bound task</div>
+          <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Bound task-message</div>
           <div className="mt-1 text-sm font-medium text-zinc-900">
             {hasBoundTask ? `#${summary?.boundTask?.taskNumber} ${summary?.boundTask?.title}` : "Not linked yet"}
           </div>
           <div className="mt-1 text-[11px] text-zinc-500">
             {summary?.boundTask?.linkedThreadShortId
-              ? `Thread ${summary.boundTask.linkedThreadShortId}`
-              : "No linked thread"}
+              ? `Task thread ${summary.boundTask.linkedThreadShortId}`
+              : "No linked task thread"}
           </div>
           <div className="mt-3 space-y-2">
             {hasBoundTask ? (
@@ -176,7 +176,7 @@ function ThreadSummaryCard({
           <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Owner</div>
           <div className="mt-1 text-sm font-medium text-zinc-900">{summary?.ownerName ? `@${summary.ownerName}` : "No owner"}</div>
           <div className="mt-1 text-[11px] text-zinc-500">
-            {summary?.boundTask ? "Owner follows the current task assignee while work is active." : "Bind a task to make ownership explicit."}
+            {summary?.boundTask ? "Owner follows the current task-message assignee while work is active." : "Bind a task-message to make ownership explicit."}
           </div>
         </div>
 
@@ -197,7 +197,7 @@ function ThreadSummaryCard({
             <div className="mt-1 text-sm font-medium text-zinc-900">No participants yet</div>
           )}
           <div className="mt-1 text-[11px] text-zinc-500">
-            Agents who have recently worked in this thread appear here.
+            Agents who have recently worked in this task thread appear here.
           </div>
         </div>
       </div>
@@ -332,6 +332,7 @@ type ThreadPanelProps = {
   channelName: string;
   rootMessage: ChannelMessage;
   channelMembers: AgentInfo[];
+  taskVersion?: number;
   onClose: () => void;
   className?: string;
 };
@@ -341,11 +342,12 @@ export function ThreadPanel({
   channelName,
   rootMessage,
   channelMembers,
+  taskVersion = 0,
   onClose,
   className,
 }: ThreadPanelProps) {
   const threadRootId = rootMessage.id.slice(0, 8);
-  const { messages, summary, sendMessage, loadMore, hasMore } = useThreadStream(channelId, threadRootId);
+  const { messages, summary, sendMessage, loadMore, hasMore } = useThreadStream(channelId, threadRootId, taskVersion);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isRootUser = rootMessage.senderType === "user";
   const [showSummary, setShowSummary] = useState(false);
@@ -372,7 +374,7 @@ export function ThreadPanel({
     return () => {
       cancelled = true;
     };
-  }, [channelId, summaryState?.boundTask?.taskId]);
+  }, [channelId, summaryState?.boundTask?.taskId, taskVersion]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -413,7 +415,7 @@ export function ThreadPanel({
       <div className="flex shrink-0 items-center justify-between border-b-2 border-zinc-900 bg-[#fffdf5] px-4 py-3 shadow-[0_2px_0_0_rgba(0,0,0,0.08)]">
         <div className="flex items-center gap-2">
           <MessageSquareIcon className="size-4 text-zinc-600" />
-          <span className="text-sm font-semibold text-zinc-900">Thread</span>
+          <span className="text-sm font-semibold text-zinc-900">{rootMessage.taskNumber != null ? `Task thread #${rootMessage.taskNumber}` : "Thread"}</span>
           <span className="text-xs text-zinc-400">in #{channelName}</span>
         </div>
         <div className="flex items-center gap-1.5">

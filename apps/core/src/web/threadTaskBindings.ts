@@ -49,7 +49,7 @@ export function getBoundTaskForThread(
             t.claimed_by_name as assigneeName,
             t.created_at as boundAt
      FROM tasks t
-     WHERE t.channel_id = ? AND SUBSTR(t.message_id, 1, 8) = ?
+     WHERE t.channel_id = ? AND SUBSTR(t.message_id, 1, 8) = ? AND t.thread_unbound = 0
      LIMIT 1`,
   ).get(params.channelId, threadRootId) as BoundThreadTask | undefined;
   if (byMessageId) return byMessageId;
@@ -76,10 +76,18 @@ export function getBoundTaskForThread(
 }
 
 export function getThreadBindingForTask(db: Db, taskId: string): { channelId: string; threadRootId: string } | undefined {
-  return db.prepare(
+  const explicit = db.prepare(
     `SELECT channel_id as channelId, thread_root_id as threadRootId
      FROM thread_task_bindings
      WHERE task_id = ?
+     LIMIT 1`,
+  ).get(taskId) as { channelId: string; threadRootId: string } | undefined;
+  if (explicit) return explicit;
+
+  return db.prepare(
+    `SELECT channel_id as channelId, SUBSTR(message_id, 1, 8) as threadRootId
+     FROM tasks
+     WHERE task_id = ? AND message_id IS NOT NULL AND thread_unbound = 0
      LIMIT 1`,
   ).get(taskId) as { channelId: string; threadRootId: string } | undefined;
 }
@@ -125,6 +133,16 @@ export function bindTaskToThread(
      VALUES(?, ?, ?, ?)`,
   ).run(params.channelId, threadRootId, params.taskId, params.boundAt ?? Date.now());
 
+  db.prepare(
+    `UPDATE tasks
+     SET thread_unbound = CASE
+       WHEN SUBSTR(message_id, 1, 8) = ? THEN 0
+       ELSE thread_unbound
+     END,
+     updated_at = ?
+     WHERE task_id = ?`,
+  ).run(threadRootId, params.boundAt ?? Date.now(), params.taskId);
+
   return { ok: true };
 }
 
@@ -134,10 +152,16 @@ export function unbindTaskFromThread(
 ): void {
   const threadRootId = normalizeThreadRootId(params.threadRootId);
   if (!threadRootId) return;
+  const now = Date.now();
   db.prepare(
     `DELETE FROM thread_task_bindings
      WHERE channel_id = ? AND thread_root_id = ?`,
   ).run(params.channelId, threadRootId);
+  db.prepare(
+    `UPDATE tasks
+     SET thread_unbound = 1, updated_at = ?
+     WHERE channel_id = ? AND SUBSTR(message_id, 1, 8) = ? AND thread_unbound = 0`,
+  ).run(now, params.channelId, threadRootId);
 }
 
 export function getThreadCollaborationSummary(

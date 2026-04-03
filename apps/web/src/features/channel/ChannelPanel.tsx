@@ -233,11 +233,11 @@ function MessageRow({
               type="button"
               onClick={() => onMakeTask(message)}
               className="rounded border-2 border-zinc-900 bg-[#d8f8c8] px-2 py-0.5 text-[11px] font-medium text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)] hover:bg-[#b8f0a8] flex items-center gap-1"
-              aria-label="Make task"
-              title="Convert to task"
+              aria-label="Promote to task"
+              title="Promote this message into a task"
             >
               <ListTodoIcon className="size-3" />
-              Task
+              Promote
             </button>
           )}
         </div>
@@ -295,11 +295,11 @@ function MessageRow({
             {replyCount} {replyCount === 1 ? "reply" : "replies"}
           </button>
         )}
-        {/* Task badge — shown when this message was promoted to a task */}
+        {/* Task badge — shown when this message was promoted into the task workflow */}
         {message.taskNumber != null && (
           <div className="mt-1 flex items-center gap-1 text-[10px] text-zinc-500">
             <span className="rounded border border-zinc-300 bg-zinc-100 px-1.5 py-0.5 font-bold">
-              task #{message.taskNumber}
+              task-message #{message.taskNumber}
             </span>
             <span className="rounded border border-zinc-300 bg-zinc-50 px-1.5 py-0.5">
               {message.taskStatus ?? 'todo'}
@@ -961,7 +961,7 @@ function SettingsTab({
 
 export function ChannelPanel({ channel, agents, isAdmin = false, onAgentsUpdated, onOpenSidebar, onSeenSeq, onChannelUpdated }: ChannelPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "members" | "settings">("chat");
-  const { messages, notices, sendMessage, loadMore, hasMore, resetVersion } = useChannelStream({
+  const { messages, notices, sendMessage, loadMore, hasMore, resetVersion, taskVersion } = useChannelStream({
     channelId: channel.channelId,
     onSeenSeq,
   });
@@ -1055,6 +1055,18 @@ export function ChannelPanel({ channel, agents, isAdmin = false, onAgentsUpdated
   useEffect(() => {
     setOpenThread(null);
   }, [resetVersion]);
+
+  useEffect(() => {
+    if (!openThread) return;
+    const nextRoot = messages.find((message) => message.id === openThread.id);
+    if (nextRoot && nextRoot !== openThread) {
+      setOpenThread(nextRoot);
+    }
+  }, [messages, openThread]);
+
+  useEffect(() => {
+    setTaskOverrides(new Map());
+  }, [taskVersion]);
 
   const handleClearChat = useCallback(async () => {
     await clearChannelChat(channel.channelId);
@@ -1158,6 +1170,7 @@ export function ChannelPanel({ channel, agents, isAdmin = false, onAgentsUpdated
           channelId={channel.channelId}
           activeThreadShortId={openThread ? openThread.id.slice(0, 8) : undefined}
           onOpenThread={handleOpenTaskThread}
+          taskVersion={taskVersion}
         />
       ) : activeTab === "members" ? (
         <MembersTab members={channelMembers} />
@@ -1183,7 +1196,7 @@ export function ChannelPanel({ channel, agents, isAdmin = false, onAgentsUpdated
                     <HashIcon className="mx-auto mb-2 size-6 text-zinc-400" />
                     <p className="text-sm font-medium text-zinc-600">No messages yet</p>
                     <p className="mt-1 text-xs text-zinc-400">
-                      Send the first message to <span className="font-mono">#{channel.name}</span>
+                      Send the first message or create the first task-message in <span className="font-mono">#{channel.name}</span>
                     </p>
                   </div>
                 </div>
@@ -1237,6 +1250,7 @@ export function ChannelPanel({ channel, agents, isAdmin = false, onAgentsUpdated
                   channelName={channel.name}
                   rootMessage={openThread}
                   channelMembers={channelMembers}
+                  taskVersion={taskVersion}
                   onClose={() => setOpenThread(null)}
                   className="border-l-0"
                 />

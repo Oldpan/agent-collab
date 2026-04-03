@@ -4,6 +4,7 @@ import type { CoreToNode } from '@agent-collab/protocol';
 import type { Db } from '@agent-collab/runtime-acp';
 import { createTestConfig, createTestDb } from './helpers.js';
 import { ConversationManager } from '../web/conversationManager.js';
+import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
 
 describe('ExecutionDispatcher', () => {
   let db: Db;
@@ -261,6 +262,44 @@ describe('ExecutionDispatcher', () => {
 
     expect(row?.messageId).toBe('client-msg-1');
     expect(row?.content).toBe('你好');
+  });
+
+  it('私聊 resume 应附带局部 recent messages、history cursor 和去重后的 unread summary', async () => {
+    const agent = manager.createAgent({
+      name: 'Recover Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/recover-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    await manager.submitPrompt(conv.id, 'seed');
+    const firstDispatch = sent[0]?.msg;
+    if (!firstDispatch || firstDispatch.type !== 'run.dispatch') throw new Error('missing first dispatch');
+    finishRun(db, { runId: firstDispatch.runId, stopReason: 'end_turn' });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', conv.id);
+
+    const dmChannelId = `dm:${agent.agentId}`;
+    for (let i = 2; i <= 11; i += 1) {
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+         VALUES(?, ?, 'user', 'oldpan', 'user', 'dm:@oldpan', ?, ?, ?)`,
+      ).run(`dm-old-${i}`, dmChannelId, `old-${i}`, allocateNextChannelMessageSeq(db, dmChannelId), Date.now() + i);
+    }
+
+    await manager.submitPrompt(conv.id, 'current');
+
+    const secondDispatch = sent[1]?.msg;
+    if (!secondDispatch || secondDispatch.type !== 'run.dispatch') throw new Error('missing second dispatch');
+    expect(secondDispatch.dispatchMode).toBe('resume');
+    expect(secondDispatch.contextText).toContain('[Recent messages on this exact target]');
+    expect(secondDispatch.contextText).toContain('old-4');
+    expect(secondDispatch.contextText).toContain('old-11');
+    expect(secondDispatch.contextText).not.toContain('old-2');
+    expect(secondDispatch.contextText).toContain('[History cursor]\noldest_visible_seq: 4');
+    expect(secondDispatch.contextText).toContain('[Unread summary]\n2 older unread messages on this exact target were not included above. Use read_history(channel="dm:@oldpan", before=4) if you need them.');
+    expect(secondDispatch.contextText).not.toContain('[Inbox]');
   });
 
   it('cancelConversationRun 应发送 run.cancel 到节点', () => {

@@ -7,10 +7,12 @@ import { createRun, finishRun, log } from '@agent-collab/runtime-acp';
 import type { Db } from '@agent-collab/runtime-acp';
 import type { AppConfig } from '../config.js';
 import type { NodeRegistry } from '../services/nodeRegistry.js';
-import { bumpAgentMessageCheckpoint, getAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
+import { bumpAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
 import { buildDirectActivationPrompt } from '../web/directActivationPrompt.js';
+import { buildDirectActivationContextText } from '../web/directActivationPrompt.js';
 import { resolveConversationReplyTarget } from '../web/directReplyTargets.js';
 import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
+import { buildTargetActivationContext } from '../web/activationContext.js';
 
 const TURN_REPLY_CONTRACT = [
   '[Reply contract]',
@@ -147,16 +149,28 @@ export class ExecutionDispatcher {
             replyTarget: dmReplyTarget,
             content: promptText,
           });
+
+          if (dispatchMode !== 'cold_start') {
+            const dmActivationContext = buildTargetActivationContext(this.db, {
+              agentId: row.agentId,
+              channelId: dmChannelId,
+              replyTarget: dmReplyTarget,
+              triggerSeq: msgSeq,
+            });
+            const dmContextText = buildDirectActivationContextText({
+              target: dmReplyTarget,
+              recentMessages: dmActivationContext.recentMessages,
+              unreadCount: dmActivationContext.unreadCount,
+              oldestVisibleSeq: dmActivationContext.oldestVisibleSeq,
+            });
+            if (dmContextText) {
+              contextText += '\n\n' + dmContextText;
+            }
+          }
         }
 
         if (options?.activationContextText?.trim()) {
           contextText += '\n\n' + options.activationContextText;
-        }
-
-        const pendingCount = this.countPendingMessages(row.agentId, agent.channelIds ?? []);
-        if (pendingCount > 0) {
-          const label = pendingCount === 1 ? '1 unread message' : `${pendingCount} unread messages`;
-          contextText += `\n\n[Inbox]\n${label} in your channels since last check. Call check_messages when ready.`;
         }
 
       }
@@ -454,28 +468,6 @@ export class ExecutionDispatcher {
     const full = header + raw;
     if (full.length <= this.config.contextReplayMaxChars) return full;
     return header + raw.slice(Math.max(0, raw.length - this.config.contextReplayMaxChars));
-  }
-
-  private countPendingMessages(agentId: string, channelIds: string[]): number {
-    const dmChannelId = `dm:${agentId}`;
-    const allChannels = Array.from(new Set([...channelIds, dmChannelId]));
-    let total = 0;
-    for (const channelId of allChannels) {
-      const threadKeys = (this.db.prepare(
-        `SELECT DISTINCT COALESCE(thread_root_id, '') as threadKey
-         FROM channel_messages WHERE channel_id = ? AND sender_id != ?`,
-      ).all(channelId, agentId) as Array<{ threadKey: string }>).map((r) => r.threadKey);
-
-      for (const threadKey of threadKeys) {
-        const checkpoint = getAgentMessageCheckpoint(this.db, agentId, channelId, threadKey || null);
-        const row = this.db.prepare(
-          `SELECT COUNT(*) as count FROM channel_messages
-           WHERE channel_id = ? AND seq > ? AND sender_id != ? AND COALESCE(thread_root_id, '') = ?`,
-        ).get(channelId, checkpoint, agentId, threadKey) as { count: number };
-        total += row.count;
-      }
-    }
-    return total;
   }
 
   private updateStatus(conversationId: string, status: ConversationStatus): void {

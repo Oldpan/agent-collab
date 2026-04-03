@@ -116,7 +116,11 @@ export function createTestDb(): Db {
       next_seq   INTEGER NOT NULL
     );
   `);
-  db.exec(`UPDATE schema_version SET version = MAX(version, 47);`);
+  const taskCols = db.prepare("PRAGMA table_info('tasks')").all() as Array<{ name: string }>;
+  if (!taskCols.some((col) => col.name === 'thread_unbound')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN thread_unbound INTEGER NOT NULL DEFAULT 0;`);
+  }
+  db.exec(`UPDATE schema_version SET version = MAX(version, 48);`);
   return db;
 }
 

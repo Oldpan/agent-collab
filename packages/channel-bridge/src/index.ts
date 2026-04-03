@@ -249,7 +249,7 @@ server.tool(
 
 server.tool(
   'list_tasks',
-  "List tasks on a channel's task board. Returns tasks with their number (#t1, #t2...), title, status, and assignee.",
+  "List task-messages on a channel's board. Returns each task-message with its number (#t1, #t2...), title, status, assignee, and message root when available.",
   {
     channel: z.string().describe("The channel whose task board to view — e.g. '#general'"),
     status: z
@@ -298,7 +298,7 @@ server.tool(
 
 server.tool(
   'create_tasks',
-  "Create one or more tasks on a channel's task board. Returns the created task numbers.",
+  "Create one or more new task-messages on a channel's board. Each created task gets a task root message and a default thread.",
   {
     channel: z.string().describe("The channel to create tasks in — e.g. '#general'"),
     tasks: z
@@ -334,7 +334,7 @@ server.tool(
 
 server.tool(
   'claim_message',
-  `Convert one or more existing messages into tasks and claim them. Use the 8-character msg= ID from received messages or read_history. Each message becomes the thread root for that task — reply in its thread with send_message(target="${'#channel:msgid'}"). If a message is already a task, the claim fails.`,
+  `Promote one or more existing top-level messages into task-messages and claim them. Use the 8-character msg= ID from received messages or read_history. Each promoted message becomes the task root and default thread — reply in its thread with send_message(target="${'#channel:msgid'}"). If a message is already a task-message, the claim fails.`,
   {
     channel: z.string().describe("The channel — e.g. '#engineering'"),
     message_ids: z.array(z.string()).describe("8-char message IDs (the msg= value from check_messages or read_history, e.g. ['a1b2c3d4'])"),

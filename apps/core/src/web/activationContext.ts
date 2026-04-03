@@ -5,6 +5,7 @@ import { getBoundTaskForThread } from './threadTaskBindings.js';
 
 export type ActivationContextMessage = {
   messageId: string;
+  seq: number;
   target: string;
   senderName: string;
   senderType: 'user' | 'agent';
@@ -16,6 +17,7 @@ export type TargetActivationContext = {
   replyTarget: string;
   recentMessages: ActivationContextMessage[];
   unreadCount: number;
+  oldestVisibleSeq?: number;
   participants: TargetParticipant[];
   boundTask?: { taskNumber: number; title: string; status: string; claimedByName: string | null };
   openTasks: Array<{ taskNumber: number; title: string; status: string; claimedByName: string | null }>;
@@ -42,7 +44,7 @@ export function buildTargetActivationContext(
 
   const recentMessages = (
     db.prepare(
-      `SELECT message_id as messageId, target, sender_name as senderName, sender_type as senderType,
+      `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
               content, created_at as createdAt
        FROM channel_messages
        WHERE channel_id = ? AND ${threadClause} AND seq < ?
@@ -52,6 +54,11 @@ export function buildTargetActivationContext(
   ).reverse();
 
   const checkpoint = getAgentMessageCheckpoint(db, params.agentId, params.channelId, normalizedThreadRootId);
+  const oldestVisibleSeq = recentMessages.length > 0
+    ? recentMessages[0].seq
+    : undefined;
+  const unreadUpperBound = oldestVisibleSeq ?? params.triggerSeq;
+
   const unreadRow = db.prepare(
     `SELECT COUNT(*) as count
      FROM channel_messages
@@ -60,11 +67,11 @@ export function buildTargetActivationContext(
        AND seq > ?
        AND seq < ?
        AND sender_id != ?`,
-  ).get(params.channelId, ...threadArgs, checkpoint, params.triggerSeq, params.agentId) as { count: number };
+  ).get(params.channelId, ...threadArgs, checkpoint, unreadUpperBound, params.agentId) as { count: number };
 
   const rootMessage = normalizedThreadRootId
     ? db.prepare(
-      `SELECT message_id as messageId, target, sender_name as senderName, sender_type as senderType,
+      `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
               content, created_at as createdAt
        FROM channel_messages
        WHERE channel_id = ? AND substr(message_id, 1, 8) = ?
@@ -119,6 +126,7 @@ export function buildTargetActivationContext(
     replyTarget: params.replyTarget,
     recentMessages,
     unreadCount: unreadRow.count,
+    ...(oldestVisibleSeq ? { oldestVisibleSeq } : {}),
     participants,
     ...(boundTask ? { boundTask } : {}),
     openTasks: boundTask ? [] : openTasks,

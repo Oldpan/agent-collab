@@ -29,12 +29,14 @@ export function useChannelStream(options: UseChannelStreamOptions): {
   loadMore: () => Promise<void>;
   hasMore: boolean;
   resetVersion: number;
+  taskVersion: number;
 } {
   const { channelId, onSeenSeq } = options;
   const [messages, setMessages] = useState<ChannelMessage[]>([]);
   const [notices, setNotices] = useState<ChannelNotice[]>([]);
   const [hasMore, setHasMore] = useState(true);
   const [resetVersion, setResetVersion] = useState(0);
+  const [taskVersion, setTaskVersion] = useState(0);
   const wsRef = useRef<WebSocket | null>(null);
   const onSeenSeqRef = useRef<typeof onSeenSeq>(onSeenSeq);
 
@@ -47,6 +49,7 @@ export function useChannelStream(options: UseChannelStreamOptions): {
     setNotices([]);
     setHasMore(true);
     setResetVersion(0);
+    setTaskVersion(0);
     if (!channelId) {
       wsRef.current = null;
       return;
@@ -84,6 +87,7 @@ export function useChannelStream(options: UseChannelStreamOptions): {
           type: string;
           message?: ChannelMessage;
           notice?: { message: string; createdAt: string };
+          channelId?: string;
         };
         if (event.type === "channel.message" && event.message) {
           const msg = event.message;
@@ -112,6 +116,9 @@ export function useChannelStream(options: UseChannelStreamOptions): {
           setMessages([]);
           setHasMore(true);
           setResetVersion((prev) => prev + 1);
+          loadInitialMessages();
+        } else if (event.type === "channel.tasks.changed" && event.channelId === channelId) {
+          setTaskVersion((prev) => prev + 1);
           loadInitialMessages();
         }
       } catch {
@@ -170,5 +177,5 @@ export function useChannelStream(options: UseChannelStreamOptions): {
     [channelId],
   );
 
-  return { messages, notices, sendMessage, loadMore, hasMore, resetVersion };
+  return { messages, notices, sendMessage, loadMore, hasMore, resetVersion, taskVersion };
 }

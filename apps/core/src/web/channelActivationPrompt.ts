@@ -15,9 +15,17 @@ type ChannelActivationContextParams = {
   recentMessages?: ActivationContextMessage[];
   rootMessage?: ActivationContextMessage;
   unreadCount?: number;
+  oldestVisibleSeq?: number;
   participants?: TargetParticipant[];
   boundTask?: { taskNumber: number; title: string; status: string; claimedByName: string | null };
   openTasks?: Array<{ taskNumber: number; title: string; status: string; claimedByName: string | null }>;
+};
+
+type ExactTargetHistoryContextParams = {
+  target: string;
+  recentMessages?: ActivationContextMessage[];
+  unreadCount?: number;
+  oldestVisibleSeq?: number;
 };
 
 export function buildChannelActivationPrompt(params: ChannelActivationPromptParams): string {
@@ -62,18 +70,8 @@ export function buildChannelActivationContextText(params: ChannelActivationConte
     parts.push(`[Thread root message]\n${formatPromptMessage(params.rootMessage)}`);
   }
 
-  if (params.recentMessages && params.recentMessages.length > 0) {
-    parts.push(
-      `[Recent messages on this exact target]\n${params.recentMessages.map(formatPromptMessage).join('\n\n')}`,
-    );
-  }
-
-  if ((params.unreadCount ?? 0) > 0) {
-    const label = params.unreadCount === 1 ? '1 older unread message' : `${params.unreadCount} older unread messages`;
-    parts.push(
-      `[Unread summary]\n${label} exist on this exact target before the triggering message. Use read_history(channel="${params.target}") if you need them in full.`,
-    );
-  }
+  const historyContextText = buildExactTargetHistoryContextText(params);
+  if (historyContextText) parts.push(historyContextText);
 
   if (params.participants && params.participants.length > 0) {
     parts.push(
@@ -87,16 +85,42 @@ export function buildChannelActivationContextText(params: ChannelActivationConte
   if (params.boundTask) {
     const assignee = params.boundTask.claimedByName ? ` @${params.boundTask.claimedByName}` : ' unassigned';
     parts.push(
-      `[Bound task for this thread]\n#${params.boundTask.taskNumber} [${params.boundTask.status}]${assignee} — ${params.boundTask.title}\nIf you are not the owner/assignee, default to coordination and discussion unless you explicitly claim or are asked to take over.`,
+      `[Bound task-message for this thread]\n#${params.boundTask.taskNumber} [${params.boundTask.status}]${assignee} — ${params.boundTask.title}\nThis thread is the shared work surface for that task-message. If you are not the owner/assignee, default to coordination and discussion unless you explicitly claim or are asked to take over.`,
     );
   }
 
   if (params.openTasks && params.openTasks.length > 0) {
     parts.push(
-      `[Task board summary]\n${params.openTasks.map((task) => {
+      `[Task-message board summary]\n${params.openTasks.map((task) => {
         const assignee = task.claimedByName ? ` @${task.claimedByName}` : ' unassigned';
         return `#${task.taskNumber} [${task.status}]${assignee} — ${task.title}`;
       }).join('\n')}`,
+    );
+  }
+
+  return parts.join('\n\n');
+}
+
+export function buildExactTargetHistoryContextText(params: ExactTargetHistoryContextParams): string {
+  const parts: string[] = [];
+
+  if (params.recentMessages && params.recentMessages.length > 0) {
+    parts.push(
+      `[Recent messages on this exact target]\n${params.recentMessages.map(formatPromptMessage).join('\n\n')}`,
+    );
+  }
+
+  if (params.oldestVisibleSeq != null) {
+    parts.push(`[History cursor]\noldest_visible_seq: ${params.oldestVisibleSeq}`);
+  }
+
+  if ((params.unreadCount ?? 0) > 0) {
+    const label = params.unreadCount === 1 ? '1 older unread message' : `${params.unreadCount} older unread messages`;
+    const readHint = params.oldestVisibleSeq != null
+      ? ` Use read_history(channel="${params.target}", before=${params.oldestVisibleSeq}) if you need them.`
+      : ` Use read_history(channel="${params.target}") if you need them.`;
+    parts.push(
+      `[Unread summary]\n${label} on this exact target were not included above.${readHint}`,
     );
   }
 
@@ -109,6 +133,7 @@ function formatPromptMessage(message: ActivationContextMessage): string {
     '[Message metadata]',
     `target: ${message.target}`,
     `msg: ${message.messageId.slice(0, 8)}`,
+    `seq: ${message.seq}`,
     `time: ${new Date(message.createdAt).toISOString()}`,
     `sender: @${message.senderName}${senderTypeLine}`,
     '',

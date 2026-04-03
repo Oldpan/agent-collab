@@ -1038,6 +1038,140 @@ describe('internalAgentRouter', () => {
     ).get() as { taskId: string } | undefined;
     expect(binding?.taskId).toBe('task-done-1');
   });
+
+  it('agent 不应允许非法状态流转 todo → done', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'TaskTransitionBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/task-transition-bob',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, claimed_by_agent_id, claimed_by_name, created_at, updated_at)
+       VALUES('task-transition-1', 'default', 31, 'Do not skip', 'todo', ?, ?, ?, ?)`,
+    ).run(agent.agentId, agent.name, now, now);
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/update-status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: '#default',
+        task_number: 31,
+        status: 'done',
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error?: string };
+    expect(body.error).toBe('Invalid transition: todo → done');
+  });
+
+  it('unclaim in_progress task 时应回退到 todo', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'TaskUnclaimBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/task-unclaim-bob',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, claimed_by_agent_id, claimed_by_name, created_at, updated_at)
+       VALUES('task-unclaim-1', 'default', 32, 'Rollback me', 'in_progress', ?, ?, ?, ?)`,
+    ).run(agent.agentId, agent.name, now, now);
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/unclaim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: '#default',
+        task_number: 32,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const task = db.prepare(
+      `SELECT status, claimed_by_agent_id as claimedByAgentId, claimed_by_name as claimedByName
+       FROM tasks WHERE task_id = 'task-unclaim-1'`,
+    ).get() as { status: string; claimedByAgentId: string | null; claimedByName: string | null };
+    expect(task).toEqual({
+      status: 'todo',
+      claimedByAgentId: null,
+      claimedByName: null,
+    });
+  });
+
+  it('隐式 task-root thread 的 claim / done 也应同步 owner', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'ImplicitOwnerBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/implicit-owner-bob',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    const seq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('feedbeef-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Implicit owner', ?, ?)`,
+    ).run(seq, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
+       VALUES('task-implicit-owner', 'default', 33, 'Implicit owner', 'todo', 'feedbeef-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(now, now);
+
+    let res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: '#default',
+        task_numbers: [33],
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    let participant = db.prepare(
+      `SELECT role FROM target_participants
+       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'feedbeef'`,
+    ).get(agent.agentId) as { role: string } | undefined;
+    expect(participant?.role).toBe('owner');
+
+    res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/update-status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: '#default',
+        task_number: 33,
+        status: 'in_review',
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/update-status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: '#default',
+        task_number: 33,
+        status: 'done',
+      }),
+    });
+    expect(res.status).toBe(200);
+
+    participant = db.prepare(
+      `SELECT role FROM target_participants
+       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'feedbeef'`,
+    ).get(agent.agentId) as { role: string } | undefined;
+    expect(participant?.role).toBe('participant');
+  });
 });
 
 async function expectDispatchCount(expected: number): Promise<void> {

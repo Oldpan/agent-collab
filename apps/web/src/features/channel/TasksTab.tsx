@@ -16,6 +16,7 @@ type TasksTabProps = {
   channelId: string;
   activeThreadShortId?: string;
   onOpenThread?: (threadShortId: string) => void;
+  taskVersion?: number;
 };
 
 const TASK_ORDER: TaskInfo["status"][] = ["todo", "in_progress", "in_review", "done"];
@@ -51,7 +52,7 @@ function statusClassName(status: TaskInfo["status"]): string {
   }
 }
 
-export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: TasksTabProps) {
+export function TasksTab({ channelId, activeThreadShortId, onOpenThread, taskVersion = 0 }: TasksTabProps) {
   const [tasks, setTasks] = useState<ChannelTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -78,7 +79,7 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: Tasks
 
   useEffect(() => {
     void loadTasks();
-  }, [loadTasks]);
+  }, [loadTasks, taskVersion]);
 
   const grouped = useMemo(() => {
     const buckets: Record<TaskInfo["status"], ChannelTask[]> = {
@@ -203,7 +204,7 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: Tasks
                 void handleCreate();
               }
             }}
-            placeholder="New task title"
+            placeholder="New task-message title"
             className="h-9 flex-1 rounded-sm border-2 border-zinc-900 bg-white px-3 text-sm text-zinc-900 placeholder:text-zinc-400"
             disabled={creating}
           />
@@ -213,7 +214,7 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: Tasks
             disabled={creating || !title.trim()}
             className="h-9 rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
           >
-            Add
+            Create task
           </Button>
         </div>
         <textarea
@@ -231,8 +232,8 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: Tasks
         )}
         <div className="mt-3 rounded-sm border border-zinc-900/10 bg-white/60 px-3 py-2 text-xs text-zinc-600">
           {activeThreadShortId
-            ? <>Current thread: <span className="font-mono">{activeThreadShortId}</span>. Tasks without a linked thread can be bound here.</>
-            : "New tasks automatically create a thread in Chat. Click a task's thread link to open it."}
+            ? <>Current thread: <span className="font-mono">{activeThreadShortId}</span>. Unbound task-messages can be attached here.</>
+            : "New tasks create task root messages and default threads in Chat. Click a task thread link to open it."}
         </div>
       </div>
 
@@ -243,7 +244,7 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: Tasks
           </div>
         ) : tasks.length === 0 ? (
           <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fff8d8] px-4 py-6 text-center text-sm text-zinc-500">
-            No tasks yet. Add the first task for this channel.
+            No task-messages yet. Create the first task-message for this channel.
           </div>
         ) : (
           <div className="space-y-4">
@@ -316,11 +317,11 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: Tasks
                                     onClick={() => onOpenThread?.(task.linkedThreadShortId!)}
                                     className="rounded-full border border-zinc-400 bg-[#d8efff] px-2 py-0.5 text-blue-700 hover:bg-[#b8e0ff] transition-colors"
                                   >
-                                    Thread {task.linkedThreadShortId}
+                                    Task thread {task.linkedThreadShortId}
                                   </button>
                                 ) : (
                                   <span className="rounded-full border border-dashed border-zinc-300 bg-[#fffdf4] px-2 py-0.5">
-                                    No linked thread
+                                    No task thread
                                   </span>
                                 )}
                                 {!task.assigneeName && (
@@ -356,7 +357,7 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: Tasks
                                   </Button>
                                 ) : task.linkedThreadShortId ? (
                                   <div className="text-[11px] text-zinc-400">
-                                    Bound to {task.linkedThreadShortId}
+                                    Bound to task thread {task.linkedThreadShortId}
                                   </div>
                                 ) : (
                                   <Button
@@ -365,7 +366,7 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread }: Tasks
                                     onClick={() => void handleBind(task)}
                                     className="h-8 rounded-sm border-2 border-zinc-900 bg-[#d8f8c8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#c8efb8]"
                                   >
-                                    {bindingTaskNumber === task.taskNumber ? "Saving..." : "Bind to current thread"}
+                                    {bindingTaskNumber === task.taskNumber ? "Saving..." : "Bind to current task thread"}
                                   </Button>
                                 )
                               ) : null}
