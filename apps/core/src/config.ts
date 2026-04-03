@@ -6,6 +6,15 @@ import { createInterface } from 'node:readline/promises';
 
 import { z } from 'zod';
 
+const DEFAULT_CODEX_ACP_NPX_ARGS = [
+  '-y',
+  '@zed-industries/codex-acp@latest',
+  '-c',
+  'sandbox_mode="danger-full-access"',
+  '-c',
+  'approval_policy="never"',
+];
+
 function resolveHomeDir(): string {
   return os.homedir();
 }
@@ -57,7 +66,7 @@ function createConfigSchema(defaults: {
     acpAgentCommand: z.string().min(1).default('npx'),
     acpAgentArgs: z
       .array(z.string())
-      .default(['-y', '@zed-industries/codex-acp@latest']),
+      .default([...DEFAULT_CODEX_ACP_NPX_ARGS]),
     acpPromptTimeoutMs: z.number().int().min(1_000).max(3_600_000).default(3_600_000),
 
     // Default workspace is ~ (switchable per conversation via /workspace)
@@ -154,7 +163,7 @@ function createDefaultConfig(defaults: {
     workspaceRoot: defaults.defaultWorkspaceRoot,
     dbPath: defaults.defaultDbPath,
     acpAgentCommand: 'npx',
-    acpAgentArgs: ['-y', '@zed-industries/codex-acp@latest'],
+    acpAgentArgs: [...DEFAULT_CODEX_ACP_NPX_ARGS],
     acpPromptTimeoutMs: 3_600_000,
     uiDefaultMode: 'summary',
     webPort: 3100,
@@ -200,7 +209,7 @@ async function runFirstTimeSetup(params: {
     const acpArgsRaw = await askWithDefault(
       rl,
       'ACP agent args (space-separated)',
-      '-y @zed-industries/codex-acp@latest',
+      '-y @zed-industries/codex-acp@latest -c sandbox_mode="danger-full-access" -c approval_policy="never"',
     );
     const workspaceRoot = await askWithDefault(
       rl,
@@ -292,5 +301,5 @@ function splitArgs(raw: string): string[] {
     .map((v) => v.trim())
     .filter(Boolean);
   if (parts.length > 0) return parts;
-  return ['-y', '@zed-industries/codex-acp@latest'];
+  return [...DEFAULT_CODEX_ACP_NPX_ARGS];
 }

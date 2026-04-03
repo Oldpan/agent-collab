@@ -20,6 +20,8 @@ import { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/agentWorkspaceService.js';
 import { AgentSkillsBroker } from '../services/agentSkillsBroker.js';
 import { AgentSkillsService, AgentSkillsServiceError } from '../services/agentSkillsService.js';
+import { CodexTranscriptBroker } from '../services/codexTranscriptBroker.js';
+import { CodexTranscriptService } from '../services/codexTranscriptService.js';
 import { findMentionedAgents } from './channelMentions.js';
 import { buildChannelActivationPrompt, buildChannelActivationContextText } from './channelActivationPrompt.js';
 import { appendChannelResetMarkers } from './channelMemoryNotes.js';
@@ -65,6 +67,7 @@ export async function startServer(params: {
   const nodeRegistry = params.nodeRegistry ?? new NodeRegistry();
   const workspaceBroker = params.workspaceBroker ?? new AgentWorkspaceBroker({ nodeRegistry });
   const skillsBroker = params.skillsBroker ?? new AgentSkillsBroker({ nodeRegistry });
+  const codexTranscriptBroker = new CodexTranscriptBroker({ nodeRegistry });
   const workspaceService = new AgentWorkspaceService({
     getAgentById: (agentId) => conversationManager.getAgent(agentId),
     broker: workspaceBroker,
@@ -72,6 +75,21 @@ export async function startServer(params: {
   const skillsService = new AgentSkillsService({
     getAgentById: (agentId) => conversationManager.getAgent(agentId),
     broker: skillsBroker,
+  });
+  const codexTranscriptService = new CodexTranscriptService({
+    db,
+    broker: codexTranscriptBroker,
+    getConversationById: (conversationId) => conversationManager.getConversation(conversationId),
+    getAgentById: (agentId) => conversationManager.getAgent(agentId),
+    getAcpSessionIdByConversationId: (conversationId) => {
+      const row = db.prepare(
+        `SELECT s.acp_session_id as acpSessionId
+           FROM conversations c
+           JOIN sessions s ON s.session_key = c.session_key
+          WHERE c.id = ?`,
+      ).get(conversationId) as { acpSessionId: string | null } | undefined;
+      return row?.acpSessionId ?? null;
+    },
   });
 
   const app = Fastify({ logger: false });
@@ -565,6 +583,34 @@ export async function startServer(params: {
         thinkingText: thinkingText || undefined,
       };
     });
+  });
+
+  app.get<{ Params: { id: string } }>('/api/conversations/:id/codex-debug', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
+    const conv = conversationManager.getConversation(req.params.id);
+    if (!conv) {
+      reply.code(404);
+      return { error: 'Not found' };
+    }
+
+    try {
+      return await codexTranscriptService.getConversationDebug(req.params.id);
+    } catch (error) {
+      const message = String((error as Error)?.message ?? error);
+      if (message === 'Conversation not found.') {
+        reply.code(404);
+      } else if (
+        message === 'Codex debug is only supported for codex_acp conversations.'
+        || message === 'Conversation is not assigned to a remote node.'
+        || message === 'Conversation has no workspace path.'
+        || message === 'Conversation has no reply target.'
+      ) {
+        reply.code(409);
+      } else {
+        reply.code(500);
+      }
+      return { error: message };
+    }
   });
 
   // Channel message history for a conversation (used by frontend to load DM history)
@@ -1663,7 +1709,16 @@ export async function startServer(params: {
     '/api/nodes/connect',
     { websocket: true },
     (socket) => {
-      handleNodeWebSocket(socket, nodeRegistry, broadcast, db, conversationManager, workspaceBroker, skillsBroker);
+      handleNodeWebSocket(
+        socket,
+        nodeRegistry,
+        broadcast,
+        db,
+        conversationManager,
+        workspaceBroker,
+        skillsBroker,
+        codexTranscriptBroker,
+      );
     },
   );
 

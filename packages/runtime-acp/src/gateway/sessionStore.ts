@@ -128,10 +128,24 @@ export function updateAcpSessionId(
   ).run(acpSessionId, now, sessionKey);
 }
 
+export function updateSessionRuntimeState(
+  db: Db,
+  params: {
+    sessionKey: string;
+    acpSessionId: string;
+    systemPromptText?: string | null;
+  },
+): void {
+  const now = Date.now();
+  db.prepare(
+    'UPDATE sessions SET acp_session_id = ?, system_prompt_text = ?, updated_at = ? WHERE session_key = ?',
+  ).run(params.acpSessionId, params.systemPromptText ?? null, now, params.sessionKey);
+}
+
 export function clearAcpSessionId(db: Db, sessionKey: string): void {
   const now = Date.now();
   db.prepare(
-    'UPDATE sessions SET acp_session_id = NULL, updated_at = ? WHERE session_key = ?',
+    'UPDATE sessions SET acp_session_id = NULL, system_prompt_text = NULL, updated_at = ? WHERE session_key = ?',
   ).run(now, sessionKey);
 }
 
@@ -170,6 +184,7 @@ export function updateSessionAgentConfig(
        SET agent_command = ?,
            agent_args_json = ?,
            acp_session_id = NULL,
+           system_prompt_text = NULL,
            updated_at = ?
      WHERE session_key = ?
     `,
@@ -189,12 +204,13 @@ export function getSession(
   agentCommand: string;
   agentArgsJson: string;
   acpSessionId: string | null;
+  systemPromptText: string | null;
   cwd: string;
   loadSupported: number;
 } | null {
   const row = db
     .prepare(
-      'SELECT session_key as sessionKey, agent_command as agentCommand, agent_args_json as agentArgsJson, acp_session_id as acpSessionId, cwd, load_supported as loadSupported FROM sessions WHERE session_key = ?',
+      'SELECT session_key as sessionKey, agent_command as agentCommand, agent_args_json as agentArgsJson, acp_session_id as acpSessionId, system_prompt_text as systemPromptText, cwd, load_supported as loadSupported FROM sessions WHERE session_key = ?',
     )
     .get(sessionKey) as any;
   return row ?? null;

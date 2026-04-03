@@ -20,6 +20,9 @@ export function createTestDb(): Db {
   if (!convCols.some((col) => col.name === 'thread_root_id')) {
     db.exec(`ALTER TABLE conversations ADD COLUMN thread_root_id TEXT;`);
   }
+  if (!convCols.some((col) => col.name === 'history_reset_at')) {
+    db.exec(`ALTER TABLE conversations ADD COLUMN history_reset_at INTEGER;`);
+  }
   db.exec(`
     CREATE TABLE IF NOT EXISTS conversation_prompt_queue (
       queue_id         INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -120,7 +123,7 @@ export function createTestDb(): Db {
   if (!taskCols.some((col) => col.name === 'thread_unbound')) {
     db.exec(`ALTER TABLE tasks ADD COLUMN thread_unbound INTEGER NOT NULL DEFAULT 0;`);
   }
-  db.exec(`UPDATE schema_version SET version = MAX(version, 48);`);
+  db.exec(`UPDATE schema_version SET version = MAX(version, 49);`);
   return db;
 }
 

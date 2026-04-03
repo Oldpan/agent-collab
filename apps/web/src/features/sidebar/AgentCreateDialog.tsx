@@ -2,7 +2,6 @@ import { useState, useCallback, useMemo } from "react";
 import { Button } from "@/components/ui/button";
 import type { AgentType, CreateAgentRequest } from "@agent-collab/protocol";
 import { cn } from "@/lib/utils";
-import defaultSystemPrompt from "@/prompts/default-system-prompt.md?raw";
 import { Textarea } from "@/components/ui/textarea";
 import { parseEnvVarsText } from "@/lib/env-vars";
 import { CODEX_MODEL_OPTIONS, getCodexReasoningOptions } from "@/lib/codex-models";
@@ -19,7 +18,6 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
   const [agentType, setAgentType] = useState<AgentType>("claude_acp");
   const [model, setModel] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState("");
-  const [systemPrompt, setSystemPrompt] = useState(defaultSystemPrompt);
   const [envVarsText, setEnvVarsText] = useState("");
   const [creating, setCreating] = useState(false);
   const parsedEnvVars = useMemo(() => parseEnvVarsText(envVarsText), [envVarsText]);
@@ -36,7 +34,6 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
         agentType,
         model: agentType === "codex_acp" ? (model.trim() || undefined) : undefined,
         reasoningEffort: agentType === "codex_acp" ? (reasoningEffort.trim() || undefined) : undefined,
-        systemPrompt: systemPrompt.trim() || undefined,
         envVars,
         nodeId: machineNodeId,
       });
@@ -44,7 +41,7 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
     } finally {
       setCreating(false);
     }
-  }, [name, description, agentType, model, reasoningEffort, systemPrompt, envVars, machineNodeId, onCreate, onClose]);
+  }, [name, description, agentType, model, reasoningEffort, envVars, machineNodeId, onCreate, onClose]);
 
   return (
     <div className="space-y-3">
@@ -102,16 +99,6 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
             </button>
           ))}
         </div>
-      </div>
-
-      <div className="space-y-0.5">
-        <label className="text-[10px] text-zinc-500">System Prompt</label>
-        <textarea
-          className="min-h-[80px] w-full resize-none rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs placeholder:text-zinc-400"
-          placeholder="System prompt (optional)"
-          value={systemPrompt}
-          onChange={(e) => setSystemPrompt(e.target.value)}
-        />
       </div>
 
       {agentType === "codex_acp" && (

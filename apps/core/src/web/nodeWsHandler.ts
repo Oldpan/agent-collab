@@ -6,6 +6,7 @@ import type { Db } from '@agent-collab/runtime-acp';
 import type { NodeRegistry } from '../services/nodeRegistry.js';
 import type { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import type { AgentSkillsBroker } from '../services/agentSkillsBroker.js';
+import type { CodexTranscriptBroker } from '../services/codexTranscriptBroker.js';
 import type { ConversationManager } from './conversationManager.js';
 import { resolveConversationReplyTarget } from './directReplyTargets.js';
 import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
@@ -15,6 +16,53 @@ function appendNodeEvent(db: Db, runId: string, seq: number, event: ServerEvent)
   db.prepare(
     'INSERT OR IGNORE INTO events(run_id, seq, method, payload_json, created_at) VALUES(?, ?, ?, ?, ?)',
   ).run(runId, seq, 'node/event', JSON.stringify(event), Date.now());
+}
+
+function applyRunDebugSnapshot(
+  db: Db,
+  params: {
+    runId: string;
+    conversationId: string;
+    sessionKey: string;
+    acpSessionId: string;
+    isFreshSession: boolean;
+    isExact: boolean;
+    effectiveSystemPromptText?: string;
+    effectiveContextText?: string;
+  },
+): void {
+  const now = Date.now();
+  db.prepare(
+    `UPDATE run_debug_inputs
+        SET acp_session_id = ?,
+            is_fresh_session = ?,
+            is_exact = ?,
+            system_prompt_text = COALESCE(?, system_prompt_text),
+            context_text = ?,
+            updated_at = ?
+      WHERE run_id = ?`,
+  ).run(
+    params.acpSessionId,
+    params.isFreshSession ? 1 : 0,
+    params.isExact ? 1 : 0,
+    params.effectiveSystemPromptText ?? null,
+    params.effectiveContextText ?? null,
+    now,
+    params.runId,
+  );
+
+  db.prepare(
+    `UPDATE sessions
+        SET acp_session_id = ?,
+            system_prompt_text = COALESCE(?, system_prompt_text),
+            updated_at = ?
+      WHERE session_key = ?`,
+  ).run(
+    params.acpSessionId,
+    params.effectiveSystemPromptText ?? null,
+    now,
+    params.sessionKey,
+  );
 }
 
 /** Event types worth persisting for history replay */
@@ -419,6 +467,7 @@ export function handleNodeWebSocket(
   manager: ConversationManager,
   workspaceBroker?: AgentWorkspaceBroker,
   skillsBroker?: AgentSkillsBroker,
+  codexTranscriptBroker?: CodexTranscriptBroker,
 ): void {
   let nodeId: string | null = null;
   // Sequence counter per runId for node/event persistence
@@ -600,6 +649,20 @@ export function handleNodeWebSocket(
         break;
       }
 
+      case 'run.debug.snapshot': {
+        applyRunDebugSnapshot(db, {
+          runId: msg.runId,
+          conversationId: msg.conversationId,
+          sessionKey: msg.sessionKey,
+          acpSessionId: msg.acpSessionId,
+          isFreshSession: msg.isFreshSession,
+          isExact: msg.isExact,
+          effectiveSystemPromptText: msg.effectiveSystemPromptText,
+          effectiveContextText: msg.effectiveContextText,
+        });
+        break;
+      }
+
       case 'permission.request': {
         db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
           .run('awaiting_approval', Date.now(), msg.conversationId);
@@ -648,6 +711,16 @@ export function handleNodeWebSocket(
         break;
       }
 
+      case 'codex.transcript.list.response': {
+        codexTranscriptBroker?.handleListResponse(msg);
+        break;
+      }
+
+      case 'codex.transcript.read.response': {
+        codexTranscriptBroker?.handleReadResponse(msg);
+        break;
+      }
+
       default: {
         log.warn('[node-ws] unknown message type', (msg as any).type);
       }
@@ -659,6 +732,7 @@ export function handleNodeWebSocket(
       const disconnectMessage = `Agent node disconnected: ${nodeId}`;
       workspaceBroker?.rejectPendingForNode(nodeId);
       skillsBroker?.rejectPendingForNode(nodeId);
+      codexTranscriptBroker?.rejectPendingForNode(nodeId);
       manager.rejectPendingDispatchesForNode(nodeId, disconnectMessage);
       registry.unregister(nodeId);
       db.prepare(`UPDATE nodes SET status='offline', last_seen=? WHERE node_id=?`)

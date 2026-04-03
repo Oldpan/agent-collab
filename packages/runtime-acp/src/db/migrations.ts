@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 48;
+const LATEST_VERSION = 50;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -847,5 +847,47 @@ export function migrate(db: Db): void {
       db.exec(`ALTER TABLE tasks ADD COLUMN thread_unbound INTEGER NOT NULL DEFAULT 0;`);
     }
     db.exec(`UPDATE schema_version SET version = 48;`);
+  }
+
+  if (current < 49) {
+    const sessionCols = db.prepare("PRAGMA table_info('sessions')").all() as Array<{ name: string }>;
+    if (!sessionCols.some((c) => c.name === 'system_prompt_text')) {
+      db.exec(`ALTER TABLE sessions ADD COLUMN system_prompt_text TEXT;`);
+    }
+
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS run_debug_inputs (
+        run_id                 TEXT PRIMARY KEY,
+        conversation_id        TEXT NOT NULL,
+        session_key            TEXT NOT NULL,
+        dispatch_mode          TEXT NOT NULL,
+        reply_target           TEXT,
+        acp_session_id         TEXT,
+        is_fresh_session       INTEGER,
+        is_exact               INTEGER NOT NULL DEFAULT 0,
+        system_prompt_text     TEXT,
+        context_text           TEXT,
+        prompt_text            TEXT NOT NULL,
+        dispatched_prompt_text TEXT NOT NULL,
+        created_at             INTEGER NOT NULL,
+        updated_at             INTEGER NOT NULL,
+        FOREIGN KEY(run_id) REFERENCES runs(run_id),
+        FOREIGN KEY(session_key) REFERENCES sessions(session_key),
+        FOREIGN KEY(conversation_id) REFERENCES conversations(id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_run_debug_inputs_conversation_created
+        ON run_debug_inputs(conversation_id, created_at);
+    `);
+
+    db.exec(`UPDATE schema_version SET version = 49;`);
+  }
+
+  if (current < 50) {
+    const conversationCols = db.prepare("PRAGMA table_info('conversations')").all() as Array<{ name: string }>;
+    if (!conversationCols.some((c) => c.name === 'history_reset_at')) {
+      db.exec(`ALTER TABLE conversations ADD COLUMN history_reset_at INTEGER;`);
+    }
+    db.exec(`UPDATE schema_version SET version = 50;`);
   }
 }

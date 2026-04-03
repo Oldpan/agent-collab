@@ -232,6 +232,19 @@ export class AgentHost {
         systemPromptText: msg.systemPromptText,
         contextText: msg.contextText,
         actorUserId: 'node_user',
+        onPrepared: async (prepared) => {
+          this.send({
+            type: 'run.debug.snapshot',
+            runId,
+            conversationId,
+            sessionKey: this.sessionKey,
+            acpSessionId: prepared.sessionId,
+            isFreshSession: prepared.isFreshSession,
+            isExact: prepared.isFreshSession || Boolean(prepared.effectiveSystemPromptText),
+            effectiveSystemPromptText: prepared.effectiveSystemPromptText,
+            effectiveContextText: prepared.effectiveContextText,
+          });
+        },
       });
 
       finishRun(this.db, { runId, stopReason: result.stopReason });

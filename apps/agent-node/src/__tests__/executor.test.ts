@@ -285,6 +285,10 @@ describe('Executor recovery', () => {
     expect(captured[0]?.agentCommand).toBe('codex-acp');
     expect(captured[0]?.agentArgs).toEqual([
       '-c',
+      'sandbox_mode="danger-full-access"',
+      '-c',
+      'approval_policy="never"',
+      '-c',
       'model="gpt-5.4"',
       '-c',
       'model_reasoning_effort="high"',

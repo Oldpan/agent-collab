@@ -13,7 +13,8 @@ import type { ContentBlock, InitializeResult, McpServerEntry } from '../acp/type
 import {
   SHARED_CHAT_SCOPE_USER_ID,
   clearAcpSessionId,
-  updateAcpSessionId,
+  getSession,
+  updateSessionRuntimeState,
   updateLoadSupported,
 } from './sessionStore.js';
 import { ToolAuth, parseToolKind, type ToolKind } from './toolAuth.js';
@@ -30,6 +31,7 @@ export class BindingRuntime {
   private init: InitializeResult | null = null;
 
   private acpSessionId: string | null = null;
+  private sessionSystemPromptText: string | null = null;
 
   private queue: Promise<unknown> = Promise.resolve();
   private activeSink: OutboundSink | null = null;
@@ -79,6 +81,12 @@ export class BindingRuntime {
     this.env = params.env;
     this.disabledToolKinds = params.disabledToolKinds ?? [];
     this.channelBridgeMcpEntry = params.channelBridgeMcpEntry;
+
+    const existingSession = getSession(this.db, this.sessionKey);
+    if (existingSession) {
+      this.acpSessionId = existingSession.acpSessionId;
+      this.sessionSystemPromptText = existingSession.systemPromptText;
+    }
 
     this.client = new AcpClient({
       db: this.db,
@@ -406,7 +414,12 @@ export class BindingRuntime {
     });
 
     this.acpSessionId = newSession.sessionId;
-    updateAcpSessionId(this.db, this.sessionKey, this.acpSessionId);
+    this.sessionSystemPromptText = systemPromptText?.trim() || null;
+    updateSessionRuntimeState(this.db, {
+      sessionKey: this.sessionKey,
+      acpSessionId: this.acpSessionId,
+      systemPromptText: this.sessionSystemPromptText,
+    });
     return this.acpSessionId;
   }
 
@@ -582,6 +595,7 @@ export class BindingRuntime {
       previousSessionId: this.acpSessionId,
     });
     this.acpSessionId = null;
+    this.sessionSystemPromptText = null;
     clearAcpSessionId(this.db, this.sessionKey);
   }
 
@@ -594,9 +608,21 @@ export class BindingRuntime {
     systemPromptText?: string;
     contextText?: string;
     actorUserId?: string;
-  }): Promise<{ stopReason: string; lastSeq: number; isFreshSession: boolean }> {
+    onPrepared?: (prepared: {
+      sessionId: string;
+      isFreshSession: boolean;
+      effectiveSystemPromptText?: string;
+      effectiveContextText?: string;
+    }) => void | Promise<void>;
+  }): Promise<{ stopReason: string; lastSeq: number; isFreshSession: boolean; sessionId: string; effectiveSystemPromptText?: string; effectiveContextText?: string }> {
     const isFreshSession = !this.acpSessionId;
     const sessionId = await this.ensureSessionIdWithPrompt(params.systemPromptText);
+    const effectiveSystemPromptText = isFreshSession
+      ? params.systemPromptText?.trim() || undefined
+      : this.sessionSystemPromptText?.trim() || undefined;
+    const effectiveContextText = isFreshSession
+      ? params.contextText?.trim() || undefined
+      : undefined;
 
     const run = {
       runId: params.runId,
@@ -627,6 +653,13 @@ export class BindingRuntime {
       blocks.push({ type: 'text', text: params.promptText });
     }
 
+    await params.onPrepared?.({
+      sessionId,
+      isFreshSession,
+      effectiveSystemPromptText,
+      effectiveContextText,
+    });
+
     const result = await this.client.prompt(run, {
       sessionId,
       prompt: blocks,
@@ -637,6 +670,9 @@ export class BindingRuntime {
       stopReason: result.stopReason,
       lastSeq: this.currentRunLastSeq,
       isFreshSession,
+      sessionId,
+      effectiveSystemPromptText,
+      effectiveContextText,
     };
   }
 
@@ -649,7 +685,13 @@ export class BindingRuntime {
     systemPromptText?: string;
     contextText?: string;
     actorUserId?: string;
-  }): Promise<{ stopReason: string; lastSeq: number }> {
+    onPrepared?: (prepared: {
+      sessionId: string;
+      isFreshSession: boolean;
+      effectiveSystemPromptText?: string;
+      effectiveContextText?: string;
+    }) => void | Promise<void>;
+  }): Promise<{ stopReason: string; lastSeq: number; isFreshSession: boolean; sessionId: string; effectiveSystemPromptText?: string; effectiveContextText?: string }> {
     const next = this.queue.then(async () => {
       const hadSession = Boolean(this.acpSessionId);
 
@@ -665,7 +707,14 @@ export class BindingRuntime {
       try {
         try {
           const result = await this.promptOnce(params);
-          return { stopReason: result.stopReason, lastSeq: result.lastSeq };
+          return {
+            stopReason: result.stopReason,
+            lastSeq: result.lastSeq,
+            isFreshSession: result.isFreshSession,
+            sessionId: result.sessionId,
+            effectiveSystemPromptText: result.effectiveSystemPromptText,
+            effectiveContextText: result.effectiveContextText,
+          };
         } catch (error: any) {
           const shouldRetry =
             hadSession &&
@@ -678,7 +727,14 @@ export class BindingRuntime {
 
           this.resetAcpSession(String(error?.message ?? error));
           const recovered = await this.promptOnce(params);
-          return { stopReason: recovered.stopReason, lastSeq: recovered.lastSeq };
+          return {
+            stopReason: recovered.stopReason,
+            lastSeq: recovered.lastSeq,
+            isFreshSession: recovered.isFreshSession,
+            sessionId: recovered.sessionId,
+            effectiveSystemPromptText: recovered.effectiveSystemPromptText,
+            effectiveContextText: recovered.effectiveContextText,
+          };
         }
       } finally {
         await this.flushSinkWriteQueue();
@@ -807,6 +863,8 @@ function isRecoverableResumeError(error: unknown): boolean {
     message.includes('session not found') ||
     message.includes('unknown session') ||
     message.includes('invalid session') ||
+    message.includes('resource not found (code -32002)') ||
+    (message.includes('resource not found') && message.includes('-32002')) ||
     message.includes('acp request timed out: session/prompt') ||
     message.includes('internal error (code -32603)') ||
     message.includes('acp agent exited') ||

@@ -8,6 +8,11 @@ import { CoreConnection } from './connection.js';
 import { Executor } from './executor.js';
 import { ensureNativeSkillMounts } from './nativeSkillMounts.js';
 import {
+  CodexTranscriptFsError,
+  listCodexTranscriptFiles,
+  readCodexTranscriptFile,
+} from './codexTranscriptFs.js';
+import {
   listWorkspaceDirectory,
   readWorkspaceFile,
   resetWorkspaceDirectory,
@@ -124,6 +129,38 @@ async function main(): Promise<void> {
           });
         } catch (error) {
           connection.send(skillReadErrorResponse(msg.requestId, msg.path, error));
+        }
+        break;
+
+      case 'codex.transcript.list.request':
+        try {
+          const result = listCodexTranscriptFiles(msg.maxFiles);
+          connection.send({
+            type: 'codex.transcript.list.response',
+            requestId: msg.requestId,
+            rootPath: result.rootPath,
+            files: result.files,
+            truncated: result.truncated,
+          });
+        } catch (error) {
+          connection.send(codexTranscriptListErrorResponse(msg.requestId, error));
+        }
+        break;
+
+      case 'codex.transcript.read.request':
+        try {
+          const result = readCodexTranscriptFile(msg.path);
+          connection.send({
+            type: 'codex.transcript.read.response',
+            requestId: msg.requestId,
+            rootPath: result.rootPath,
+            path: result.path,
+            content: result.content,
+            size: result.size,
+            modifiedAt: result.modifiedAt,
+          });
+        } catch (error) {
+          connection.send(codexTranscriptReadErrorResponse(msg.requestId, msg.path, error));
         }
         break;
 
@@ -341,6 +378,51 @@ function skillReadErrorResponse(
     type: 'skills.read.response' as const,
     requestId,
     path: skillPath,
+    error: String((error as Error)?.message ?? error),
+    errorCode: 'io_error' as const,
+  };
+}
+
+function codexTranscriptListErrorResponse(
+  requestId: string,
+  error: unknown,
+) {
+  if (error instanceof CodexTranscriptFsError) {
+    return {
+      type: 'codex.transcript.list.response' as const,
+      requestId,
+      error: error.message,
+      errorCode: error.code,
+    };
+  }
+
+  return {
+    type: 'codex.transcript.list.response' as const,
+    requestId,
+    error: String((error as Error)?.message ?? error),
+    errorCode: 'io_error' as const,
+  };
+}
+
+function codexTranscriptReadErrorResponse(
+  requestId: string,
+  transcriptPath: string,
+  error: unknown,
+) {
+  if (error instanceof CodexTranscriptFsError) {
+    return {
+      type: 'codex.transcript.read.response' as const,
+      requestId,
+      path: transcriptPath,
+      error: error.message,
+      errorCode: error.code,
+    };
+  }
+
+  return {
+    type: 'codex.transcript.read.response' as const,
+    requestId,
+    path: transcriptPath,
     error: String((error as Error)?.message ?? error),
     errorCode: 'io_error' as const,
   };

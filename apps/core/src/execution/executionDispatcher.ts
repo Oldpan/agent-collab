@@ -113,7 +113,7 @@ export class ExecutionDispatcher {
         });
 
         if (dispatchMode !== 'cold_start') {
-          const replayText = this.buildConversationReplayText(row.sessionKey, runId);
+          const replayText = this.buildConversationReplayText(conversationId, row.sessionKey, runId);
           if (replayText) contextText += '\n\n' + replayText;
         }
 
@@ -177,6 +177,21 @@ export class ExecutionDispatcher {
     }
 
     const dispatchedPrompt = prependTurnReplyContract(promptText);
+    const candidateSystemPromptText =
+      dispatchMode === 'cold_start'
+        ? systemPromptText
+        : getSessionSystemPromptText(this.db, row.sessionKey) || systemPromptText;
+    upsertPendingRunDebugInput(this.db, {
+      runId,
+      conversationId,
+      sessionKey: row.sessionKey,
+      dispatchMode,
+      replyTarget: row.replyTarget?.trim() || null,
+      systemPromptText: candidateSystemPromptText || null,
+      contextText: contextText || null,
+      promptText,
+      dispatchedPromptText: dispatchedPrompt,
+    });
 
     const node = this.nodeRegistry?.getNode(row.nodeId);
     if (!node) {
@@ -413,16 +428,26 @@ export class ExecutionDispatcher {
    * Rebuild recent conversation history from core's DB (content.delta events) so that
    * a freshly restarted ACP process can recover context it would otherwise have lost.
    */
-  private buildConversationReplayText(sessionKey: string, excludeRunId: string): string {
+  private buildConversationReplayText(conversationId: string, sessionKey: string, excludeRunId: string): string {
     if (!this.config.contextReplayEnabled || this.config.contextReplayRuns <= 0) return '';
+
+    const resetRow = this.db.prepare(
+      `SELECT history_reset_at as historyResetAt
+       FROM conversations
+       WHERE id = ?`,
+    ).get(conversationId) as { historyResetAt: number | null } | undefined;
+    const historyResetAt = resetRow?.historyResetAt ?? null;
 
     const runs = this.db.prepare(
       `SELECT run_id as runId, prompt_text as promptText, stop_reason as stopReason, error
        FROM runs
-       WHERE session_key = ? AND run_id != ? AND ended_at IS NOT NULL
+       WHERE session_key = ?
+         AND run_id != ?
+         AND ended_at IS NOT NULL
+         AND (? IS NULL OR started_at >= ?)
        ORDER BY started_at DESC
        LIMIT ?`,
-    ).all(sessionKey, excludeRunId, this.config.contextReplayRuns) as Array<{
+    ).all(sessionKey, excludeRunId, historyResetAt, historyResetAt, this.config.contextReplayRuns) as Array<{
       runId: string;
       promptText: string;
       stopReason: string | null;
@@ -574,4 +599,58 @@ function parseEnvVars(raw: string | null): Record<string, string> | undefined {
 function prependTurnReplyContract(promptText: string): string {
   if (promptText.includes('[Reply contract]')) return promptText;
   return `${TURN_REPLY_CONTRACT}\n\n${promptText}`;
+}
+
+function getSessionSystemPromptText(db: Db, sessionKey: string): string | null {
+  const row = db.prepare(
+    'SELECT system_prompt_text as systemPromptText FROM sessions WHERE session_key = ?',
+  ).get(sessionKey) as { systemPromptText: string | null } | undefined;
+  return row?.systemPromptText ?? null;
+}
+
+function upsertPendingRunDebugInput(
+  db: Db,
+  params: {
+    runId: string;
+    conversationId: string;
+    sessionKey: string;
+    dispatchMode: RuntimeDispatchMode;
+    replyTarget: string | null;
+    systemPromptText: string | null;
+    contextText: string | null;
+    promptText: string;
+    dispatchedPromptText: string;
+  },
+): void {
+  const now = Date.now();
+  db.prepare(
+    `INSERT INTO run_debug_inputs(
+       run_id, conversation_id, session_key, dispatch_mode, reply_target,
+       system_prompt_text, context_text, prompt_text, dispatched_prompt_text,
+       created_at, updated_at
+     )
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(run_id) DO UPDATE SET
+       conversation_id = excluded.conversation_id,
+       session_key = excluded.session_key,
+       dispatch_mode = excluded.dispatch_mode,
+       reply_target = excluded.reply_target,
+       system_prompt_text = excluded.system_prompt_text,
+       context_text = excluded.context_text,
+       prompt_text = excluded.prompt_text,
+       dispatched_prompt_text = excluded.dispatched_prompt_text,
+       updated_at = excluded.updated_at`,
+  ).run(
+    params.runId,
+    params.conversationId,
+    params.sessionKey,
+    params.dispatchMode,
+    params.replyTarget,
+    params.systemPromptText,
+    params.contextText,
+    params.promptText,
+    params.dispatchedPromptText,
+    now,
+    now,
+  );
 }

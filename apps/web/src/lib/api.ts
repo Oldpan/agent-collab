@@ -94,6 +94,92 @@ export async function getHistory(id: string): Promise<ConversationRunSummary[]> 
   return res.json();
 }
 
+export type CodexDebugFunctionCall = {
+  callId: string;
+  name: string;
+  arguments: string;
+  timestamp: string;
+  output?: string;
+  outputTimestamp?: string;
+};
+
+export type CodexDebugTokenUsage = {
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  outputTokens?: number;
+  reasoningOutputTokens?: number;
+  totalTokens?: number;
+  modelContextWindow?: number;
+};
+
+export type CodexDebugTurn = {
+  turnId: string;
+  timestamp: string;
+  cwd?: string;
+  replyTarget?: string | null;
+  triggerTarget?: string | null;
+  inputBlocks: string[];
+  combinedUserMessage?: string | null;
+  functionCalls: CodexDebugFunctionCall[];
+  assistantOutputs: Array<{ text: string; phase?: string; timestamp: string }>;
+  reasoningSummaries: string[];
+  hasEncryptedReasoning: boolean;
+  tokenUsage?: CodexDebugTokenUsage;
+  platformInput?: CodexPlatformInput;
+};
+
+export type CodexPlatformInput = {
+  runId: string;
+  startedAt: number;
+  endedAt: number | null;
+  stopReason?: string;
+  error?: string;
+  dispatchMode?: 'cold_start' | 'resume';
+  acpSessionId?: string;
+  isFreshSession?: boolean;
+  source: 'exact_snapshot' | 'reconstructed';
+  systemPromptText?: string;
+  contextText?: string;
+  promptText: string;
+  dispatchedPromptText?: string;
+};
+
+export type CodexDebugRollout = {
+  path: string;
+  modifiedAt: number;
+  size: number;
+  sessionId?: string;
+  cwd?: string;
+  baseInstructions?: string;
+  preludeDeveloperMessages: string[];
+  preludeUserMessages: string[];
+  turns: CodexDebugTurn[];
+};
+
+export type CodexConversationDebug = {
+  conversationId: string;
+  agentType: string;
+  workspacePath: string;
+  replyTarget: string;
+  acpSessionId?: string;
+  matchMode: 'acp_session_id' | 'heuristic';
+  sessionMatchMissed: boolean;
+  truncated: boolean;
+  rollouts: CodexDebugRollout[];
+  unmatchedPlatformInputs: CodexPlatformInput[];
+};
+
+export async function getCodexConversationDebug(id: string): Promise<CodexConversationDebug> {
+  const res = await fetch(`${API_BASE}/conversations/${id}/codex-debug`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Failed to get Codex debug: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function getConversationChannelMessages(
   id: string,
   limit = 100,

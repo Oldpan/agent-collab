@@ -47,7 +47,12 @@ describe('ConversationManager', () => {
         .get(row.sessionKey) as { agentCommand: string; agentArgsJson: string };
 
       expect(session.agentCommand).toBe('codex-acp');
-      expect(JSON.parse(session.agentArgsJson)).toEqual([]);
+      expect(JSON.parse(session.agentArgsJson)).toEqual([
+        '-c',
+        'sandbox_mode="danger-full-access"',
+        '-c',
+        'approval_policy="never"',
+      ]);
     });
 
     it('不传参数时使用默认值', () => {
@@ -290,12 +295,13 @@ describe('ConversationManager', () => {
       expect(resetConv?.status).toBe('idle');
 
       const after = db.prepare(
-        'SELECT session_key as sessionKey, status, title FROM conversations WHERE id = ?',
-      ).get(conv.id) as { sessionKey: string; status: string; title: string };
+        'SELECT session_key as sessionKey, status, title, history_reset_at as historyResetAt FROM conversations WHERE id = ?',
+      ).get(conv.id) as { sessionKey: string; status: string; title: string; historyResetAt: number | null };
 
       expect(after.sessionKey).not.toBe(before.sessionKey);
       expect(after.status).toBe('idle');
       expect(after.title).toBe('');
+      expect(after.historyResetAt).toBeTruthy();
 
       const oldRuns = db.prepare(
         'SELECT count(*) as count FROM runs WHERE session_key = ?',

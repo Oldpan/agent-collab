@@ -37,6 +37,7 @@ export {
   getBinding,
   upsertBinding,
   updateAcpSessionId,
+  updateSessionRuntimeState,
   clearAcpSessionId,
   updateLoadSupported,
   bindingKeyFromConversationKey,

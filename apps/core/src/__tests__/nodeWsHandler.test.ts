@@ -214,6 +214,84 @@ describe('nodeWsHandler', () => {
     });
   });
 
+  it('run.debug.snapshot 应回填 run debug 输入与 session runtime 状态', () => {
+    const agent = manager.createAgent({
+      name: 'Bob',
+      agentType: 'codex_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/bob-debug',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const socket = new FakeSocket();
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(socket as any, registry as any, () => {}, db, manager);
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-debug-1',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'hello',
+    });
+    db.prepare(
+      `INSERT INTO run_debug_inputs(
+         run_id, conversation_id, session_key, dispatch_mode, prompt_text, dispatched_prompt_text, created_at, updated_at
+       )
+       VALUES(?, ?, ?, 'cold_start', ?, ?, ?, ?)`,
+    ).run('run-debug-1', conv.id, sessionRow.sessionKey, 'hello', '[Reply contract]\n\nhello', 1000, 1000);
+
+    socket.emit('message', JSON.stringify({
+      type: 'run.debug.snapshot',
+      runId: 'run-debug-1',
+      conversationId: conv.id,
+      sessionKey: sessionRow.sessionKey,
+      acpSessionId: 'acp-session-1',
+      isFreshSession: true,
+      isExact: true,
+      effectiveSystemPromptText: 'SYSTEM PROMPT',
+      effectiveContextText: 'CONTEXT',
+    }));
+
+    const debugRow = db.prepare(
+      `SELECT acp_session_id as acpSessionId,
+              is_fresh_session as isFreshSession,
+              is_exact as isExact,
+              system_prompt_text as systemPromptText,
+              context_text as contextText
+         FROM run_debug_inputs
+        WHERE run_id = ?`,
+    ).get('run-debug-1') as {
+      acpSessionId: string | null;
+      isFreshSession: number | null;
+      isExact: number;
+      systemPromptText: string | null;
+      contextText: string | null;
+    };
+    expect(debugRow).toEqual({
+      acpSessionId: 'acp-session-1',
+      isFreshSession: 1,
+      isExact: 1,
+      systemPromptText: 'SYSTEM PROMPT',
+      contextText: 'CONTEXT',
+    });
+
+    const updatedSession = db.prepare(
+      `SELECT acp_session_id as acpSessionId, system_prompt_text as systemPromptText
+         FROM sessions
+        WHERE session_key = ?`,
+    ).get(sessionRow.sessionKey) as { acpSessionId: string | null; systemPromptText: string | null };
+    expect(updatedSession).toEqual({
+      acpSessionId: 'acp-session-1',
+      systemPromptText: 'SYSTEM PROMPT',
+    });
+  });
+
   it('私聊 run 未通过 send_message 回复时应落 delta_fallback 消息并正常收口', () => {
     const agent = manager.createAgent({
       name: 'Bob',

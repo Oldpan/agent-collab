@@ -28,6 +28,13 @@ export type RuntimeDriverDefinition = {
   defaultEnv?: Record<string, string>;
 };
 
+export const CODEX_ACP_DEFAULT_ARGS = [
+  '-c',
+  'sandbox_mode="danger-full-access"',
+  '-c',
+  'approval_policy="never"',
+] as const;
+
 export const RUNTIME_DRIVERS: Record<AgentType, RuntimeDriverDefinition> = {
   claude_acp: {
     agentType: 'claude_acp',
@@ -43,7 +50,7 @@ export const RUNTIME_DRIVERS: Record<AgentType, RuntimeDriverDefinition> = {
   codex_acp: {
     agentType: 'codex_acp',
     command: 'codex-acp',
-    args: [],
+    args: [...CODEX_ACP_DEFAULT_ARGS],
     supportsResume: true,
     supportsPushNotifications: false,
     nativeMemoryBackend: 'workspace',
@@ -411,6 +418,58 @@ export type SkillsReadResponseMsg = {
   errorCode?: WorkspaceErrorCode;
 };
 
+export type CodexTranscriptFileEntry = {
+  path: string;
+  size: number;
+  modifiedAt: number;
+};
+
+export type CodexTranscriptListRequestMsg = {
+  type: 'codex.transcript.list.request';
+  requestId: string;
+  maxFiles?: number;
+};
+
+export type CodexTranscriptListResponseMsg = {
+  type: 'codex.transcript.list.response';
+  requestId: string;
+  rootPath?: string;
+  files?: CodexTranscriptFileEntry[];
+  truncated?: boolean;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
+export type CodexTranscriptReadRequestMsg = {
+  type: 'codex.transcript.read.request';
+  requestId: string;
+  path: string;
+};
+
+export type CodexTranscriptReadResponseMsg = {
+  type: 'codex.transcript.read.response';
+  requestId: string;
+  path: string;
+  rootPath?: string;
+  content?: string;
+  size?: number;
+  modifiedAt?: number | null;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
+export type RunDebugSnapshotMsg = {
+  type: 'run.debug.snapshot';
+  runId: string;
+  conversationId: string;
+  sessionKey: string;
+  acpSessionId: string;
+  isFreshSession: boolean;
+  isExact: boolean;
+  effectiveSystemPromptText?: string;
+  effectiveContextText?: string;
+};
+
 export type NodeToCore =
   | NodeRegisterMsg
   | NodeHeartbeatMsg
@@ -423,7 +482,10 @@ export type NodeToCore =
   | WorkspaceWriteResponseMsg
   | WorkspaceResetResponseMsg
   | SkillsListResponseMsg
-  | SkillsReadResponseMsg;
+  | SkillsReadResponseMsg
+  | CodexTranscriptListResponseMsg
+  | CodexTranscriptReadResponseMsg
+  | RunDebugSnapshotMsg;
 
 // Core → Node
 
@@ -511,6 +573,8 @@ export type CoreToNode =
   | WorkspaceResetRequestMsg
   | SkillsListCoreRequestMsg
   | SkillsReadCoreRequestMsg
+  | CodexTranscriptListRequestMsg
+  | CodexTranscriptReadRequestMsg
   | HostCloseMsg;
 
 // ─── REST API 类型 ───

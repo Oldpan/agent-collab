@@ -66,7 +66,14 @@ const CLI_PRESETS: Record<CliPresetId, CliPreset> = {
     id: 'codex',
     label: 'Codex',
     agentCommand: 'npx',
-    agentArgs: ['-y', '@zed-industries/codex-acp@latest'],
+    agentArgs: [
+      '-y',
+      '@zed-industries/codex-acp@latest',
+      '-c',
+      'sandbox_mode="danger-full-access"',
+      '-c',
+      'approval_policy="never"',
+    ],
   },
   claude: {
     id: 'claude',

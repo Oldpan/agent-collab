@@ -178,6 +178,31 @@ describe('ExecutionDispatcher', () => {
       agentId: agent.agentId,
       conversationId: conv.id,
     });
+
+    const debugRow = db.prepare(
+      `SELECT dispatch_mode as dispatchMode,
+              system_prompt_text as systemPromptText,
+              context_text as contextText,
+              prompt_text as promptText,
+              dispatched_prompt_text as dispatchedPromptText,
+              is_exact as isExact
+         FROM run_debug_inputs
+        WHERE run_id = ?`,
+    ).get(dispatch.runId) as {
+      dispatchMode: string;
+      systemPromptText: string | null;
+      contextText: string | null;
+      promptText: string;
+      dispatchedPromptText: string;
+      isExact: number;
+    } | undefined;
+    expect(debugRow).toBeDefined();
+    expect(debugRow?.dispatchMode).toBe('cold_start');
+    expect(debugRow?.systemPromptText).toContain('"Memory Agent"');
+    expect(debugRow?.contextText).toContain('[Local Memory Guide]');
+    expect(debugRow?.promptText).toContain('remember this');
+    expect(debugRow?.dispatchedPromptText).toContain('[Reply contract]');
+    expect(debugRow?.isExact).toBe(0);
   });
 
   it('内部静默 prompt 不应写入私聊 channel_messages', async () => {
@@ -300,6 +325,34 @@ describe('ExecutionDispatcher', () => {
     expect(secondDispatch.contextText).toContain('[History cursor]\noldest_visible_seq: 4');
     expect(secondDispatch.contextText).toContain('[Unread summary]\n2 older unread messages on this exact target were not included above. Use read_history(channel="dm:@oldpan", before=4) if you need them.');
     expect(secondDispatch.contextText).not.toContain('[Inbox]');
+  });
+
+  it('history_reset_at 之后 resume 不应 replay reset 之前的旧 runs', async () => {
+    const agent = manager.createAgent({
+      name: 'Reset Boundary Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/reset-boundary-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    await manager.submitPrompt(conv.id, 'before reset');
+    const firstDispatch = sent[0]?.msg;
+    if (!firstDispatch || firstDispatch.type !== 'run.dispatch') throw new Error('missing first dispatch');
+    finishRun(db, { runId: firstDispatch.runId, stopReason: 'end_turn' });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', conv.id);
+
+    const resetAt = Date.now() + 1_000;
+    db.prepare('UPDATE conversations SET history_reset_at = ? WHERE id = ?').run(resetAt, conv.id);
+
+    await manager.submitPrompt(conv.id, 'after reset');
+
+    const secondDispatch = sent[1]?.msg;
+    if (!secondDispatch || secondDispatch.type !== 'run.dispatch') throw new Error('missing second dispatch');
+    expect(secondDispatch.dispatchMode).toBe('resume');
+    expect(secondDispatch.contextText ?? '').not.toContain('Context (previous messages, for continuity after restart):');
+    expect(secondDispatch.contextText ?? '').not.toContain('User: before reset');
   });
 
   it('cancelConversationRun 应发送 run.cancel 到节点', () => {

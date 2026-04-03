@@ -49,6 +49,7 @@ import { AgentWorkspacePanel } from "./AgentWorkspacePanel";
 import { AgentSkillsPanel } from "./AgentSkillsPanel";
 import { AgentProfilePanel } from "./AgentProfilePanel";
 import { AgentActivityPanel } from "./AgentActivityPanel";
+import { CodexDebugPanel } from "./CodexDebugPanel";
 import { ChatAvatar, readStoredUserIdentity } from "./ChatAvatar";
 import { AgentSettingsPanel } from "./AgentSettingsPanel";
 import type { AgentInfo, ConversationInfo, UpdateAgentRequest } from "@agent-collab/protocol";
@@ -99,7 +100,7 @@ export function ChatPanel({
   onClearAgentChat,
   onResetAgent,
 }: ChatPanelProps) {
-  const [activeTab, setActiveTab] = useState<"chat" | "activity" | "workspace" | "skills" | "profile" | "setting">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "activity" | "debug" | "workspace" | "skills" | "profile" | "setting">("chat");
   const userIdentity = useMemo(() => readStoredUserIdentity(), []);
   const {
     messages,
@@ -141,6 +142,7 @@ export function ChatPanel({
     status === "streaming" ||
     status === "recovering" ||
     status === "awaiting_approval";
+  const canShowCodexDebug = isAdmin && conversation.agentType === "codex_acp";
 
   const displayStatus =
     hasDispatchFailure && status !== "submitted" && status !== "streaming"
@@ -218,6 +220,19 @@ export function ChatPanel({
               <span className="ml-1.5 size-1.5 rounded-full bg-amber-500 animate-pulse inline-block" />
             )}
           </Button>
+          {canShowCodexDebug && (
+            <Button
+              size="sm"
+              variant={activeTab === "debug" ? "default" : "outline"}
+              className={cn(
+                "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+                activeTab === "debug" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+              )}
+              onClick={() => setActiveTab("debug")}
+            >
+              Debug
+            </Button>
+          )}
           <Button
             size="sm"
             variant={activeTab === "workspace" ? "default" : "outline"}
@@ -309,6 +324,10 @@ export function ChatPanel({
       ) : activeTab === "activity" ? (
         <div className="flex flex-1 flex-col overflow-hidden">
           <AgentActivityPanel runs={runs} />
+        </div>
+      ) : activeTab === "debug" ? (
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <CodexDebugPanel conversationId={conversation.id} />
         </div>
       ) : (
         <>

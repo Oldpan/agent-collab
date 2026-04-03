@@ -352,8 +352,8 @@ export class ConversationManager {
     // Create conversations row
     this.db
       .prepare(
-        `INSERT INTO conversations(id, channel_id, reply_target, title, agent_type, workspace_path, session_key, status, thread_kind, is_primary_thread, thread_root_id, env_vars, node_id, agent_id, user_id, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        `INSERT INTO conversations(id, channel_id, reply_target, title, agent_type, workspace_path, session_key, status, thread_kind, is_primary_thread, thread_root_id, env_vars, node_id, agent_id, user_id, history_reset_at, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, 'idle', ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)`,
       )
       .run(id, channelId, replyTarget, title, agentType, workspacePath, sessionKey, threadKind, isPrimaryThread ? 1 : 0, threadRootId, envVarsJson, nodeId, params.agentId ?? null, userId, now, now);
 
@@ -622,8 +622,10 @@ export class ConversationManager {
         newSessionKey,
       );
       this.db.prepare(
-        `UPDATE conversations SET session_key = ?, status = 'idle', title = '', updated_at = ? WHERE id = ?`,
-      ).run(newSessionKey, now, row.id);
+        `UPDATE conversations
+         SET session_key = ?, status = 'idle', title = '', history_reset_at = ?, updated_at = ?
+         WHERE id = ?`,
+      ).run(newSessionKey, now, now, row.id);
       this.db.prepare('DELETE FROM sessions WHERE session_key = ?').run(row.sessionKey);
     }
 
@@ -684,9 +686,9 @@ export class ConversationManager {
 
       this.db.prepare(
         `UPDATE conversations
-         SET session_key = ?, status = 'idle', title = '', updated_at = ?
+         SET session_key = ?, status = 'idle', title = '', history_reset_at = ?, updated_at = ?
          WHERE id = ?`,
-      ).run(newSessionKey, now, row.id);
+      ).run(newSessionKey, now, now, row.id);
 
       this.db.prepare('DELETE FROM sessions WHERE session_key = ?').run(row.sessionKey);
     }
@@ -856,9 +858,9 @@ export class ConversationManager {
       );
       this.db.prepare(
         `UPDATE conversations
-         SET session_key = ?, status = 'idle', title = '', updated_at = ?
+         SET session_key = ?, status = 'idle', title = '', history_reset_at = ?, updated_at = ?
          WHERE id = ?`,
-      ).run(newSessionKey, now, row.id);
+      ).run(newSessionKey, now, now, row.id);
       this.db.prepare('DELETE FROM sessions WHERE session_key = ?').run(row.sessionKey);
     }
 
