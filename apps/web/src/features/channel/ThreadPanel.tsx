@@ -42,7 +42,19 @@ function renderContent(content: string) {
   );
 }
 
-function ThreadMessage({ message }: { message: ChannelMessage }) {
+function ThreadMessage({
+  message,
+  agent,
+  channelId,
+  threadRootId,
+  onOpenAgentSession,
+}: {
+  message: ChannelMessage;
+  agent?: AgentInfo;
+  channelId: string;
+  threadRootId: string;
+  onOpenAgentSession?: (agentId: string, channelId: string, threadRootId?: string | null) => Promise<void> | void;
+}) {
   const isUser = message.senderType === "user";
   const showFallbackBadge = message.messageSource === "delta_fallback" && !isUser;
   return (
@@ -61,6 +73,18 @@ function ThreadMessage({ message }: { message: ChannelMessage }) {
           <span className="text-[11px] font-semibold text-zinc-700">{message.senderName}</span>
           <span className="text-[10px] text-zinc-400">{formatTime(message.createdAt)}</span>
         </div>
+        {!isUser && agent && onOpenAgentSession && (
+          <div className="mt-1">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 rounded-sm border-2 border-zinc-900 bg-[#fffdf4] px-2 text-[10px] text-zinc-900 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#fff1a9]"
+              onClick={() => void onOpenAgentSession(agent.agentId, channelId, threadRootId)}
+            >
+              Inspect branch
+            </Button>
+          </div>
+        )}
         <div
           className={cn(
             "mt-0.5 rounded-md border-2 border-zinc-900 px-3 py-2 text-sm shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]",
@@ -333,6 +357,7 @@ type ThreadPanelProps = {
   rootMessage: ChannelMessage;
   channelMembers: AgentInfo[];
   taskVersion?: number;
+  onOpenAgentSession?: (agentId: string, channelId: string, threadRootId?: string | null) => Promise<void> | void;
   onClose: () => void;
   className?: string;
 };
@@ -343,6 +368,7 @@ export function ThreadPanel({
   rootMessage,
   channelMembers,
   taskVersion = 0,
+  onOpenAgentSession,
   onClose,
   className,
 }: ThreadPanelProps) {
@@ -350,6 +376,10 @@ export function ThreadPanel({
   const { messages, summary, sendMessage, loadMore, hasMore } = useThreadStream(channelId, threadRootId, taskVersion);
   const scrollRef = useRef<HTMLDivElement>(null);
   const isRootUser = rootMessage.senderType === "user";
+  const rootAgent = useMemo(
+    () => channelMembers.find((agent) => agent.name === rootMessage.senderName),
+    [channelMembers, rootMessage.senderName],
+  );
   const [showSummary, setShowSummary] = useState(false);
   const [summaryState, setSummaryState] = useState<ThreadCollaborationSummary | null>(null);
   const [availableTasks, setAvailableTasks] = useState<ChannelTask[]>([]);
@@ -456,6 +486,18 @@ export function ThreadPanel({
               <span className="text-[11px] font-semibold text-zinc-700">{rootMessage.senderName}</span>
               <span className="text-[10px] text-zinc-400">{formatTime(rootMessage.createdAt)}</span>
             </div>
+            {!isRootUser && rootAgent && onOpenAgentSession && (
+              <div className="mt-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-6 rounded-sm border-2 border-zinc-900 bg-[#fffdf4] px-2 text-[10px] text-zinc-900 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#fff1a9]"
+                  onClick={() => void onOpenAgentSession(rootAgent.agentId, channelId, rootMessage.id)}
+                >
+                  Open agent session
+                </Button>
+              </div>
+            )}
             <div className="mt-0.5 text-sm text-zinc-800">
               {isRootUser ? (
                 <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
@@ -513,7 +555,16 @@ export function ThreadPanel({
                 </button>
               </div>
             )}
-            {messages.map((msg) => <ThreadMessage key={msg.id} message={msg} />)}
+            {messages.map((msg) => (
+              <ThreadMessage
+                key={msg.id}
+                message={msg}
+                agent={channelMembers.find((agent) => agent.name === msg.senderName)}
+                channelId={channelId}
+                threadRootId={rootMessage.id}
+                onOpenAgentSession={onOpenAgentSession}
+              />
+            ))}
           </>
         )}
       </div>

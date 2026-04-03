@@ -194,6 +194,20 @@ export function useConversations(userId?: string | null) {
     [setError, upsertConversation],
   );
 
+  const openAgentChannelSession = useCallback(
+    async (agentId: string, channelId: string, threadRootId?: string | null) => {
+      try {
+        const conversation = await api.openAgentChannelSession(agentId, channelId, threadRootId);
+        upsertConversation(conversation);
+        return conversation;
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to open agent channel session");
+        throw err;
+      }
+    },
+    [setError, upsertConversation],
+  );
+
   const deleteConversation = useCallback(
     async (id: string) => {
       try {
@@ -221,6 +235,7 @@ export function useConversations(userId?: string | null) {
     error,
     createConversation,
     openAgentThread,
+    openAgentChannelSession,
     deleteConversation,
     selectConversation,
   };

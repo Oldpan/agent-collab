@@ -2,11 +2,12 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon, Settings2Icon, MessageSquareOffIcon, ListTodoIcon, PaperclipIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChannelInfo, AgentInfo } from "@agent-collab/protocol";
+import type { ChannelInfo, AgentInfo, ConversationInfo } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
 import { addAgentToChannel, clearChannelChat, removeAgentFromChannel, subscribeChannelAgent, unsubscribeChannelAgent, updateChannel, claimMessageAsTask, uploadAttachment } from "@/lib/api";
 import { useChannelStream, type ChannelNotice } from "@/hooks/useChannelStream";
 import { ThreadPanel } from "./ThreadPanel";
+import { BranchInspectorPanel } from "./BranchInspectorPanel";
 import { Streamdown } from "streamdown";
 import {
   safeRehypePlugins,
@@ -32,6 +33,9 @@ type ChannelPanelProps = {
   agents: AgentInfo[];
   isAdmin?: boolean;
   onAgentsUpdated?: () => Promise<AgentInfo[]> | void;
+  onOpenAgentSession?: (agentId: string, channelId: string, threadRootId?: string | null) => Promise<ConversationInfo | void> | ConversationInfo | void;
+  onRestartConversation?: (conversationId: string) => Promise<void>;
+  onClearConversationChat?: (conversationId: string) => Promise<void>;
   onOpenSidebar?: () => void;
   onSeenSeq?: (seq: number) => void;
   onChannelUpdated?: (channel: ChannelPanelInfo) => void;
@@ -589,7 +593,15 @@ function ChannelStatusBar({
   );
 }
 
-function MembersTab({ members }: { members: AgentInfo[] }) {
+function MembersTab({
+  channelId,
+  members,
+  onOpenSession,
+}: {
+  channelId: string;
+  members: AgentInfo[];
+  onOpenSession?: (agentId: string, channelId: string, threadRootId?: string | null) => Promise<void> | void;
+}) {
   return (
     <div className="flex-1 overflow-y-auto p-4">
       {members.length === 0 ? (
@@ -612,6 +624,16 @@ function MembersTab({ members }: { members: AgentInfo[] }) {
                   {agent.agentType === "claude_acp" ? "Claude" : "Codex"}
                 </div>
               </div>
+              {onOpenSession && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 rounded-sm border-2 border-zinc-900 bg-[#fffdf4] px-2 text-[11px] text-zinc-900 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#fff1a9]"
+                  onClick={() => void onOpenSession(agent.agentId, channelId, null)}
+                >
+                  Inspect branch
+                </Button>
+              )}
             </div>
           ))}
         </div>
@@ -959,7 +981,18 @@ function SettingsTab({
   );
 }
 
-export function ChannelPanel({ channel, agents, isAdmin = false, onAgentsUpdated, onOpenSidebar, onSeenSeq, onChannelUpdated }: ChannelPanelProps) {
+export function ChannelPanel({
+  channel,
+  agents,
+  isAdmin = false,
+  onAgentsUpdated,
+  onOpenAgentSession,
+  onRestartConversation,
+  onClearConversationChat,
+  onOpenSidebar,
+  onSeenSeq,
+  onChannelUpdated,
+}: ChannelPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "members" | "settings">("chat");
   const { messages, notices, sendMessage, loadMore, hasMore, resetVersion, taskVersion } = useChannelStream({
     channelId: channel.channelId,
@@ -977,8 +1010,16 @@ export function ChannelPanel({ channel, agents, isAdmin = false, onAgentsUpdated
     [agents, channel.channelId, channelMemberIds],
   );
   const [openThread, setOpenThread] = useState<ChannelMessage | null>(null);
+  const [branchInspectorConversation, setBranchInspectorConversation] = useState<ConversationInfo | null>(null);
   // Local task overrides: messageId → partial fields added after claim-message
   const [taskOverrides, setTaskOverrides] = useState<Map<string, Pick<ChannelMessage, 'taskNumber' | 'taskStatus'>>>(new Map());
+  const branchInspectorAgent = useMemo(
+    () => {
+      if (!branchInspectorConversation?.agentId) return null;
+      return agents.find((agent) => agent.agentId === branchInspectorConversation.agentId) ?? null;
+    },
+    [agents, branchInspectorConversation?.agentId],
+  );
 
   const handleOpenTaskThread = useCallback((threadShortId: string) => {
     const msg = messages.find((m) => m.id.slice(0, 8) === threadShortId);
@@ -1050,6 +1091,7 @@ export function ChannelPanel({ channel, agents, isAdmin = false, onAgentsUpdated
   useEffect(() => {
     setActiveTab("chat");
     setOpenThread(null);
+    setBranchInspectorConversation(null);
   }, [channel.channelId]);
 
   useEffect(() => {
@@ -1071,6 +1113,17 @@ export function ChannelPanel({ channel, agents, isAdmin = false, onAgentsUpdated
   const handleClearChat = useCallback(async () => {
     await clearChannelChat(channel.channelId);
   }, [channel.channelId]);
+
+  const handleOpenBranchInspector = useCallback(
+    async (agentId: string, targetChannelId: string, threadRootId?: string | null) => {
+      const conversation = await onOpenAgentSession?.(agentId, targetChannelId, threadRootId);
+      if (conversation) {
+        setBranchInspectorConversation(conversation);
+        setActiveTab("chat");
+      }
+    },
+    [onOpenAgentSession],
+  );
 
   return (
     <div className="flex h-full flex-col bg-[#fff9d0]">
@@ -1173,7 +1226,11 @@ export function ChannelPanel({ channel, agents, isAdmin = false, onAgentsUpdated
           taskVersion={taskVersion}
         />
       ) : activeTab === "members" ? (
-        <MembersTab members={channelMembers} />
+        <MembersTab
+          channelId={channel.channelId}
+          members={channelMembers}
+          onOpenSession={handleOpenBranchInspector}
+        />
       ) : activeTab === "settings" ? (
         <SettingsTab
           channel={channel}
@@ -1187,7 +1244,7 @@ export function ChannelPanel({ channel, agents, isAdmin = false, onAgentsUpdated
       ) : (
         <div className="flex min-h-0 flex-1 overflow-hidden">
           {/* Main channel messages */}
-          <div className={cn("flex min-h-0 flex-col overflow-hidden", openThread ? "flex-1" : "w-full")}>
+          <div className={cn("flex min-h-0 flex-col overflow-hidden", openThread || branchInspectorConversation ? "flex-1" : "w-full")}>
             <ChannelStatusBar key={channel.channelId} notices={notices} />
             <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto py-2">
               {messages.length === 0 ? (
@@ -1232,8 +1289,32 @@ export function ChannelPanel({ channel, agents, isAdmin = false, onAgentsUpdated
             <ChannelComposer onSend={sendMessage} channelMembers={channelMembers} />
           </div>
 
-          {/* Thread panel (slide-in from right) */}
-          {openThread && (
+          {branchInspectorConversation ? (
+            <div className="flex h-full shrink-0 overflow-hidden">
+              <div
+                className={cn(
+                  "w-1.5 cursor-col-resize bg-zinc-300 transition-colors hover:bg-zinc-400 active:bg-zinc-500",
+                  isResizing && "bg-zinc-500"
+                )}
+                onMouseDown={handleResizeStart}
+                title="Drag to resize"
+              />
+              <div className="h-full" style={{ width: threadPanelWidth }}>
+                <BranchInspectorPanel
+                  conversation={branchInspectorConversation}
+                  agent={branchInspectorAgent}
+                  isAdmin={isAdmin}
+                  onRestart={async (conversationId) => {
+                    await onRestartConversation?.(conversationId);
+                  }}
+                  onClearChat={async (conversationId) => {
+                    await onClearConversationChat?.(conversationId);
+                  }}
+                  onClose={() => setBranchInspectorConversation(null)}
+                />
+              </div>
+            </div>
+          ) : openThread ? (
             <div className="flex h-full shrink-0 overflow-hidden">
               {/* Resize handle */}
               <div
@@ -1251,12 +1332,13 @@ export function ChannelPanel({ channel, agents, isAdmin = false, onAgentsUpdated
                   rootMessage={openThread}
                   channelMembers={channelMembers}
                   taskVersion={taskVersion}
+                  onOpenAgentSession={handleOpenBranchInspector}
                   onClose={() => setOpenThread(null)}
                   className="border-l-0"
                 />
               </div>
             </div>
-          )}
+          ) : null}
         </div>
       )}
     </div>

@@ -200,6 +200,77 @@ export async function startServer(params: {
     return conversationManager.listConversations({ userId: user.id, isAdmin: user.isAdmin });
   });
 
+  app.post<{ Params: { id: string } }>('/api/conversations/:id/restart', async (req, reply) => {
+    const user = requireConversationAccess(req, reply, req.params.id);
+    if (!user) return { error: 'Access denied' };
+    const conversation = conversationManager.getConversation(req.params.id);
+    if (!conversation) {
+      reply.code(404);
+      return { error: 'Not found' };
+    }
+    if (!conversation.nodeId) {
+      reply.code(409);
+      return { error: 'Conversation is not assigned to a remote node.' };
+    }
+
+    broadcast(conversation.id, { type: 'system.notice', message: 'Agent restarting…' });
+
+    const hostBinding = conversationManager.getConversationHostKey(conversation.id);
+    if (hostBinding) {
+      nodeRegistry.send(hostBinding.nodeId, { type: 'host.close', hostKey: hostBinding.hostKey });
+    }
+
+    const now = Date.now();
+    const activeRuns = db.prepare(
+      `SELECT run_id as runId
+         FROM runs
+        WHERE session_key = (SELECT session_key FROM conversations WHERE id = ?)
+          AND ended_at IS NULL`,
+    ).all(conversation.id) as Array<{ runId: string }>;
+    for (const run of activeRuns) {
+      finishRun(db, { runId: run.runId, error: 'Restarted by user' });
+    }
+    db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
+      .run('idle', now, conversation.id);
+    broadcast(conversation.id, { type: 'conversation.status', conversationId: conversation.id, status: 'idle' });
+    broadcast(conversation.id, { type: 'system.notice', message: 'Agent restarted — ready for new messages.' });
+    void conversationManager.onConversationSettled(conversation.id);
+
+    return {
+      ok: true,
+      conversation: conversationManager.getConversation(conversation.id) ?? conversation,
+    };
+  });
+
+  app.post<{ Params: { id: string } }>('/api/conversations/:id/clear-chat', async (req, reply) => {
+    const user = requireConversationAccess(req, reply, req.params.id);
+    if (!user) return { error: 'Access denied' };
+    const conversation = conversationManager.getConversation(req.params.id);
+    if (!conversation) {
+      reply.code(404);
+      return { error: 'Not found' };
+    }
+
+    const hostBinding = conversationManager.getConversationHostKey(conversation.id);
+    if (hostBinding) {
+      nodeRegistry.send(hostBinding.nodeId, { type: 'host.close', hostKey: hostBinding.hostKey });
+    }
+
+    const clearedConversation = conversationManager.clearConversationChat(conversation.id);
+    if (!clearedConversation) {
+      reply.code(404);
+      return { error: 'Not found' };
+    }
+    broadcast(clearedConversation.id, { type: 'history.reset' });
+    broadcast(clearedConversation.id, {
+      type: 'conversation.status',
+      conversationId: clearedConversation.id,
+      status: 'idle',
+    });
+
+    return { ok: true, conversation: clearedConversation };
+  });
+
   // ─── Agent routes ───
 
   app.get('/api/agents', async (req, reply) => {
@@ -264,66 +335,6 @@ export async function startServer(params: {
       return { error: 'Not found' };
     }
     return thread;
-  });
-
-  app.post<{ Params: { id: string } }>('/api/agents/:id/restart', async (req, reply) => {
-    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
-    const agent = conversationManager.getAgent(req.params.id);
-    if (!agent) { reply.code(404); return { error: 'Not found' }; }
-    if (!agent.nodeId) { reply.code(409); return { error: 'Agent is not assigned to a remote node.' }; }
-
-    const conversations = conversationManager.listConversations({ agentId: req.params.id });
-    for (const conversation of conversations) {
-      broadcast(conversation.id, { type: 'system.notice', message: 'Agent restarting…' });
-    }
-
-    const hostKeys = conversationManager.getAgentHostKeys(req.params.id);
-    for (const { nodeId, hostKey } of hostKeys) {
-      nodeRegistry.send(nodeId, { type: 'host.close', hostKey });
-    }
-
-    const now = Date.now();
-    for (const conversation of conversations) {
-      // Finish any active runs so findBlockingConversation won't treat this conversation as blocking
-      const activeRuns = db.prepare(
-        `SELECT run_id as runId FROM runs WHERE session_key = (
-           SELECT session_key FROM conversations WHERE id = ?
-         ) AND ended_at IS NULL`,
-      ).all(conversation.id) as Array<{ runId: string }>;
-      for (const run of activeRuns) {
-        finishRun(db, { runId: run.runId, error: 'Restarted by user' });
-      }
-      // Update DB status to idle
-      db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
-        .run('idle', now, conversation.id);
-      broadcast(conversation.id, { type: 'conversation.status', conversationId: conversation.id, status: 'idle' });
-      broadcast(conversation.id, { type: 'system.notice', message: 'Agent restarted — ready for new messages.' });
-    }
-    // Drain any queued prompts that were waiting on the now-settled conversations
-    for (const conversation of conversations) {
-      void conversationManager.onConversationSettled(conversation.id);
-    }
-    return { ok: true, conversations };
-  });
-
-  app.post<{ Params: { id: string } }>('/api/agents/:id/clear-chat', async (req, reply) => {
-    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
-    const agent = conversationManager.getAgent(req.params.id);
-    if (!agent) { reply.code(404); return { error: 'Not found' }; }
-
-    const hostKeys = conversationManager.getAgentHostKeys(req.params.id);
-    if (agent.nodeId) {
-      for (const { nodeId, hostKey } of hostKeys) {
-        nodeRegistry.send(nodeId, { type: 'host.close', hostKey });
-      }
-    }
-
-    const conversations = conversationManager.clearAgentChat(req.params.id);
-    for (const conversation of conversations) {
-      broadcast(conversation.id, { type: 'history.reset' });
-      broadcast(conversation.id, { type: 'conversation.status', conversationId: conversation.id, status: 'idle' });
-    }
-    return { ok: true, conversations };
   });
 
   app.post<{ Params: { id: string } }>('/api/agents/:id/reset', async (req, reply) => {
@@ -824,6 +835,42 @@ export async function startServer(params: {
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       deleteChannelSubscription(db, req.params.id, req.params.agentId);
       return conversationManager.getChannel(req.params.id);
+    },
+  );
+
+  app.post<{
+    Params: { id: string; agentId: string };
+    Body: { threadRootId?: string | null };
+  }>(
+    '/api/channels/:id/agents/:agentId/open-session',
+    async (req, reply) => {
+      const user = requireChannelAccess(req, reply, req.params.id);
+      if (!user) return { error: 'Access denied' };
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) {
+        reply.code(404);
+        return { error: 'Channel not found' };
+      }
+      const agent = conversationManager.getAgent(req.params.agentId);
+      if (!agent) {
+        reply.code(404);
+        return { error: 'Agent not found' };
+      }
+      const channelAgentIds = new Set(conversationManager.listAgents(req.params.id).map((item) => item.agentId));
+      if (!channelAgentIds.has(req.params.agentId)) {
+        reply.code(409);
+        return { error: 'Agent is not a member of this channel.' };
+      }
+
+      const threadRootId = typeof req.body?.threadRootId === 'string' && req.body.threadRootId.trim().length > 0
+        ? req.body.threadRootId.trim()
+        : null;
+      const conversation = conversationManager.openAgentChannelThread(req.params.agentId, req.params.id, threadRootId);
+      if (!conversation) {
+        reply.code(404);
+        return { error: 'Conversation not found' };
+      }
+      return conversation;
     },
   );
 

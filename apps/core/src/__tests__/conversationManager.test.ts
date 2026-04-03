@@ -323,6 +323,168 @@ describe('ConversationManager', () => {
     });
   });
 
+  describe('clearConversationChat', () => {
+    it('应仅清空当前 direct conversation 的消息与运行态历史，并换新 session_key', () => {
+      const now = Date.now();
+      db.prepare(
+        `INSERT INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+         VALUES(?, ?, ?, 0, ?, ?)`,
+      ).run('user-alice', 'alice', 'hash', now, now);
+      db.prepare(
+        `INSERT INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+         VALUES(?, ?, ?, 0, ?, ?)`,
+      ).run('user-yanzong', 'yanzong', 'hash', now, now);
+      const agent = manager.createAgent({
+        name: 'DirectBob',
+        agentType: 'claude_acp',
+        nodeId: 'node-1',
+        workspacePath: '/tmp/direct-bob',
+      });
+      const aliceConv = manager.openAgentThread(agent.agentId, 'user-alice');
+      const yanzongConv = manager.openAgentThread(agent.agentId, 'user-yanzong');
+      expect(aliceConv).not.toBeNull();
+      expect(yanzongConv).not.toBeNull();
+      if (!aliceConv || !yanzongConv) throw new Error('missing conversations');
+
+      const aliceBefore = db.prepare(
+        'SELECT session_key as sessionKey FROM conversations WHERE id = ?',
+      ).get(aliceConv.id) as { sessionKey: string };
+      const yanzongBefore = db.prepare(
+        'SELECT session_key as sessionKey FROM conversations WHERE id = ?',
+      ).get(yanzongConv.id) as { sessionKey: string };
+
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+         VALUES(?, ?, 'user-alice', 'alice', 'user', ?, 'hello alice', 1, ?)`,
+      ).run('msg-alice-1', `dm:${agent.agentId}`, aliceConv.replyTarget, Date.now());
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+         VALUES(?, ?, ?, ?, 'agent', ?, 'reply alice', 2, ?)`,
+      ).run('msg-alice-2', `dm:${agent.agentId}`, agent.agentId, agent.name, aliceConv.replyTarget, Date.now());
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+         VALUES(?, ?, 'user-yanzong', 'yanzong', 'user', ?, 'keep yanzong', 3, ?)`,
+      ).run('msg-yanzong-1', `dm:${agent.agentId}`, yanzongConv.replyTarget, Date.now());
+
+      db.prepare(
+        'INSERT INTO runs(run_id, session_key, prompt_text, started_at) VALUES(?, ?, ?, ?)',
+      ).run('run-alice-1', aliceBefore.sessionKey, 'remember alice', Date.now());
+      db.prepare(
+        'INSERT INTO events(run_id, seq, method, payload_json, created_at) VALUES(?, ?, ?, ?, ?)',
+      ).run('run-alice-1', 1, 'node/event', JSON.stringify({ type: 'content.delta', text: 'alice output' }), Date.now());
+      db.prepare(
+        'INSERT INTO conversation_prompt_queue(agent_id, conversation_id, prompt_text, created_at, updated_at) VALUES(?, ?, ?, ?, ?)',
+      ).run(agent.agentId, aliceConv.id, 'queued alice', Date.now(), Date.now());
+      db.prepare(
+        'INSERT INTO runs(run_id, session_key, prompt_text, started_at) VALUES(?, ?, ?, ?)',
+      ).run('run-yanzong-1', yanzongBefore.sessionKey, 'keep yanzong', Date.now());
+
+      const cleared = manager.clearConversationChat(aliceConv.id);
+      expect(cleared).not.toBeNull();
+      if (!cleared) throw new Error('missing cleared conversation');
+
+      const aliceAfter = db.prepare(
+        'SELECT session_key as sessionKey, history_reset_at as historyResetAt FROM conversations WHERE id = ?',
+      ).get(aliceConv.id) as { sessionKey: string; historyResetAt: number | null };
+
+      expect(aliceAfter.sessionKey).not.toBe(aliceBefore.sessionKey);
+      expect(aliceAfter.historyResetAt).toBeTruthy();
+
+      const aliceMessages = db.prepare(
+        `SELECT count(*) as count FROM channel_messages WHERE channel_id = ? AND target = ?`,
+      ).get(`dm:${agent.agentId}`, aliceConv.replyTarget) as { count: number };
+      const yanzongMessages = db.prepare(
+        `SELECT count(*) as count FROM channel_messages WHERE channel_id = ? AND target = ?`,
+      ).get(`dm:${agent.agentId}`, yanzongConv.replyTarget) as { count: number };
+      const aliceRuns = db.prepare(
+        'SELECT count(*) as count FROM runs WHERE session_key = ?',
+      ).get(aliceBefore.sessionKey) as { count: number };
+      const yanzongRuns = db.prepare(
+        'SELECT count(*) as count FROM runs WHERE session_key = ?',
+      ).get(yanzongBefore.sessionKey) as { count: number };
+      const aliceEvents = db.prepare(
+        'SELECT count(*) as count FROM events WHERE run_id = ?',
+      ).get('run-alice-1') as { count: number };
+      const aliceQueue = db.prepare(
+        'SELECT count(*) as count FROM conversation_prompt_queue WHERE conversation_id = ?',
+      ).get(aliceConv.id) as { count: number };
+
+      expect(aliceMessages.count).toBe(0);
+      expect(yanzongMessages.count).toBe(1);
+      expect(aliceRuns.count).toBe(0);
+      expect(yanzongRuns.count).toBe(1);
+      expect(aliceEvents.count).toBe(0);
+      expect(aliceQueue.count).toBe(0);
+    });
+
+    it('应仅重置当前 branch conversation 的 session/runs，不删除 channel 公共消息', () => {
+      const now = Date.now();
+      db.prepare(
+        `INSERT INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+         VALUES(?, ?, ?, 0, ?, ?)`,
+      ).run('user-direct', 'direct', 'hash', now, now);
+      const agent = manager.createAgent({
+        name: 'BranchBob',
+        agentType: 'claude_acp',
+        nodeId: 'node-1',
+        workspacePath: '/tmp/branch-bob',
+      });
+      manager.joinChannel(agent.agentId, 'default');
+      const branch = manager.openAgentChannelThread(agent.agentId, 'default', null);
+      const direct = manager.openAgentThread(agent.agentId, 'user-direct');
+      expect(branch).not.toBeNull();
+      expect(direct).not.toBeNull();
+      if (!branch || !direct) throw new Error('missing conversations');
+
+      const branchBefore = db.prepare(
+        'SELECT session_key as sessionKey FROM conversations WHERE id = ?',
+      ).get(branch.id) as { sessionKey: string };
+      const directBefore = db.prepare(
+        'SELECT session_key as sessionKey FROM conversations WHERE id = ?',
+      ).get(direct.id) as { sessionKey: string };
+
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+         VALUES(?, 'default', 'user', 'User', 'user', '#default', 'keep channel history', 1, ?, NULL)`,
+      ).run('msg-branch-1', Date.now());
+      db.prepare(
+        'INSERT INTO runs(run_id, session_key, prompt_text, started_at) VALUES(?, ?, ?, ?)',
+      ).run('run-branch-1', branchBefore.sessionKey, 'branch run', Date.now());
+      db.prepare(
+        'INSERT INTO events(run_id, seq, method, payload_json, created_at) VALUES(?, ?, ?, ?, ?)',
+      ).run('run-branch-1', 1, 'node/event', JSON.stringify({ type: 'content.delta', text: 'branch output' }), Date.now());
+      db.prepare(
+        'INSERT INTO conversation_prompt_queue(agent_id, conversation_id, prompt_text, created_at, updated_at) VALUES(?, ?, ?, ?, ?)',
+      ).run(agent.agentId, branch.id, 'queued branch', Date.now(), Date.now());
+      db.prepare(
+        'INSERT INTO runs(run_id, session_key, prompt_text, started_at) VALUES(?, ?, ?, ?)',
+      ).run('run-direct-keep', directBefore.sessionKey, 'direct keep', Date.now());
+
+      const cleared = manager.clearConversationChat(branch.id);
+      expect(cleared).not.toBeNull();
+      if (!cleared) throw new Error('missing cleared branch conversation');
+
+      const channelMessages = db.prepare(
+        `SELECT count(*) as count FROM channel_messages WHERE channel_id = 'default'`,
+      ).get() as { count: number };
+      const branchAfter = db.prepare(
+        'SELECT session_key as sessionKey, history_reset_at as historyResetAt FROM conversations WHERE id = ?',
+      ).get(branch.id) as { sessionKey: string; historyResetAt: number | null };
+      const branchRuns = db.prepare(
+        'SELECT count(*) as count FROM runs WHERE session_key = ?',
+      ).get(branchBefore.sessionKey) as { count: number };
+      const directRuns = db.prepare(
+        'SELECT count(*) as count FROM runs WHERE session_key = ?',
+      ).get(directBefore.sessionKey) as { count: number };
+
+      expect(channelMessages.count).toBe(1);
+      expect(branchAfter.sessionKey).not.toBe(branchBefore.sessionKey);
+      expect(branchAfter.historyResetAt).toBeTruthy();
+      expect(branchRuns.count).toBe(0);
+      expect(directRuns.count).toBe(1);
+    });
+  });
+
   describe('clearChannelChat', () => {
     it('应清空 channel 消息与 checkpoints，并仅重置该 channel 的 branch 会话历史', () => {
       const agent = manager.createAgent({

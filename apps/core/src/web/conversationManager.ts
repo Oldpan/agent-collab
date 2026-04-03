@@ -577,6 +577,83 @@ export class ConversationManager {
     return rows.map((r) => ({ nodeId: r.nodeId, hostKey: `conversation:${r.id}:${r.agentType}` }));
   }
 
+  getConversationHostKey(conversationId: string): { nodeId: string; hostKey: string } | null {
+    const row = this.db.prepare(
+      `SELECT id, agent_type as agentType, node_id as nodeId
+       FROM conversations WHERE id = ? AND node_id IS NOT NULL`,
+    ).get(conversationId) as { id: string; agentType: string; nodeId: string } | undefined;
+    if (!row) return null;
+    return { nodeId: row.nodeId, hostKey: `conversation:${row.id}:${row.agentType}` };
+  }
+
+  /** Clear one conversation's chat/runtime state and rotate it to a new session (keeps workspace files). */
+  clearConversationChat(conversationId: string): ConversationInfo | null {
+    const row = this.db.prepare(
+      `SELECT id, channel_id as channelId, reply_target as replyTarget, agent_type as agentType,
+              workspace_path as workspacePath, session_key as sessionKey, node_id as nodeId,
+              thread_kind as threadKind, is_primary_thread as isPrimaryThread, agent_id as agentId
+       FROM conversations
+       WHERE id = ?`,
+    ).get(conversationId) as {
+      id: string;
+      channelId: string;
+      replyTarget: string | null;
+      agentType: AgentType;
+      workspacePath: string | null;
+      sessionKey: string;
+      nodeId: string | null;
+      threadKind: ThreadKind;
+      isPrimaryThread: number;
+      agentId: string | null;
+    } | undefined;
+
+    if (!row) return null;
+
+    const now = Date.now();
+    this.db.prepare('DELETE FROM conversation_prompt_queue WHERE conversation_id = ?').run(conversationId);
+
+    if (row.threadKind === 'direct' && row.agentId) {
+      const directTarget = (row.replyTarget ?? '').trim();
+      const directTargetPrefix = `${directTarget}:%`;
+      this.db.prepare(
+        `DELETE FROM channel_messages
+         WHERE channel_id = ? AND (target = ? OR target LIKE ?)`,
+      ).run(`dm:${row.agentId}`, directTarget, directTargetPrefix);
+    }
+
+    const runIds = this.db.prepare(
+      `SELECT run_id as runId FROM runs WHERE session_key = ?`,
+    ).all(row.sessionKey) as Array<{ runId: string }>;
+
+    for (const run of runIds) {
+      this.db.prepare('DELETE FROM events WHERE run_id = ?').run(run.runId);
+    }
+    this.db.prepare('DELETE FROM runs WHERE session_key = ?').run(row.sessionKey);
+
+    const newSessionKey = randomUUID();
+    const preset = getRuntimeDriver(row.agentType);
+    createSession(this.db, {
+      sessionKey: newSessionKey,
+      agentCommand: preset.command,
+      agentArgs: preset.args,
+      cwd: row.workspacePath ?? this.config.workspaceRoot,
+      loadSupported: false,
+    });
+    upsertBinding(
+      this.db,
+      { platform: 'web', chatId: row.channelId, threadId: row.id, userId: row.agentType },
+      newSessionKey,
+    );
+    this.db.prepare(
+      `UPDATE conversations
+       SET session_key = ?, status = 'idle', title = '', history_reset_at = ?, updated_at = ?
+       WHERE id = ?`,
+    ).run(newSessionKey, now, now, row.id);
+    this.db.prepare('DELETE FROM sessions WHERE session_key = ?').run(row.sessionKey);
+
+    return this.getConversation(conversationId);
+  }
+
   /** Clear chat history and reset session (keeps workspace files) */
   clearAgentChat(agentId: string): ConversationInfo[] {
     const rows = this.db.prepare(

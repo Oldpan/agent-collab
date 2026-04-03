@@ -633,24 +633,41 @@ export async function openAgentThread(agentId: string): Promise<ConversationInfo
   return res.json();
 }
 
-export async function restartAgent(
+export async function openAgentChannelSession(
   agentId: string,
-): Promise<{ ok: boolean; conversations: ConversationInfo[] }> {
-  const res = await fetch(`${API_BASE}/agents/${agentId}/restart`, { method: "POST", headers: withAuthHeaders() });
+  channelId: string,
+  threadRootId?: string | null,
+): Promise<ConversationInfo> {
+  const res = await fetch(`${API_BASE}/channels/${channelId}/agents/${agentId}/open-session`, {
+    method: "POST",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ ...(threadRootId ? { threadRootId } : {}) }),
+  });
   if (!res.ok) {
     const body = await safeReadErrorBody(res);
-    throw new Error(body ?? `Failed to restart agent: ${res.statusText}`);
+    throw new Error(body ?? `Failed to open agent channel session: ${res.statusText}`);
   }
   return res.json();
 }
 
-export async function clearAgentChat(
-  agentId: string,
-): Promise<{ ok: boolean; conversations: ConversationInfo[] }> {
-  const res = await fetch(`${API_BASE}/agents/${agentId}/clear-chat`, { method: "POST", headers: withAuthHeaders() });
+export async function restartConversation(
+  conversationId: string,
+): Promise<{ ok: boolean; conversation: ConversationInfo }> {
+  const res = await fetch(`${API_BASE}/conversations/${conversationId}/restart`, { method: "POST", headers: withAuthHeaders() });
   if (!res.ok) {
     const body = await safeReadErrorBody(res);
-    throw new Error(body ?? `Failed to clear agent chat: ${res.statusText}`);
+    throw new Error(body ?? `Failed to restart conversation: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function clearConversationChat(
+  conversationId: string,
+): Promise<{ ok: boolean; conversation: ConversationInfo }> {
+  const res = await fetch(`${API_BASE}/conversations/${conversationId}/clear-chat`, { method: "POST", headers: withAuthHeaders() });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to clear conversation chat: ${res.statusText}`);
   }
   return res.json();
 }

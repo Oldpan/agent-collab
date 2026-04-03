@@ -77,8 +77,8 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
 
   const handleRestart = useCallback(async () => {
     openDialog({
-      title: "Restart Agent",
-      message: `Restart ${agent.name}?\n\nThe agent process will be restarted. All chat history and workspace files are preserved.`,
+      title: "Restart Conversation",
+      message: `Restart the current ${agent.name} conversation?\n\nThe current conversation runtime will be restarted. Chat history and workspace files are preserved.`,
       confirmText: "Restart",
       variant: "info",
       onConfirm: async () => {
@@ -96,7 +96,7 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
   const handleClearChat = useCallback(async () => {
     openDialog({
       title: "Clear Chat History",
-      message: `Clear chat history for ${agent.name}?\n\nAll messages will be removed and the session will restart. Workspace files are preserved.`,
+      message: `Clear chat history for the current ${agent.name} conversation?\n\nThis conversation will get a fresh session. Workspace files are preserved.`,
       confirmText: "Clear",
       variant: "warning",
       onConfirm: async () => {
@@ -137,8 +137,35 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
     return (
       <ScrollArea className="h-full flex-1 bg-[#fff9d0]">
         <div className="space-y-4 px-4 py-4">
+          <section className="space-y-3">
+            <div className="text-[11px] font-semibold uppercase tracking-wide text-zinc-500">Actions</div>
+            <div className="flex gap-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 flex-1 rounded-sm border-2 border-zinc-900 bg-[#dff0ff] px-2 text-xs text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#c5e4ff]"
+                onClick={handleRestart}
+                disabled={busy}
+                title="Restart the current conversation runtime, keep all history and workspace files"
+              >
+                <RefreshCwIcon className="mr-1 size-3.5" />
+                Restart
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 flex-1 rounded-sm border-2 border-zinc-900 bg-[#fff0d0] px-2 text-xs text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#ffe4b0]"
+                onClick={handleClearChat}
+                disabled={busy}
+                title="Clear chat history for the current conversation, keep workspace files"
+              >
+                <MessageSquareOffIcon className="mr-1 size-3.5" />
+                Clear chat
+              </Button>
+            </div>
+          </section>
           <section className="rounded-sm border-2 border-zinc-900 bg-[#fff8d8] px-3 py-3 text-sm text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
-            Agent settings are read-only for non-admin users. You can chat with this agent, but only admins can change its configuration or lifecycle.
+            Agent settings are read-only for non-admin users. You can restart or clear the current conversation, but only admins can edit configuration or run a full reset.
           </section>
           <section className="rounded-sm border-2 border-zinc-900 bg-[#fff8d8] px-3 py-2 text-xs text-zinc-600">
             <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Member Of</div>
@@ -148,9 +175,9 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
                   <span
                     key={channel.channelId}
                     className="rounded-full border border-zinc-300 bg-white px-2 py-0.5 text-[11px] text-zinc-700"
-                  >
-                    #{channel.name}
-                  </span>
+              >
+                #{channel.name}
+              </span>
                 ))}
               </div>
             ) : (
@@ -165,6 +192,22 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
             </section>
           )}
         </div>
+        <ConfirmDialog
+          open={dialogOpen}
+          onOpenChange={(open) => {
+            setDialogOpen(open);
+            if (!open) setDialogConfig(null);
+          }}
+          title={dialogConfig?.title ?? ""}
+          message={dialogConfig?.message ?? ""}
+          confirmText={dialogConfig?.confirmText ?? "Confirm"}
+          variant={dialogConfig?.variant ?? "info"}
+          onConfirm={async () => {
+            if (dialogConfig?.onConfirm) {
+              await dialogConfig.onConfirm();
+            }
+          }}
+        />
       </ScrollArea>
     );
   }
@@ -183,7 +226,7 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
                 className="h-8 flex-1 rounded-sm border-2 border-zinc-900 bg-[#dff0ff] px-2 text-xs text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#c5e4ff]"
                 onClick={handleRestart}
                 disabled={saving || busy}
-                title="Restart agent process, keep all data"
+                title="Restart the current conversation runtime, keep all history and workspace files"
               >
                 <RefreshCwIcon className="mr-1 size-3.5" />
                 Restart
@@ -194,7 +237,7 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
                 className="h-8 flex-1 rounded-sm border-2 border-zinc-900 bg-[#fff0d0] px-2 text-xs text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#ffe4b0]"
                 onClick={handleClearChat}
                 disabled={saving || busy}
-                title="Clear chat history, keep workspace files"
+                title="Clear chat history for the current conversation, keep workspace files"
               >
                 <MessageSquareOffIcon className="mr-1 size-3.5" />
                 Clear chat

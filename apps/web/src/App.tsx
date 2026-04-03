@@ -61,6 +61,7 @@ export function App() {
     selectedId,
     loading,
     openAgentThread,
+    openAgentChannelSession,
     selectConversation,
   } = useConversations(user?.id);
 
@@ -115,29 +116,27 @@ export function App() {
     [deleteAgent],
   );
 
-  const handleRestartAgent = useCallback(
-    async (agentId: string) => {
-      await api.restartAgent(agentId);
+  const handleRestartConversation = useCallback(
+    async (conversationId: string) => {
+      await api.restartConversation(conversationId);
     },
     [],
   );
 
-  const handleClearAgentChat = useCallback(
-    async (agentId: string) => {
-      await api.clearAgentChat(agentId);
-      await openAgentThread(agentId);
+  const handleClearConversationChat = useCallback(
+    async (conversationId: string) => {
+      await api.clearConversationChat(conversationId);
       setViewMode("chat");
     },
-    [openAgentThread],
+    [],
   );
 
   const handleResetAgent = useCallback(
     async (agentId: string) => {
       await api.resetAgent(agentId);
-      await openAgentThread(agentId);
       setViewMode("chat");
     },
-    [openAgentThread],
+    [],
   );
 
   const handleOpenAgentThread = useCallback(
@@ -147,6 +146,18 @@ export function App() {
       setViewMode("chat");
     },
     [openAgentThread],
+  );
+
+  const handleOpenAgentChannelSession = useCallback(
+    async (agentId: string, channelId: string, threadRootId?: string | null) => {
+      const previousSelectedId = selectedId;
+      const conversation = await openAgentChannelSession(agentId, channelId, threadRootId);
+      selectConversation(previousSelectedId);
+      setSelectedChannelId(channelId);
+      setViewMode("chat");
+      return conversation;
+    },
+    [openAgentChannelSession, selectConversation, selectedId],
   );
 
   const handleSelectConversation = useCallback(
@@ -306,6 +317,9 @@ export function App() {
               agents={agents}
               isAdmin={user?.isAdmin ?? false}
               onAgentsUpdated={refreshAgents}
+              onOpenAgentSession={handleOpenAgentChannelSession}
+              onRestartConversation={handleRestartConversation}
+              onClearConversationChat={handleClearConversationChat}
               onSeenSeq={handleChannelSeenSeq}
               onChannelUpdated={updateChannelInStore}
               onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
@@ -318,8 +332,8 @@ export function App() {
               onSeenSeq={handleConversationSeenSeq}
               onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
               onUpdateAgent={handleUpdateAgent}
-              onRestartAgent={handleRestartAgent}
-              onClearAgentChat={handleClearAgentChat}
+              onRestartConversation={handleRestartConversation}
+              onClearConversationChat={handleClearConversationChat}
               onResetAgent={handleResetAgent}
             />
           ) : (

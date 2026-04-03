@@ -64,8 +64,8 @@ type ChatPanelProps = {
   onOpenSidebar?: () => void;
   onSeenSeq?: (seq: number) => void;
   onUpdateAgent?: (id: string, req: UpdateAgentRequest) => Promise<void>;
-  onRestartAgent?: (id: string) => Promise<void>;
-  onClearAgentChat?: (id: string) => Promise<void>;
+  onRestartConversation?: (id: string) => Promise<void>;
+  onClearConversationChat?: (id: string) => Promise<void>;
   onResetAgent?: (id: string) => Promise<void>;
 };
 
@@ -96,8 +96,8 @@ export function ChatPanel({
   onOpenSidebar,
   onSeenSeq,
   onUpdateAgent,
-  onRestartAgent,
-  onClearAgentChat,
+  onRestartConversation,
+  onClearConversationChat,
   onResetAgent,
 }: ChatPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "activity" | "debug" | "workspace" | "skills" | "profile" | "setting">("chat");
@@ -266,19 +266,17 @@ export function ChatPanel({
           >
             Profile
           </Button>
-          {isAdmin && (
-            <Button
-              size="sm"
-              variant={activeTab === "setting" ? "default" : "outline"}
-              className={cn(
-                "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
-                activeTab === "setting" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
-              )}
-              onClick={() => setActiveTab("setting")}
-            >
-              Setting
-            </Button>
-          )}
+          <Button
+            size="sm"
+            variant={activeTab === "setting" ? "default" : "outline"}
+            className={cn(
+              "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+              activeTab === "setting" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+            )}
+            onClick={() => setActiveTab("setting")}
+          >
+            Setting
+          </Button>
         </div>
       </div>
 
@@ -311,8 +309,8 @@ export function ChatPanel({
               agent={agent}
               isAdmin={isAdmin}
               onUpdate={(req) => onUpdateAgent?.(agent.agentId, req) ?? Promise.resolve()}
-              onRestart={() => onRestartAgent?.(agent.agentId) ?? Promise.resolve()}
-              onClearChat={() => onClearAgentChat?.(agent.agentId) ?? Promise.resolve()}
+              onRestart={() => onRestartConversation?.(conversation.id) ?? Promise.resolve()}
+              onClearChat={() => onClearConversationChat?.(conversation.id) ?? Promise.resolve()}
               onReset={() => onResetAgent?.(agent.agentId) ?? Promise.resolve()}
             />
           </div>
