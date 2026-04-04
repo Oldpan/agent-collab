@@ -744,6 +744,62 @@ describe('REST API', () => {
     expect(bobPrompt?.promptText).toContain('There is new channel activity');
   });
 
+  it('POST /api/channels/:id/messages 在 subscribed_agents 模式下，同批订阅者应看到一致的 active participants', async () => {
+    const channel = manager.createChannel({
+      name: 'subscribed-participants',
+      collaborationMode: 'subscribed_agents',
+    });
+    const kimi = manager.createAgent({
+      name: 'kimi',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/subscribed-kimi',
+    });
+    const bob = manager.createAgent({
+      name: 'Bob',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/subscribed-bob-participants',
+    });
+    manager.joinChannel(kimi.agentId, channel.channelId);
+    manager.joinChannel(bob.agentId, channel.channelId);
+
+    const response = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '你们好啊', senderName: 'User' }),
+    });
+
+    expect(response.status).toBe(201);
+
+    const kimiConv = manager.openAgentChannelThread(kimi.agentId, channel.channelId, null);
+    const bobConv = manager.openAgentChannelThread(bob.agentId, channel.channelId, null);
+    expect(kimiConv).not.toBeNull();
+    expect(bobConv).not.toBeNull();
+
+    const kimiPrompt = db.prepare(
+      `SELECT r.prompt_text as promptText
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.id = ?
+       ORDER BY r.started_at DESC
+       LIMIT 1`,
+    ).get(kimiConv?.id) as { promptText: string } | undefined;
+    const bobPrompt = db.prepare(
+      `SELECT r.prompt_text as promptText
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.id = ?
+       ORDER BY r.started_at DESC
+       LIMIT 1`,
+    ).get(bobConv?.id) as { promptText: string } | undefined;
+
+    expect(kimiPrompt?.promptText).toContain('@kimi (participant)');
+    expect(kimiPrompt?.promptText).toContain('@Bob (participant)');
+    expect(bobPrompt?.promptText).toContain('@kimi (participant)');
+    expect(bobPrompt?.promptText).toContain('@Bob (participant)');
+  });
+
   it('POST /api/channels/:id/messages 在 subscribed_agents 模式下，有 root participants 时应优先唤醒参与者', async () => {
     const channel = manager.createChannel({
       name: 'subscribed-priority',

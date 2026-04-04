@@ -417,6 +417,10 @@ export class ExecutionDispatcher {
     return { command: driver.command, args: [...driver.args] };
   }
 
+  private isIgnorableReplayAssistantText(text: string): boolean {
+    return text.includes(`Empty response: {'content':`);
+  }
+
   private getDispatchMode(sessionKey: string): RuntimeDispatchMode {
     const row = this.db
       .prepare('SELECT COUNT(*) as count FROM runs WHERE session_key = ?')
@@ -458,29 +462,51 @@ export class ExecutionDispatcher {
     const blocks: string[] = [];
 
     for (const run of chronological) {
+      const visibleAgentMessages = this.db.prepare(
+        `SELECT content, message_kind as messageKind
+         FROM channel_messages
+         WHERE run_id = ?
+           AND sender_type = 'agent'
+         ORDER BY created_at ASC, seq ASC`,
+      ).all(run.runId) as Array<{ content: string; messageKind: string | null }>;
+
+      let assistantLine = '';
+      const finalMessage = [...visibleAgentMessages].reverse().find((row) => row.messageKind === 'final');
+      const lastVisibleMessage = visibleAgentMessages.length > 0
+        ? visibleAgentMessages[visibleAgentMessages.length - 1]
+        : undefined;
+      if (finalMessage?.content?.trim()) {
+        assistantLine = finalMessage.content.trim();
+      } else if (lastVisibleMessage?.content?.trim()) {
+        assistantLine = lastVisibleMessage.content.trim();
+      }
+
       const events = this.db.prepare(
         `SELECT payload_json as payloadJson FROM events
          WHERE run_id = ? AND method = 'node/event'
          ORDER BY seq ASC`,
       ).all(run.runId) as Array<{ payloadJson: string }>;
 
-      let assistantText = '';
-      for (const ev of events) {
-        try {
-          const parsed = JSON.parse(ev.payloadJson) as { type?: string; text?: string };
-          if (parsed?.type === 'content.delta' && typeof parsed.text === 'string') {
-            assistantText += parsed.text;
-          }
-        } catch { /* ignore malformed rows */ }
-      }
+      if (!assistantLine) {
+        let assistantText = '';
+        for (const ev of events) {
+          try {
+            const parsed = JSON.parse(ev.payloadJson) as { type?: string; text?: string };
+            if (parsed?.type === 'content.delta' && typeof parsed.text === 'string') {
+              assistantText += parsed.text;
+            }
+          } catch { /* ignore malformed rows */ }
+        }
 
-      const assistantLine = assistantText.trim()
-        ? assistantText.trim()
-        : run.error
-          ? `[error] ${run.error}`
-          : run.stopReason
-            ? `[stop_reason] ${run.stopReason}`
-            : '';
+        const cleanedAssistantText = assistantText.trim();
+        assistantLine = cleanedAssistantText && !this.isIgnorableReplayAssistantText(cleanedAssistantText)
+          ? cleanedAssistantText
+          : run.error
+            ? `[error] ${run.error}`
+            : run.stopReason
+              ? `[stop_reason] ${run.stopReason}`
+              : '';
+      }
 
       blocks.push(`User: ${run.promptText}`);
       if (assistantLine) blocks.push(`Assistant: ${assistantLine}`);

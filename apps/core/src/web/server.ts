@@ -1351,6 +1351,82 @@ export async function startServer(params: {
       const mentionedAgents = findMentionedAgents(content, channelAgents);
       const notifiedAgentIds = new Set<string>();
       const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
+      const pendingNotifications = new Map<string, { reason: 'mention' | 'thread_reply' | 'channel_activity'; role: 'owner' | 'participant' }>();
+
+      const queueAgentNotification = (
+        agentId: string,
+        reason: 'mention' | 'thread_reply' | 'channel_activity',
+        role: 'owner' | 'participant',
+      ): void => {
+        if (pendingNotifications.has(agentId)) return;
+        pendingNotifications.set(agentId, { reason, role });
+      };
+
+      const flushAgentNotifications = (): void => {
+        for (const [agentId, { role }] of pendingNotifications.entries()) {
+          upsertTargetParticipant(db, {
+            agentId,
+            channelId: req.params.id,
+            threadRootId: threadRootId ?? null,
+            role,
+            lastActiveAt: now,
+          });
+        }
+
+        for (const [agentId, { reason }] of pendingNotifications.entries()) {
+          if (notifiedAgentIds.has(agentId)) continue;
+          const agent = conversationManager.getAgent(agentId);
+          if (!agent) continue;
+          const conv = conversationManager.openAgentChannelThread(agentId, req.params.id, threadRootId ?? null);
+          if (!conv) continue;
+
+          const activationContext = buildTargetActivationContext(db, {
+            agentId,
+            channelId: req.params.id,
+            replyTarget: conv.replyTarget ?? historyTarget,
+            triggerSeq: seq,
+            threadRootId: threadRootId ?? null,
+          });
+
+          if (reason === 'mention') {
+            broadcastToChannel(req.params.id, {
+              type: 'channel.notice',
+              notice: {
+                message: `@${agent.name} was mentioned and notified.`,
+                createdAt: new Date(now).toISOString(),
+              },
+            });
+          }
+
+          notifiedAgentIds.add(agentId);
+          conversationManager.submitPrompt(
+            conv.id,
+            buildChannelActivationPrompt({
+              channelName: channel.name,
+              target: historyTarget,
+              replyTarget: activationContext.replyTarget,
+              senderName,
+              content,
+              reason,
+            }),
+            {
+              recordAsUserMessage: false,
+              activationContextText: buildChannelActivationContextText({
+                target: historyTarget,
+                recentMessages: activationContext.recentMessages,
+                rootMessage: activationContext.rootMessage,
+                unreadCount: activationContext.unreadCount,
+                oldestVisibleSeq: activationContext.oldestVisibleSeq,
+                participants: activationContext.participants,
+                boundTask: activationContext.boundTask,
+                openTasks: activationContext.openTasks,
+              }) || undefined,
+            },
+          ).then(() => {
+            bumpAgentMessageCheckpoint(db, agentId, req.params.id, seq, threadRootId ?? null);
+          }).catch(() => {});
+        }
+      };
 
       const notifyAgent = (
         agentId: string,
@@ -1360,62 +1436,7 @@ export async function startServer(params: {
         if (notifiedAgentIds.has(agentId)) return;
         const agent = conversationManager.getAgent(agentId);
         if (!agent) return;
-        const conv = conversationManager.openAgentChannelThread(agentId, req.params.id, threadRootId ?? null);
-        if (!conv) return;
-
-        upsertTargetParticipant(db, {
-          agentId,
-          channelId: req.params.id,
-          threadRootId: threadRootId ?? null,
-          role,
-          lastActiveAt: now,
-        });
-
-        const activationContext = buildTargetActivationContext(db, {
-          agentId,
-          channelId: req.params.id,
-          replyTarget: conv.replyTarget ?? historyTarget,
-          triggerSeq: seq,
-          threadRootId: threadRootId ?? null,
-        });
-
-        if (reason === 'mention') {
-          broadcastToChannel(req.params.id, {
-            type: 'channel.notice',
-            notice: {
-              message: `@${agent.name} was mentioned and notified.`,
-              createdAt: new Date(now).toISOString(),
-            },
-          });
-        }
-
-        notifiedAgentIds.add(agentId);
-        conversationManager.submitPrompt(
-          conv.id,
-          buildChannelActivationPrompt({
-            channelName: channel.name,
-            target: historyTarget,
-            replyTarget: activationContext.replyTarget,
-            senderName,
-            content,
-            reason,
-          }),
-          {
-            recordAsUserMessage: false,
-            activationContextText: buildChannelActivationContextText({
-              target: historyTarget,
-              recentMessages: activationContext.recentMessages,
-              rootMessage: activationContext.rootMessage,
-              unreadCount: activationContext.unreadCount,
-              oldestVisibleSeq: activationContext.oldestVisibleSeq,
-              participants: activationContext.participants,
-              boundTask: activationContext.boundTask,
-              openTasks: activationContext.openTasks,
-            }) || undefined,
-          },
-        ).then(() => {
-          bumpAgentMessageCheckpoint(db, agentId, req.params.id, seq, threadRootId ?? null);
-        }).catch(() => {});
+        queueAgentNotification(agentId, reason, role);
       };
 
       // Thread replies wake current thread participants; fall back to the root owner if needed.
@@ -1473,6 +1494,8 @@ export async function startServer(params: {
           notifyAgent(agent.agentId, 'channel_activity', agent.role);
         }
       }
+
+      flushAgentNotifications();
 
       reply.code(201);
       return { messageId, seq };

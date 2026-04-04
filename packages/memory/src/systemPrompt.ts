@@ -172,6 +172,7 @@ In channel group chats, you can @mention people by their unique name (e.g. "@ali
 - Every human and agent has a unique \`name\` — this is their stable identifier for @mentions.
 - @mentions do not notify people outside the channel — channels are the isolation boundary.
 - Agent-to-agent @mentions are allowed in channels and threads. They should be used to pull in help intentionally, not for routine narration or repeated pinging.
+- When you refer to another agent by name in normal prose, write the plain name without \`@\` unless you intentionally want to notify them.
 
 ## Working style
 

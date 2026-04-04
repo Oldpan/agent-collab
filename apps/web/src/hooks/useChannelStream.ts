@@ -79,66 +79,101 @@ export function useChannelStream(options: UseChannelStreamOptions): {
       return;
     }
     let cancelled = false;
+    let reconnectAttempt = 0;
+    let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+
     void loadInitialMessages(channelId).catch(() => {});
 
-    const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const token = localStorage.getItem("auth_token") ?? "";
-    const ws = new WebSocket(
-      `${protocol}//${window.location.host}/api/channels/${encodeURIComponent(channelId)}/stream${token ? `?token=${encodeURIComponent(token)}` : ""}`,
-    );
-    wsRef.current = ws;
+    const connect = () => {
+      if (cancelled) return;
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const token = localStorage.getItem("auth_token") ?? "";
+      const ws = new WebSocket(
+        `${protocol}//${window.location.host}/api/channels/${encodeURIComponent(channelId)}/stream${token ? `?token=${encodeURIComponent(token)}` : ""}`,
+      );
+      wsRef.current = ws;
 
-    ws.onmessage = (evt) => {
-      if (wsRef.current !== ws) return;
-      try {
-        const event = JSON.parse(evt.data as string) as {
-          type: string;
-          message?: ChannelMessage;
-          notice?: { message: string; createdAt: string };
-          channelId?: string;
-        };
-        if (event.type === "channel.message" && event.message) {
-          const msg = event.message;
-          if (typeof msg.seq === "number" && canMarkSeen()) {
-            onSeenSeqRef.current?.(msg.seq);
-          }
-          if (!msg.threadRootId) {
-            // Top-level message — add to main channel list
-            setMessages((prev) =>
-              prev.some((m) => m.id === msg.id) ? prev : [...prev, msg],
-            );
-          } else {
-            // Thread reply — increment replyCount on parent message
-            setMessages((prev) =>
-              prev.map((m) =>
-                m.id.slice(0, 8) === msg.threadRootId
-                  ? { ...m, replyCount: (m.replyCount ?? 0) + 1 }
-                  : m,
-              ),
-            );
-          }
-        } else if (event.type === "channel.notice" && event.notice) {
-          const notice = event.notice;
-          setNotices((prev) => [...prev, { message: notice.message, createdAt: notice.createdAt }]);
-        } else if (event.type === "channel.history.reset") {
-          void resetHistory();
-        } else if (event.type === "channel.tasks.changed" && event.channelId === channelId) {
-          setTaskVersion((prev) => prev + 1);
+      ws.onopen = () => {
+        if (wsRef.current !== ws) return;
+        if (reconnectAttempt > 0) {
+          // Reconnect after a drop — catch up on messages we missed
           void loadInitialMessages(channelId).catch(() => {});
         }
-      } catch {
-        // ignore malformed messages
-      }
+        reconnectAttempt = 0;
+      };
+
+      ws.onmessage = (evt) => {
+        if (wsRef.current !== ws) return;
+        try {
+          const event = JSON.parse(evt.data as string) as {
+            type: string;
+            message?: ChannelMessage;
+            notice?: { message: string; createdAt: string };
+            channelId?: string;
+          };
+          if (event.type === "channel.message" && event.message) {
+            const msg = event.message;
+            if (typeof msg.seq === "number" && canMarkSeen()) {
+              onSeenSeqRef.current?.(msg.seq);
+            }
+            if (!msg.threadRootId) {
+              // Top-level message — add to main channel list
+              setMessages((prev) =>
+                prev.some((m) => m.id === msg.id) ? prev : [...prev, msg],
+              );
+            } else {
+              // Thread reply — increment replyCount on parent message
+              setMessages((prev) =>
+                prev.map((m) =>
+                  m.id.slice(0, 8) === msg.threadRootId
+                    ? { ...m, replyCount: (m.replyCount ?? 0) + 1 }
+                    : m,
+                ),
+              );
+            }
+          } else if (event.type === "channel.notice" && event.notice) {
+            const notice = event.notice;
+            setNotices((prev) => [...prev, { message: notice.message, createdAt: notice.createdAt }]);
+          } else if (event.type === "channel.history.reset") {
+            void resetHistory();
+          } else if (event.type === "channel.tasks.changed" && event.channelId === channelId) {
+            setTaskVersion((prev) => prev + 1);
+            void loadInitialMessages(channelId).catch(() => {});
+          }
+        } catch {
+          // ignore malformed messages
+        }
+      };
+
+      ws.onerror = () => {};
+
+      ws.onclose = () => {
+        if (wsRef.current !== ws) return;
+        wsRef.current = null;
+        if (cancelled) return;
+        // Reconnect with exponential backoff (capped at 5s)
+        reconnectAttempt += 1;
+        const delayMs = Math.min(5_000, 500 * reconnectAttempt);
+        reconnectTimer = setTimeout(() => {
+          reconnectTimer = null;
+          connect();
+        }, delayMs);
+      };
     };
-    ws.onerror = () => {};
-    ws.onclose = () => {
-      if (wsRef.current === ws) wsRef.current = null;
-    };
+
+    connect();
 
     return () => {
       cancelled = true;
-      ws.close();
-      if (wsRef.current === ws) wsRef.current = null;
+      if (reconnectTimer) {
+        clearTimeout(reconnectTimer);
+        reconnectTimer = null;
+      }
+      const ws = wsRef.current;
+      if (ws) {
+        ws.close();
+        wsRef.current = null;
+      }
     };
   }, [channelId, loadInitialMessages, resetHistory]);
 

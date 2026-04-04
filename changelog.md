@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-04 (replay prefers visible replies over empty fallback noise)
+
+- `delta_fallback` 中包含 `Empty response: {'content': ...` 的空响应噪音现在不会再落到用户可见聊天记录。
+- `resume` 时的 conversation replay 现在会优先回放该 run 真实发给用户的 agent 消息，而不是盲目拼接原始 `content.delta`。
+- 如果某条旧 run 只有空响应噪音 delta、但已经有真实 `send_message` 回复，后续 fresh-session / restart replay 不会再把 `Assistant: (Empty response: ...)` 这类脏内容带回 prompt。
+
 ## 2026-03-29 (agent-to-agent channel mentions)
 
 - Channel/thread 中的正式 agent 消息现在支持显式 `@agent` 协作唤醒：被提及的 agent 会在同一个 target 上被拉起并加入该 target 的 participants。

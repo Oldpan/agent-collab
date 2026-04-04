@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { finishRun } from '@agent-collab/runtime-acp';
 import type { CoreToNode } from '@agent-collab/protocol';
@@ -357,6 +358,60 @@ describe('ExecutionDispatcher', () => {
     expect(secondDispatch.dispatchMode).toBe('resume');
     expect(secondDispatch.contextText ?? '').not.toContain('Context (previous messages, for continuity after restart):');
     expect(secondDispatch.contextText ?? '').not.toContain('User: before reset');
+  });
+
+  it('resume replay 应优先使用真实 agent 回复，不应回放空响应 delta 噪音', async () => {
+    const agent = manager.createAgent({
+      name: 'Replay Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/replay-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    await manager.submitPrompt(conv.id, 'first prompt', { senderName: 'oldpan' });
+    const firstDispatch = sent[0]?.msg;
+    if (!firstDispatch || firstDispatch.type !== 'run.dispatch') throw new Error('missing first dispatch');
+
+    const dmChannelId = `dm:${agent.agentId}`;
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      randomUUID(),
+      dmChannelId,
+      agent.agentId,
+      agent.name,
+      'dm:@oldpan',
+      '真实可见回复',
+      allocateNextChannelMessageSeq(db, dmChannelId),
+      Date.now(),
+      firstDispatch.runId,
+      'final',
+    );
+    db.prepare(
+      `INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, ?, 'node/event', ?, ?)`,
+    ).run(
+      firstDispatch.runId,
+      1,
+      JSON.stringify({
+        type: 'content.delta',
+        text: `(Empty response: {'content': [{'type': 'thinking', 'thinking': 'noise'}]})`,
+      }),
+      Date.now(),
+    );
+    finishRun(db, { runId: firstDispatch.runId, stopReason: 'end_turn' });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', conv.id);
+
+    await manager.submitPrompt(conv.id, 'second prompt', { senderName: 'oldpan' });
+
+    const secondDispatch = sent[1]?.msg;
+    if (!secondDispatch || secondDispatch.type !== 'run.dispatch') throw new Error('missing second dispatch');
+    expect(secondDispatch.dispatchMode).toBe('resume');
+    expect(secondDispatch.contextText ?? '').toContain('真实可见回复');
+    expect(secondDispatch.contextText ?? '').not.toContain('Empty response:');
   });
 
   it('cancelConversationRun 应发送 run.cancel 到节点', () => {
