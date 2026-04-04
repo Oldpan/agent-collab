@@ -9,6 +9,7 @@ import type {
   ChatStatus,
 } from "./types";
 import * as api from "@/lib/api";
+import { useConversationsStore } from "./useConversations";
 
 let nextId = 1;
 const createId = () => `msg-${nextId++}`;
@@ -583,6 +584,10 @@ export function useConversationStream(
         }
 
         case "conversation.status": {
+          // 同步 status 到全局 conversation store，确保 Session Manager 等面板实时准确
+          if (conversationId) {
+            useConversationsStore.getState().patchConversationStatus(conversationId, event.status);
+          }
           if (event.status === "idle") {
             setStatus("idle");
           } else if (event.status === "queued") {

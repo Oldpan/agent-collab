@@ -199,6 +199,10 @@ function cleanFallbackText(text: string): string {
   return stripInternalReminderTail(stripLegacyStatusText(text)).trim();
 }
 
+function isIgnorableFallbackText(text: string): boolean {
+  return text.includes(`Empty response: {'content':`);
+}
+
 function hasSubstantiveFallbackText(text: string): boolean {
   return text.trim().length > 0;
 }
@@ -282,6 +286,7 @@ function collectFallbackSegments(db: Db, runId: string): string[] {
   return rawSegments
     .map((segment) => cleanFallbackText(segment))
     .filter((segment) => hasSubstantiveFallbackText(segment))
+    .filter((segment) => !isIgnorableFallbackText(segment))
     .filter((segment) => {
       const normalized = normalizeComparisonText(segment);
       if (!normalized) return false;

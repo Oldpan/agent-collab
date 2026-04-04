@@ -975,25 +975,34 @@ export async function startServer(params: {
       }
 
       const joinedAgents = conversationManager.listAgents(req.params.id);
-      const unmarkableAgents = joinedAgents.filter((agent) => !agent.nodeId || !agent.workspacePath);
-      if (unmarkableAgents.length > 0) {
-        reply.code(409);
-        return {
-          error: `Cannot mark channel memory for: ${unmarkableAgents.map((agent) => agent.name).join(', ')}`,
-        };
-      }
-
+      const configuredAgents = joinedAgents.filter((agent) => agent.nodeId && agent.workspacePath);
+      const skippedAgents = joinedAgents.filter(
+        (agent) => !agent.nodeId || !agent.workspacePath || !nodeRegistry.getNode(agent.nodeId),
+      );
+      let warning: string | undefined;
       const clearedAt = Date.now();
-      try {
-        await appendChannelResetMarkers({
-          broker: workspaceBroker,
-          agents: joinedAgents,
-          channelName: channel.name,
-          clearedAt,
-        });
-      } catch (error) {
-        reply.code(409);
-        return { error: `Failed to mark channel memory: ${String((error as Error)?.message ?? error)}` };
+      const writableAgents = configuredAgents.filter((agent) => nodeRegistry.getNode(agent.nodeId!));
+      if (writableAgents.length > 0) {
+        try {
+          await appendChannelResetMarkers({
+            broker: workspaceBroker,
+            agents: writableAgents,
+            channelName: channel.name,
+            clearedAt,
+          });
+        } catch (error) {
+          req.log.warn(
+            {
+              channelId: req.params.id,
+              error,
+            },
+            '[channel-clear-chat] channel memory marker write failed',
+          );
+          warning = `Channel chat history cleared, but channel memory notes could not be updated: ${String((error as Error)?.message ?? error)}`;
+        }
+      }
+      if (!warning && skippedAgents.length > 0) {
+        warning = `Channel chat history cleared, but channel memory notes were skipped for offline or unconfigured agents: ${skippedAgents.map((agent) => agent.name).join(', ')}`;
       }
 
       const branchConversations = conversationManager
@@ -1009,7 +1018,22 @@ export async function startServer(params: {
         }
       }
 
-      const clearedConversations = conversationManager.clearChannelChat(req.params.id);
+      let clearedConversations;
+      try {
+        clearedConversations = conversationManager.clearChannelChat(req.params.id);
+      } catch (error) {
+        req.log.error(
+          {
+            channelId: req.params.id,
+            error,
+          },
+          '[channel-clear-chat] failed',
+        );
+        reply.code(500);
+        return {
+          error: `Failed to clear channel chat: ${String((error as Error)?.message ?? error)}`,
+        };
+      }
       for (const conversation of clearedConversations) {
         broadcast(conversation.id, { type: 'history.reset' });
         broadcast(conversation.id, {
@@ -1023,6 +1047,7 @@ export async function startServer(params: {
       return {
         ok: true,
         clearedConversationIds: clearedConversations.map((item) => item.id),
+        ...(warning ? { warning } : {}),
       };
     },
   );

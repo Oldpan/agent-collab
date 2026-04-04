@@ -433,6 +433,80 @@ describe('nodeWsHandler', () => {
     expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
   });
 
+  it('空响应噪音 delta 不应落 delta_fallback 聊天记录', () => {
+    const agent = manager.createAgent({
+      name: 'NoisyFallbackBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/noisy-fallback-bob-contract',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const socket = new FakeSocket();
+    const events: any[] = [];
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(socket as any, registry as any, (_conversationId, event) => {
+      events.push(event);
+    }, db, manager);
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-empty-delta-fallback-1',
+      sessionKey: sessionRow.sessionKey,
+      promptText: '你好',
+    });
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'msg-empty-delta-fallback-1',
+      `dm:${agent.agentId}`,
+      agent.agentId,
+      agent.name,
+      'dm:@oldpan',
+      '你好！我是 kimi，打杂小能手。有什么我可以帮你的吗？',
+      1,
+      999,
+      'run-empty-delta-fallback-1',
+      'final',
+    );
+
+    db.prepare(
+      `INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, ?, 'node/event', ?, ?)`,
+    ).run(
+      'run-empty-delta-fallback-1',
+      1,
+      JSON.stringify({
+        type: 'content.delta',
+        text: `(Empty response: {'content': [], 'stop_reason': 'end_turn'})`,
+      }),
+      1000,
+    );
+
+    socket.emit('message', JSON.stringify({
+      type: 'run.end',
+      runId: 'run-empty-delta-fallback-1',
+      conversationId: conv.id,
+      stopReason: 'end_turn',
+    }));
+
+    const fallbackCount = db.prepare(
+      `SELECT COUNT(*) as count
+       FROM channel_messages
+       WHERE run_id = ? AND message_source = 'delta_fallback'`,
+    ).get('run-empty-delta-fallback-1') as { count: number };
+    expect(fallbackCount.count).toBe(0);
+    expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
+  });
+
   it('私聊 run 已绑定 send_message 时应允许正常完成', () => {
     const agent = manager.createAgent({
       name: 'Alice',

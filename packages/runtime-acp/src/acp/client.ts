@@ -213,7 +213,7 @@ export class AcpClient {
     timeoutMs?: number,
   ): Promise<PromptResult> {
     this.currentRun = run;
-    this.runSeq.set(run.runId, 0);
+    this.runSeq.set(run.runId, this.getExistingRunSeq(run.runId));
 
     try {
       const result = await this.request<PromptParams, PromptResult>(
@@ -604,6 +604,13 @@ export class AcpClient {
     return seq;
   }
 
+  private getExistingRunSeq(runId: string): number {
+    const row = this.db
+      .prepare('SELECT COALESCE(MAX(seq), 0) as maxSeq FROM events WHERE run_id = ?')
+      .get(runId) as { maxSeq?: number } | undefined;
+    return typeof row?.maxSeq === 'number' ? row.maxSeq : 0;
+  }
+
   private async ensureAuthorized(params: {
     kind: ToolKind;
     method: string;
@@ -760,7 +767,13 @@ export class AcpClient {
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
-    const state = {
+    const state: {
+      child: ReturnType<typeof spawn>;
+      output: string;
+      truncated: boolean;
+      byteLimit: number;
+      releaseLock?: () => void;
+    } = {
       child,
       output: '',
       truncated: false,
@@ -784,7 +797,7 @@ export class AcpClient {
     child.stderr?.on('data', onData);
     child.once('exit', () => {
       state.releaseLock?.();
-      this.terminals.delete(terminalId);
+      state.releaseLock = undefined;
     });
 
     return terminalId;

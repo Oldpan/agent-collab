@@ -43,6 +43,7 @@ type ConversationsState = {
   setConversations: (conversations: ConversationInfo[]) => void;
   addConversation: (conversation: ConversationInfo) => void;
   upsertConversation: (conversation: ConversationInfo) => void;
+  patchConversationStatus: (id: string, status: ConversationInfo["status"]) => void;
   removeConversation: (id: string) => void;
   selectConversation: (id: string | null) => void;
   setLoading: (loading: boolean) => void;
@@ -50,7 +51,7 @@ type ConversationsState = {
   checkAndResetUser: (userId: string | null) => void;
 };
 
-const useConversationsStore = create<ConversationsState>((set) => ({
+export const useConversationsStore = create<ConversationsState>((set) => ({
   conversations: [],
   selectedId: readStoredSelectedConversationId(),
   lastUserId: readStoredLastUserId(),
@@ -89,6 +90,10 @@ const useConversationsStore = create<ConversationsState>((set) => ({
         selectedId: conversation.id,
       };
     }),
+  patchConversationStatus: (id, status) =>
+    set((state) => ({
+      conversations: state.conversations.map((c) => (c.id === id ? { ...c, status } : c)),
+    })),
   removeConversation: (id) =>
     set((state) => {
       const conversations = state.conversations.filter((conversation) => conversation.id !== id);

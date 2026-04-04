@@ -656,12 +656,13 @@ function SettingsTab({
   allAgents: AgentInfo[];
   isAdmin?: boolean;
   onAgentsUpdated?: () => Promise<AgentInfo[]> | void;
-  onClearChat: () => Promise<void>;
+  onClearChat: () => Promise<{ warning?: string } | void>;
   onChannelUpdated?: (channel: ChannelPanelInfo) => void;
 }) {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [clearing, setClearing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [clearError, setClearError] = useState<string | null>(null);
   const [submittingAgentId, setSubmittingAgentId] = useState<string | null>(null);
   const [membershipAgentId, setMembershipAgentId] = useState<string | null>(null);
   const [updatingMode, setUpdatingMode] = useState(false);
@@ -679,10 +680,13 @@ function SettingsTab({
   );
   const handleConfirm = useCallback(async () => {
     setClearing(true);
+    setClearError(null);
     try {
-      await onClearChat();
-      setNotice("Channel chat history cleared.");
+      const result = await onClearChat();
+      setNotice(result?.warning ?? "Channel chat history cleared.");
       setDialogOpen(false);
+    } catch (err) {
+      setClearError(String((err as Error)?.message ?? err));
     } finally {
       setClearing(false);
     }
@@ -952,6 +956,11 @@ function SettingsTab({
                 {notice}
               </div>
             ) : null}
+            {clearError ? (
+              <div className="mt-3 rounded-sm border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-700">
+                {clearError}
+              </div>
+            ) : null}
             <Button
               size="sm"
               className="mt-3 rounded-sm border-2 border-zinc-900 bg-[#ffd8d8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#ffc6c6]"
@@ -994,7 +1003,7 @@ export function ChannelPanel({
   onChannelUpdated,
 }: ChannelPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "members" | "settings">("chat");
-  const { messages, notices, sendMessage, loadMore, hasMore, resetVersion, taskVersion } = useChannelStream({
+  const { messages, notices, sendMessage, loadMore, hasMore, resetVersion, taskVersion, resetHistory } = useChannelStream({
     channelId: channel.channelId,
     onSeenSeq,
   });
@@ -1111,8 +1120,10 @@ export function ChannelPanel({
   }, [taskVersion]);
 
   const handleClearChat = useCallback(async () => {
-    await clearChannelChat(channel.channelId);
-  }, [channel.channelId]);
+    const result = await clearChannelChat(channel.channelId);
+    await resetHistory();
+    return result;
+  }, [channel.channelId, resetHistory]);
 
   const handleOpenBranchInspector = useCallback(
     async (agentId: string, targetChannelId: string, threadRootId?: string | null) => {

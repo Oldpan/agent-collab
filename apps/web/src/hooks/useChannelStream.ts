@@ -30,6 +30,7 @@ export function useChannelStream(options: UseChannelStreamOptions): {
   hasMore: boolean;
   resetVersion: number;
   taskVersion: number;
+  resetHistory: () => Promise<void>;
 } {
   const { channelId, onSeenSeq } = options;
   const [messages, setMessages] = useState<ChannelMessage[]>([]);
@@ -44,6 +45,29 @@ export function useChannelStream(options: UseChannelStreamOptions): {
     onSeenSeqRef.current = onSeenSeq;
   }, [onSeenSeq]);
 
+  const loadInitialMessages = useCallback(async (activeChannelId: string | null) => {
+    if (!activeChannelId) return;
+    const data = await api.getChannelMessages(activeChannelId, 100);
+    setMessages(data.messages);
+    setHasMore(data.messages.length >= 100);
+    const latestSeq = data.messages.reduce((max, message) => Math.max(max, Number(message.seq ?? 0)), 0);
+    if (latestSeq > 0 && canMarkSeen()) {
+      onSeenSeqRef.current?.(latestSeq);
+    }
+  }, []);
+
+  const resetHistory = useCallback(async () => {
+    setMessages([]);
+    setNotices([]);
+    setHasMore(true);
+    setResetVersion((prev) => prev + 1);
+    try {
+      await loadInitialMessages(channelId);
+    } catch {
+      // ignore reload failures; the websocket stream can still repopulate state
+    }
+  }, [channelId, loadInitialMessages]);
+
   useLayoutEffect(() => {
     setMessages([]);
     setNotices([]);
@@ -55,23 +79,7 @@ export function useChannelStream(options: UseChannelStreamOptions): {
       return;
     }
     let cancelled = false;
-
-    const loadInitialMessages = () => {
-      void api
-        .getChannelMessages(channelId, 100)
-        .then((d) => {
-          if (cancelled) return;
-          setMessages(d.messages);
-          setHasMore(d.messages.length >= 100);
-          const latestSeq = d.messages.reduce((max, message) => Math.max(max, Number(message.seq ?? 0)), 0);
-          if (latestSeq > 0 && canMarkSeen()) {
-            onSeenSeqRef.current?.(latestSeq);
-          }
-        })
-        .catch(() => {});
-    };
-
-    loadInitialMessages();
+    void loadInitialMessages(channelId).catch(() => {});
 
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
     const token = localStorage.getItem("auth_token") ?? "";
@@ -113,13 +121,10 @@ export function useChannelStream(options: UseChannelStreamOptions): {
           const notice = event.notice;
           setNotices((prev) => [...prev, { message: notice.message, createdAt: notice.createdAt }]);
         } else if (event.type === "channel.history.reset") {
-          setMessages([]);
-          setHasMore(true);
-          setResetVersion((prev) => prev + 1);
-          loadInitialMessages();
+          void resetHistory();
         } else if (event.type === "channel.tasks.changed" && event.channelId === channelId) {
           setTaskVersion((prev) => prev + 1);
-          loadInitialMessages();
+          void loadInitialMessages(channelId).catch(() => {});
         }
       } catch {
         // ignore malformed messages
@@ -135,7 +140,7 @@ export function useChannelStream(options: UseChannelStreamOptions): {
       ws.close();
       if (wsRef.current === ws) wsRef.current = null;
     };
-  }, [channelId]);
+  }, [channelId, loadInitialMessages, resetHistory]);
 
   const loadMore = useCallback(async () => {
     if (!channelId || !hasMore) return;
@@ -177,5 +182,5 @@ export function useChannelStream(options: UseChannelStreamOptions): {
     [channelId],
   );
 
-  return { messages, notices, sendMessage, loadMore, hasMore, resetVersion, taskVersion };
+  return { messages, notices, sendMessage, loadMore, hasMore, resetVersion, taskVersion, resetHistory };
 }

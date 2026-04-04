@@ -1,5 +1,4 @@
 import { Badge } from "@/components/ui/badge";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import { MenuIcon } from "lucide-react";
 import type { AgentInfo, ConversationInfo } from "@agent-collab/protocol";
@@ -63,60 +62,55 @@ export function SessionManagerPanel({
   }, {});
 
   return (
-    <div className="flex h-full flex-col bg-[#fff9d0]">
-      <div className="border-b-2 border-black bg-[#fff5b8] px-5 py-4 shadow-[0_2px_0_0_rgba(0,0,0,0.1)]">
-        <div className="flex items-center justify-between gap-4">
-          <div className="flex items-center gap-3">
-            {onOpenSidebar && (
-              <button
-                type="button"
-                className="shrink-0 rounded-md border-2 border-zinc-900 bg-[#fff9d8] p-1 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff1a9] cursor-pointer"
-                onClick={onOpenSidebar}
-                aria-label="Open sidebar"
-              >
-                <MenuIcon className="size-4 text-zinc-700" />
-              </button>
+    <div className="flex h-full flex-col overflow-hidden bg-[#fff9d0]">
+      {/* 紧凑 header */}
+      <div className="shrink-0 border-b-2 border-black bg-[#fff5b8] px-3 py-2 shadow-[0_2px_0_0_rgba(0,0,0,0.1)]">
+        <div className="flex items-center gap-2">
+          {onOpenSidebar && (
+            <button
+              type="button"
+              className="shrink-0 rounded border border-zinc-900 bg-[#fff9d8] p-0.5 shadow-[1px_1px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff1a9] cursor-pointer"
+              onClick={onOpenSidebar}
+              aria-label="Open sidebar"
+            >
+              <MenuIcon className="size-3.5 text-zinc-700" />
+            </button>
+          )}
+          <h2 className="text-xs font-semibold">Session Manager</h2>
+          {/* 状态统计 inline badges */}
+          <div className="ml-auto flex items-center gap-1 flex-wrap">
+            <StatBadge label="Agents" value={groups.length} />
+            <StatBadge label="Idle" value={statusCounts.idle ?? 0} tone="emerald" />
+            <StatBadge label="Active" value={statusCounts.active ?? 0} tone="amber" />
+            <StatBadge label="Queued" value={statusCounts.queued ?? 0} tone="blue" />
+            {(statusCounts.recovering ?? 0) > 0 && (
+              <StatBadge label="Recovering" value={statusCounts.recovering ?? 0} tone="sky" />
             )}
-            <div>
-              <h2 className="text-sm font-semibold">Session Manager</h2>
-              <p className="mt-1 text-xs text-muted-foreground">
-                Inspect all current chat sessions and jump into any agent thread.
-              </p>
-            </div>
           </div>
-          <Badge variant="secondary" className="text-xs">
-            {visibleConversations.length} sessions
-          </Badge>
-        </div>
-        <div className="mt-4 flex flex-wrap gap-2">
-          <SummaryCard label="Agents" value={String(groups.length)} />
-          <SummaryCard label="Idle" value={String(statusCounts.idle ?? 0)} />
-          <SummaryCard label="Active" value={String(statusCounts.active ?? 0)} />
-          <SummaryCard label="Queued" value={String(statusCounts.queued ?? 0)} />
-          <SummaryCard label="Recovering" value={String(statusCounts.recovering ?? 0)} />
         </div>
       </div>
 
-      <ScrollArea className="flex-1">
-        <div className="space-y-5 p-5">
+      {/* 可滚动内容区 */}
+      <div className="flex-1 overflow-y-auto">
+        <div className="space-y-2 p-2">
           {groups.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border p-8 text-center text-sm text-muted-foreground">
+            <div className="rounded-lg border border-dashed border-border p-6 text-center text-xs text-muted-foreground">
               No sessions yet. Start chatting with an agent to create one.
             </div>
           ) : (
             groups.map(({ agent, sessions }) => (
-              <section key={agent.agentId} className="rounded-xl border border-border bg-card/40">
-                <div className="flex items-center justify-between gap-3 border-b border-border px-4 py-3">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm font-medium">{agent.name}</div>
-                    <div className="mt-1 text-xs text-muted-foreground">
-                      {agent.agentType === "claude_acp" ? "Claude" : "Codex"} · private chat
-                    </div>
-                  </div>
-                  <Badge variant="outline" className="text-[10px] uppercase tracking-wide">
-                    {agent.workspacePath ? "Workspace bound" : "No workspace"}
-                  </Badge>
+              <section key={agent.agentId} className="rounded-lg border border-border bg-card/40">
+                {/* agent 标题行 */}
+                <div className="flex items-center gap-2 border-b border-border px-3 py-1.5">
+                  <span className="truncate text-xs font-medium">{agent.name}</span>
+                  <span className="text-[10px] text-muted-foreground shrink-0">
+                    {agent.agentType === "claude_acp" ? "Claude" : "Codex"}
+                  </span>
+                  {agent.workspacePath && (
+                    <Badge variant="outline" className="ml-auto text-[9px] px-1 py-0">ws</Badge>
+                  )}
                 </div>
+                {/* session 行 */}
                 <div className="divide-y divide-border">
                   {sessions.map((conversation) => {
                     const owner = conversation.agentId ? agentMap.get(conversation.agentId) : null;
@@ -125,34 +119,28 @@ export function SessionManagerPanel({
                         key={conversation.id}
                         type="button"
                         className={cn(
-                          "flex w-full items-center justify-between gap-4 px-4 py-3 text-left transition-colors cursor-pointer",
+                          "flex w-full items-center gap-3 px-3 py-1.5 text-left transition-colors cursor-pointer",
                           selectedId === conversation.id ? "bg-accent/60" : "hover:bg-accent/30",
                         )}
                         onClick={() => onOpenSession(conversation.id)}
                       >
                         <div className="min-w-0 flex-1">
-                          <div className="flex items-center gap-2">
-                            <span className="truncate text-sm font-medium">Private chat</span>
-                            <Badge variant="outline" className="px-1 py-0 text-[8px] uppercase tracking-wide">
-                              Main
-                            </Badge>
+                          <div className="flex items-center gap-1.5">
+                            <span className="truncate text-xs font-medium">Private chat</span>
+                            <span className="font-mono text-[9px] text-muted-foreground">{conversation.id.slice(0, 6)}</span>
                           </div>
-                          <div className="mt-1 flex items-center gap-2 text-xs text-muted-foreground">
-                            <span>{owner?.name ?? "Unknown agent"}</span>
+                          <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                            <span>{owner?.name ?? "—"}</span>
                             <span>·</span>
                             <span>{formatRelativeTime(conversation.updatedAt)}</span>
-                            <span>·</span>
-                            <span className="font-mono">{conversation.id.slice(0, 8)}</span>
                           </div>
                         </div>
-                        <div className="flex items-center gap-2 shrink-0">
-                          <span className={cn("rounded-full border px-2 py-1 text-[10px] font-medium capitalize", statusTone(conversation.status))}>
-                            {conversation.status}
-                          </span>
-                          <span className="inline-flex h-8 items-center rounded-md border border-border px-3 text-xs font-medium text-foreground">
-                            Open
-                          </span>
-                        </div>
+                        <span className={cn("shrink-0 rounded-full border px-1.5 py-0.5 text-[9px] font-medium capitalize", statusTone(conversation.status))}>
+                          {conversation.status}
+                        </span>
+                        <span className="shrink-0 rounded border border-border px-2 py-0.5 text-[10px] font-medium text-foreground">
+                          Open
+                        </span>
                       </button>
                     );
                   })}
@@ -161,16 +149,23 @@ export function SessionManagerPanel({
             ))
           )}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
 
-function SummaryCard({ label, value }: { label: string; value: string }) {
+const toneMap: Record<string, string> = {
+  emerald: "bg-emerald-500/10 text-emerald-700 border-emerald-500/20",
+  amber: "bg-amber-500/10 text-amber-700 border-amber-500/20",
+  blue: "bg-blue-500/10 text-blue-700 border-blue-500/20",
+  sky: "bg-sky-500/10 text-sky-700 border-sky-500/20",
+};
+
+function StatBadge({ label, value, tone }: { label: string; value: number; tone?: string }) {
+  const cls = tone ? toneMap[tone] : "bg-muted text-muted-foreground border-border";
   return (
-    <div className="rounded-lg border border-border bg-card px-3 py-2">
-      <div className="text-[10px] uppercase tracking-wide text-muted-foreground">{label}</div>
-      <div className="mt-1 text-sm font-semibold">{value}</div>
-    </div>
+    <span className={cn("rounded border px-1.5 py-0.5 text-[9px] font-medium", cls)}>
+      {label} {value}
+    </span>
   );
 }

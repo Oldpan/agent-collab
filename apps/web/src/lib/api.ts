@@ -323,12 +323,15 @@ export async function removeAgentFromChannel(channelId: string, agentId: string)
   return res.json();
 }
 
-export async function clearChannelChat(channelId: string): Promise<{ ok: true; clearedConversationIds: string[] }> {
+export async function clearChannelChat(channelId: string): Promise<{ ok: true; clearedConversationIds: string[]; warning?: string }> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/clear-chat`, {
     method: "POST",
     headers: withAuthHeaders(),
   });
-  if (!res.ok) throw new Error(`Failed to clear channel chat: ${res.statusText}`);
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Failed to clear channel chat: ${res.statusText}`);
+  }
   return res.json();
 }
 

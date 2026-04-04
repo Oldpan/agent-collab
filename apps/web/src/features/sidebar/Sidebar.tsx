@@ -330,7 +330,7 @@ export function Sidebar({
         />
       </CreateDialog>
 
-      <ScrollArea className="flex-1 bg-[#ffe135]">
+      <ScrollArea className="flex-1 h-full overflow-hidden bg-[#ffe135]">
         <div className="flex flex-col items-start gap-2 p-3">
           {machines.length === 0 && channels.length === 0 && (
             <p className="rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-3 py-4 text-center text-[10px] text-zinc-500 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]">
