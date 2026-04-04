@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDb, createTestConfig } from './helpers.js';
 import { ConversationManager } from '../web/conversationManager.js';
+import { listTargetParticipants, upsertTargetParticipant } from '../web/targetParticipants.js';
 import type { Db } from '@agent-collab/runtime-acp';
 
 describe('ConversationManager', () => {
@@ -183,6 +184,38 @@ describe('ConversationManager', () => {
 
       manager.leaveChannel(agent.agentId, channel.channelId);
       expect(manager.getChannel(channel.channelId)?.subscribedAgents).toEqual([]);
+    });
+
+    it('leaveChannel 应清理该 agent 在此 channel 下残留的 target participants', () => {
+      const channel = manager.createChannel({ name: 'ops-participant-cleanup' });
+      const agent = manager.createAgent({
+        name: 'CleanupBob',
+        agentType: 'claude_acp',
+        nodeId: 'node-1',
+        workspacePath: '/tmp/cleanup-bob',
+      });
+
+      manager.joinChannel(agent.agentId, channel.channelId);
+      upsertTargetParticipant(db, {
+        agentId: agent.agentId,
+        channelId: channel.channelId,
+        threadRootId: null,
+        role: 'participant',
+      });
+      upsertTargetParticipant(db, {
+        agentId: agent.agentId,
+        channelId: channel.channelId,
+        threadRootId: 'abcd1234',
+        role: 'owner',
+      });
+
+      expect(listTargetParticipants(db, { channelId: channel.channelId, threadRootId: null })).toHaveLength(1);
+      expect(listTargetParticipants(db, { channelId: channel.channelId, threadRootId: 'abcd1234' })).toHaveLength(1);
+
+      manager.leaveChannel(agent.agentId, channel.channelId);
+
+      expect(listTargetParticipants(db, { channelId: channel.channelId, threadRootId: null })).toHaveLength(0);
+      expect(listTargetParticipants(db, { channelId: channel.channelId, threadRootId: 'abcd1234' })).toHaveLength(0);
     });
   });
 

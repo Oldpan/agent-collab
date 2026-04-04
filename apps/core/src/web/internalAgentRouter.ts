@@ -18,8 +18,17 @@ import { recordAgentMentionNotification, shouldTriggerAgentMention } from './age
 import { buildChannelActivationContextText, buildChannelActivationPrompt } from './channelActivationPrompt.js';
 import { findMentionedAgents } from './channelMentions.js';
 import { resolveConversationReplyTarget } from './directReplyTargets.js';
-import { setTargetOwner, upsertTargetParticipant } from './targetParticipants.js';
-import { bindTaskToThread, getThreadBindingForTask } from './threadTaskBindings.js';
+import {
+  listRecentTargetParticipants,
+  setTargetOwner,
+  TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
+  upsertTargetParticipant,
+} from './targetParticipants.js';
+import {
+  bindTaskToThread,
+  getThreadBindingForTask,
+  getThreadCollaborationSummary,
+} from './threadTaskBindings.js';
 import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
 import { isValidTransition } from './taskStatusTransitions.js';
 
@@ -231,6 +240,61 @@ export function registerInternalAgentRoutes(
         .listAgents(channelId)
         .filter((candidate) => candidate.agentId !== agentId);
       const mentionedAgents = findMentionedAgents(normalizedContent, mentionableAgents);
+      const pendingNotifications = new Map<string, { reason: 'thread_reply' | 'agent_mention'; role: 'owner' | 'participant' }>();
+      const reasonPriority = (reason: 'thread_reply' | 'agent_mention'): number => (
+        reason === 'agent_mention' ? 2 : 1
+      );
+      const rolePriority = (role: 'owner' | 'participant'): number => (
+        role === 'owner' ? 2 : 1
+      );
+      const queueAgentNotification = (
+        targetAgentId: string,
+        reason: 'thread_reply' | 'agent_mention',
+        role: 'owner' | 'participant',
+      ): void => {
+        if (targetAgentId === agentId) return;
+        const existing = pendingNotifications.get(targetAgentId);
+        if (!existing) {
+          pendingNotifications.set(targetAgentId, { reason, role });
+          return;
+        }
+        pendingNotifications.set(targetAgentId, {
+          reason: reasonPriority(reason) > reasonPriority(existing.reason) ? reason : existing.reason,
+          role: rolePriority(role) > rolePriority(existing.role) ? role : existing.role,
+        });
+      };
+
+      if (threadRootId) {
+        const summary = getThreadCollaborationSummary(db, {
+          channelId,
+          threadRootId,
+        });
+        const recentParticipants = listRecentTargetParticipants(db, {
+          channelId,
+          threadRootId,
+          activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
+        });
+
+        if (summary.ownerAgentId) {
+          queueAgentNotification(summary.ownerAgentId, 'thread_reply', 'owner');
+        }
+
+        if (recentParticipants.length === 0 && !summary.ownerAgentId) {
+          const rootMsg = db.prepare(
+            `SELECT sender_id as senderId, sender_type as senderType
+             FROM channel_messages
+             WHERE channel_id = ? AND substr(message_id, 1, 8) = ?
+             LIMIT 1`,
+          ).get(channelId, threadRootId) as { senderId: string; senderType: string } | undefined;
+          if (rootMsg?.senderType === 'agent') {
+            queueAgentNotification(rootMsg.senderId, 'thread_reply', 'owner');
+          }
+        } else {
+          for (const participant of recentParticipants) {
+            queueAgentNotification(participant.agentId, 'thread_reply', participant.role);
+          }
+        }
+      }
 
       for (const mentionedAgent of mentionedAgents) {
         if (!shouldTriggerAgentMention(db, {
@@ -243,41 +307,49 @@ export function registerInternalAgentRoutes(
         })) {
           continue;
         }
+        queueAgentNotification(mentionedAgent.agentId, 'agent_mention', 'participant');
+      }
 
-        const conv = conversationManager.openAgentChannelThread(mentionedAgent.agentId, channelId, threadRootId ?? null);
+      for (const [targetAgentId, { reason, role }] of pendingNotifications.entries()) {
+        const conv = conversationManager.openAgentChannelThread(targetAgentId, channelId, threadRootId ?? null);
         if (!conv || !channel) continue;
 
         upsertTargetParticipant(db, {
-          agentId: mentionedAgent.agentId,
+          agentId: targetAgentId,
           channelId,
           threadRootId,
-          role: 'participant',
+          role,
           lastActiveAt: now,
         });
 
         const activationContext = buildTargetActivationContext(db, {
-          agentId: mentionedAgent.agentId,
+          agentId: targetAgentId,
           channelId,
           replyTarget: conv.replyTarget ?? resolvedTarget,
           triggerSeq: seq,
           threadRootId,
         });
 
-        recordAgentMentionNotification(db, {
-          channelId,
-          threadRootId,
-          fromAgentId: agentId,
-          toAgentId: mentionedAgent.agentId,
-          notifiedAt: now,
-        });
+        if (reason === 'agent_mention') {
+          recordAgentMentionNotification(db, {
+            channelId,
+            threadRootId,
+            fromAgentId: agentId,
+            toAgentId: targetAgentId,
+            notifiedAt: now,
+          });
 
-        broadcastToChannel(channelId, {
-          type: 'channel.notice',
-          notice: {
-            message: `@${mentionedAgent.name} was mentioned by @${agent.name} and notified.`,
-            createdAt: new Date(now).toISOString(),
-          },
-        });
+          const mentionedAgent = conversationManager.getAgent(targetAgentId);
+          if (mentionedAgent) {
+            broadcastToChannel(channelId, {
+              type: 'channel.notice',
+              notice: {
+                message: `@${mentionedAgent.name} was mentioned by @${agent.name} and notified.`,
+                createdAt: new Date(now).toISOString(),
+              },
+            });
+          }
+        }
 
         conversationManager.submitPrompt(
           conv.id,
@@ -287,7 +359,7 @@ export function registerInternalAgentRoutes(
             replyTarget: activationContext.replyTarget,
             senderName: agent.name,
             content: normalizedContent,
-            reason: 'agent_mention',
+            reason,
           }),
           {
             recordAsUserMessage: false,
@@ -303,7 +375,7 @@ export function registerInternalAgentRoutes(
             }) || undefined,
           },
         ).then(() => {
-          bumpAgentMessageCheckpoint(db, mentionedAgent.agentId, channelId, seq, threadRootId);
+          bumpAgentMessageCheckpoint(db, targetAgentId, channelId, seq, threadRootId);
         }).catch(() => {});
       }
     }

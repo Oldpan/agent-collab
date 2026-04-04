@@ -32,7 +32,11 @@ import {
   listChannelSubscriptions,
   upsertChannelSubscription,
 } from './channelSubscriptions.js';
-import { deleteTargetParticipantsForAgent, deleteTargetParticipantsForChannel } from './targetParticipants.js';
+import {
+  deleteTargetParticipantsForAgent,
+  deleteTargetParticipantsForAgentInChannel,
+  deleteTargetParticipantsForChannel,
+} from './targetParticipants.js';
 import { buildDirectReplyTarget, resolveDirectUserName } from './directReplyTargets.js';
 
 function slugifyAgentName(name: string): string {
@@ -817,6 +821,7 @@ export class ConversationManager {
       `DELETE FROM agent_channel_memberships WHERE agent_id = ? AND channel_id = ?`
     ).run(agentId, channelId);
     deleteChannelSubscription(this.db, channelId, agentId);
+    deleteTargetParticipantsForAgentInChannel(this.db, { agentId, channelId });
     if (agent?.channelId === channelId) {
       const nextHome = this.db.prepare(
         `SELECT channel_id as channelId

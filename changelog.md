@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-04-04 (thread collaboration wakeups + participant cleanup)
+
+- thread 中 agent 发出的普通回复现在也会像人类 thread reply 一样，优先唤醒该 thread 上最近活跃的其他协作者，不再只能依赖显式 `@mention` 才继续协作。
+- 同一 thread 里的显式 `@agent` 现在优先级高于普通 `thread_reply`，不会再被先排入的普通回复原因覆盖；已有活跃 conversation 时仍然只会进入同一 queue，不会并行起第二个 run。
+- thread participants 现在也使用 recent-active 窗口，历史上参与过但已长期不活跃的 agent 不会继续被 thread reply 反复自动唤醒。
+- agent 离开 channel 或被取消 subscription 时，会同步清理它在该 channel 下残留的 `target_participants`，避免“已经退群/退订但仍被自动唤醒”的脏状态。
+
 ## 2026-04-04 (replay prefers visible replies over empty fallback noise)
 
 - `delta_fallback` 中包含 `Empty response: {'content': ...` 的空响应噪音现在不会再落到用户可见聊天记录。

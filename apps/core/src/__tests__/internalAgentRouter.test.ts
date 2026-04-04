@@ -8,6 +8,7 @@ import { ConversationManager } from '../web/conversationManager.js';
 import { registerInternalAgentRoutes } from '../web/internalAgentRouter.js';
 import { AgentSkillsService } from '../services/agentSkillsService.js';
 import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
+import { upsertTargetParticipant } from '../web/targetParticipants.js';
 
 let db: Db;
 let manager: ConversationManager;
@@ -617,6 +618,69 @@ describe('internalAgentRouter', () => {
     expect(runRow?.promptText).toContain('#default:thrd1234');
   });
 
+  it('agent 在线程发普通回复时应唤醒最近活跃的其他 thread participants', async () => {
+    const alice = manager.createAgent({
+      name: 'RecentAlice',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/recent-alice-router',
+      channelId: 'default',
+    });
+    const bob = manager.createAgent({
+      name: 'RecentBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/recent-bob-router',
+      channelId: 'default',
+    });
+    manager.joinChannel(alice.agentId, 'default');
+    manager.joinChannel(bob.agentId, 'default');
+
+    const threadRootId = 'recent123';
+    const aliceConv = manager.openAgentChannelThread(alice.agentId, 'default', threadRootId);
+    const bobConv = manager.openAgentChannelThread(bob.agentId, 'default', threadRootId);
+    if (!aliceConv || !bobConv) throw new Error('missing recent thread conversations');
+
+    upsertTargetParticipant(db, {
+      agentId: bob.agentId,
+      channelId: 'default',
+      threadRootId,
+      role: 'participant',
+      lastActiveAt: Date.now(),
+    });
+
+    const aliceSession = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(aliceConv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-thread-recent',
+      sessionKey: aliceSession.sessionKey,
+      promptText: 'continue the thread',
+    });
+
+    dispatches.length = 0;
+    const res = await fetch(`${baseUrl}/api/internal/agent/${alice.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target: `#default:${threadRootId}`,
+        content: 'Here is a normal follow-up in the thread.',
+        kind: 'progress',
+        conversationId: aliceConv.id,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await expectDispatchCount(1);
+
+    const bobSession = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(bobConv.id) as { sessionKey: string };
+    const runRow = db.prepare(
+      'SELECT prompt_text as promptText FROM runs WHERE session_key = ? ORDER BY started_at DESC LIMIT 1',
+    ).get(bobSession.sessionKey) as { promptText: string } | undefined;
+    expect(runRow?.promptText).toContain('Your collaborative thread in #default received a reply from RecentAlice.');
+    expect(runRow?.promptText).toContain('#default:recent123');
+  });
+
   it('agent mention 只对正式 channel/thread 消息生效，并受 cooldown 限制', async () => {
     const tab = manager.createAgent({
       name: 'CooldownTab',
@@ -759,6 +823,81 @@ describe('internalAgentRouter', () => {
     expect(queueRows).toHaveLength(1);
     expect(queueRows[0]?.conversationId).toBe(bobConv.id);
     expect(queueRows[0]?.promptText).toContain('@QueueBob');
+  });
+
+  it('thread 中显式 agent mention 应覆盖普通 thread_reply reason', async () => {
+    const alice = manager.createAgent({
+      name: 'PriorityAlice',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/priority-alice-router',
+      channelId: 'default',
+    });
+    const bob = manager.createAgent({
+      name: 'PriorityBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/priority-bob-router',
+      channelId: 'default',
+    });
+    manager.joinChannel(alice.agentId, 'default');
+    manager.joinChannel(bob.agentId, 'default');
+
+    const threadRootId = 'prio1234';
+    const aliceConv = manager.openAgentChannelThread(alice.agentId, 'default', threadRootId);
+    const bobConv = manager.openAgentChannelThread(bob.agentId, 'default', threadRootId);
+    if (!aliceConv || !bobConv) throw new Error('missing priority thread conversations');
+
+    upsertTargetParticipant(db, {
+      agentId: bob.agentId,
+      channelId: 'default',
+      threadRootId,
+      role: 'participant',
+      lastActiveAt: Date.now(),
+    });
+
+    const aliceSession = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(aliceConv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-priority-alice',
+      sessionKey: aliceSession.sessionKey,
+      promptText: 'priority thread sender',
+    });
+
+    const bobSession = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(bobConv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-priority-bob',
+      sessionKey: bobSession.sessionKey,
+      promptText: 'bob is already active',
+    });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('active', bobConv.id);
+
+    dispatches.length = 0;
+    const res = await fetch(`${baseUrl}/api/internal/agent/${alice.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target: `#default:${threadRootId}`,
+        content: 'Need your input here, @PriorityBob.',
+        kind: 'progress',
+        conversationId: aliceConv.id,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await settleDispatches();
+    expect(dispatches.filter((msg) => msg.type === 'run.dispatch')).toHaveLength(0);
+
+    const queueRows = db.prepare(
+      `SELECT prompt_text as promptText
+       FROM conversation_prompt_queue
+       WHERE conversation_id = ?
+       ORDER BY queue_id ASC`,
+    ).all(bobConv.id) as Array<{ promptText: string }>;
+    expect(queueRows).toHaveLength(1);
+    expect(queueRows[0]?.promptText).toContain('Another agent (@PriorityAlice) explicitly asked for your help in #default.');
+    expect(queueRows[0]?.promptText).not.toContain('received a reply');
   });
 
   it('check_messages 应按 thread_root_id 分别推进 checkpoint，不同 thread 不应互相消费', async () => {

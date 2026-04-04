@@ -168,6 +168,8 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.systemPromptText).toContain('Do **not** convert a main-channel message');
     expect(dispatch.systemPromptText).toContain('Do **not** quote or repeat that metadata block back to the user');
     expect(dispatch.systemPromptText).toContain('Maintain memory carefully');
+    expect(dispatch.systemPromptText).not.toContain('put to sleep when idle');
+    expect(dispatch.systemPromptText).not.toContain('stdin prompt');
     expect(dispatch.contextText).toContain('[Local Memory Guide]');
     expect(dispatch.contextText).toContain('Local memory is stored as ordinary workspace files');
     expect(dispatch.contextText).toContain('Use normal file read/edit tools');

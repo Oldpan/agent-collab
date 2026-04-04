@@ -31,8 +31,8 @@ import { buildTargetActivationContext } from './activationContext.js';
 import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
 import { deleteChannelSubscription, listChannelSubscriptions, upsertChannelSubscription } from './channelSubscriptions.js';
 import {
+  deleteTargetParticipantsForAgentInChannel,
   listRecentTargetParticipants,
-  listTargetParticipants,
   setTargetOwner,
   TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
   upsertTargetParticipant,
@@ -930,6 +930,10 @@ export async function startServer(params: {
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       deleteChannelSubscription(db, req.params.id, req.params.agentId);
+      deleteTargetParticipantsForAgentInChannel(db, {
+        agentId: req.params.agentId,
+        channelId: req.params.id,
+      });
       return conversationManager.getChannel(req.params.id);
     },
   );
@@ -1358,14 +1362,27 @@ export async function startServer(params: {
       const notifiedAgentIds = new Set<string>();
       const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
       const pendingNotifications = new Map<string, { reason: 'mention' | 'thread_reply' | 'channel_activity'; role: 'owner' | 'participant' }>();
+      const reasonPriority = (reason: 'mention' | 'thread_reply' | 'channel_activity'): number => (
+        reason === 'mention' ? 3 : reason === 'thread_reply' ? 2 : 1
+      );
+      const rolePriority = (role: 'owner' | 'participant'): number => (
+        role === 'owner' ? 2 : 1
+      );
 
       const queueAgentNotification = (
         agentId: string,
         reason: 'mention' | 'thread_reply' | 'channel_activity',
         role: 'owner' | 'participant',
       ): void => {
-        if (pendingNotifications.has(agentId)) return;
-        pendingNotifications.set(agentId, { reason, role });
+        const existing = pendingNotifications.get(agentId);
+        if (!existing) {
+          pendingNotifications.set(agentId, { reason, role });
+          return;
+        }
+        pendingNotifications.set(agentId, {
+          reason: reasonPriority(reason) > reasonPriority(existing.reason) ? reason : existing.reason,
+          role: rolePriority(role) > rolePriority(existing.role) ? role : existing.role,
+        });
       };
 
       const flushAgentNotifications = (): void => {
@@ -1451,9 +1468,10 @@ export async function startServer(params: {
           channelId: req.params.id,
           threadRootId,
         });
-        const participants = listTargetParticipants(db, {
+        const participants = listRecentTargetParticipants(db, {
           channelId: req.params.id,
           threadRootId,
+          activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
         });
 
         const rootMsg = db.prepare(

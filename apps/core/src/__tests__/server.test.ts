@@ -13,11 +13,11 @@ import { bumpAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
 import { listChannelSubscriptions } from '../web/channelSubscriptions.js';
 import {
   listRecentTargetParticipants,
-  listTargetParticipants,
   TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
   upsertTargetParticipant,
 } from '../web/targetParticipants.js';
 import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
+import { getThreadCollaborationSummary } from '../web/threadTaskBindings.js';
 
 let db: Db;
 let manager: ConversationManager;
@@ -295,32 +295,30 @@ beforeAll(async () => {
          VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, NULL, ?)`,
       ).run(messageId, req.params.id, senderName, target, content, seq, now, threadRootId);
 
-      if (threadRootId) {
-        const rootMsg = db.prepare(
-          `SELECT sender_id, sender_type FROM channel_messages
-           WHERE channel_id = ? AND substr(message_id, 1, 8) = ?
-           LIMIT 1`,
-        ).get(req.params.id, threadRootId) as { sender_id: string; sender_type: string } | undefined;
-        if (rootMsg?.sender_type === 'agent') {
-          const conv = manager.openAgentChannelThread(rootMsg.sender_id, req.params.id, threadRootId);
-          if (conv) {
-            bumpAgentMessageCheckpoint(db, rootMsg.sender_id, req.params.id, seq, threadRootId);
-            void manager.submitPrompt(
-              conv.id,
-              buildChannelActivationPrompt({
-                channelName: channel.name,
-                target: `#${channel.name}:${threadRootId}`,
-                senderName,
-                content,
-                reason: 'thread_reply',
-              }),
-              { recordAsUserMessage: false },
-            ).catch(() => {});
-          }
-        }
-      }
-
       const mentionedAgents = findMentionedAgents(content, manager.listAgents(req.params.id));
+      const pendingNotifications = new Map<string, { reason: 'mention' | 'thread_reply' | 'channel_activity'; role: 'owner' | 'participant' }>();
+      const reasonPriority = (reason: 'mention' | 'thread_reply' | 'channel_activity'): number => (
+        reason === 'mention' ? 3 : reason === 'thread_reply' ? 2 : 1
+      );
+      const rolePriority = (role: 'owner' | 'participant'): number => (
+        role === 'owner' ? 2 : 1
+      );
+      const queueAgentNotification = (
+        agentId: string,
+        reason: 'mention' | 'thread_reply' | 'channel_activity',
+        role: 'owner' | 'participant',
+      ) => {
+        const existing = pendingNotifications.get(agentId);
+        if (!existing) {
+          pendingNotifications.set(agentId, { reason, role });
+          return;
+        }
+        pendingNotifications.set(agentId, {
+          reason: reasonPriority(reason) > reasonPriority(existing.reason) ? reason : existing.reason,
+          role: rolePriority(role) > rolePriority(existing.role) ? role : existing.role,
+        });
+      };
+
       const notifyAgent = (
         agentId: string,
         reason: 'mention' | 'thread_reply' | 'channel_activity',
@@ -350,8 +348,37 @@ beforeAll(async () => {
         ).catch(() => {});
       };
 
+      if (threadRootId) {
+        const summary = getThreadCollaborationSummary(db, {
+          channelId: req.params.id,
+          threadRootId,
+        });
+        const participants = listRecentTargetParticipants(db, {
+          channelId: req.params.id,
+          threadRootId,
+          activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
+        });
+        const rootMsg = db.prepare(
+          `SELECT sender_id, sender_type FROM channel_messages
+           WHERE channel_id = ? AND substr(message_id, 1, 8) = ?
+           LIMIT 1`,
+        ).get(req.params.id, threadRootId) as { sender_id: string; sender_type: string } | undefined;
+
+        if (summary.ownerAgentId) {
+          queueAgentNotification(summary.ownerAgentId, 'thread_reply', 'owner');
+        }
+
+        if (participants.length === 0 && !summary.ownerAgentId && rootMsg?.sender_type === 'agent') {
+          queueAgentNotification(rootMsg.sender_id, 'thread_reply', 'owner');
+        } else {
+          for (const participant of participants) {
+            queueAgentNotification(participant.agentId, 'thread_reply', participant.role);
+          }
+        }
+      }
+
       for (const agent of mentionedAgents) {
-        notifyAgent(agent.agentId, 'mention', threadRootId ? 'participant' : 'owner');
+        queueAgentNotification(agent.agentId, 'mention', threadRootId ? 'participant' : 'owner');
       }
 
       if (!threadRootId && mentionedAgents.length === 0 && channel.collaborationMode === 'subscribed_agents') {
@@ -372,8 +399,12 @@ beforeAll(async () => {
             }));
 
         for (const agent of agentsToWake) {
-          notifyAgent(agent.agentId, 'channel_activity', agent.role);
+          queueAgentNotification(agent.agentId, 'channel_activity', agent.role);
         }
+      }
+
+      for (const [agentId, { reason, role }] of pendingNotifications.entries()) {
+        notifyAgent(agentId, reason, role);
       }
 
       reply.code(201);
@@ -905,6 +936,60 @@ describe('REST API', () => {
     ).get(freshSubscriber.agentId, channel.channelId) as { count: number };
 
     expect(freshRunCount.count).toBe(1);
+  });
+
+  it('POST /api/channels/:id/messages 在线程中显式 @agent 时应优先保留 mention reason', async () => {
+    const channel = manager.createChannel({ name: 'thread-mention-priority' });
+    const bob = manager.createAgent({
+      name: 'PriorityBobUser',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/priority-bob-user',
+    });
+    manager.joinChannel(bob.agentId, channel.channelId);
+
+    const threadRootId = 'prior123';
+    const bobConv = manager.openAgentChannelThread(bob.agentId, channel.channelId, threadRootId);
+    if (!bobConv) throw new Error('missing bob thread conversation');
+
+    const bobSession = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(bobConv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-server-thread-priority',
+      sessionKey: bobSession.sessionKey,
+      promptText: 'already active on thread',
+    });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('active', bobConv.id);
+
+    upsertTargetParticipant(db, {
+      agentId: bob.agentId,
+      channelId: channel.channelId,
+      threadRootId,
+      role: 'participant',
+      lastActiveAt: Date.now(),
+    });
+
+    const response = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: '请跟进这个线程，@PriorityBobUser',
+        senderName: 'User',
+        replyTo: threadRootId,
+      }),
+    });
+
+    expect(response.status).toBe(201);
+
+    const queueRows = db.prepare(
+      `SELECT prompt_text as promptText
+       FROM conversation_prompt_queue
+       WHERE conversation_id = ?
+       ORDER BY queue_id ASC`,
+    ).all(bobConv.id) as Array<{ promptText: string }>;
+    expect(queueRows).toHaveLength(1);
+    expect(queueRows[0]?.promptText).toContain('You were @mentioned in #thread-mention-priority by User.');
+    expect(queueRows[0]?.promptText).not.toContain('received a reply');
   });
 
   it('POST /api/channels/:id/messages 在主频道 @agent 时应直接把触发消息写进激活 prompt', async () => {

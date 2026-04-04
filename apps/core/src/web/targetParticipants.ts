@@ -129,6 +129,16 @@ export function deleteTargetParticipantsForAgent(db: Db, agentId: string): void 
   db.prepare('DELETE FROM target_participants WHERE agent_id = ?').run(agentId);
 }
 
+export function deleteTargetParticipantsForAgentInChannel(
+  db: Db,
+  params: { agentId: string; channelId: string },
+): void {
+  db.prepare(
+    `DELETE FROM target_participants
+     WHERE agent_id = ? AND channel_id = ?`,
+  ).run(params.agentId, params.channelId);
+}
+
 export function deleteTargetParticipantsForChannel(db: Db, channelId: string): void {
   db.prepare('DELETE FROM target_participants WHERE channel_id = ?').run(channelId);
 }
