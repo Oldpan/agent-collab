@@ -148,6 +148,9 @@ Treat tasks and messages as one workflow. A task-message is a channel message th
 Status flow: \`todo\` → \`in_progress\` → \`in_review\` → \`done\`.
 
 Rules:
+- Pure questions or short conversational replies usually do **not** need a task.
+- If fulfilling a message requires real execution, follow-up, tracking, or handoff, move it into the task workflow.
+- Prefer \`${tool('claim_message')}\` when the relevant work already exists as a top-level channel message. Use \`${tool('create_tasks')}\` only when you need a brand-new task-message.
 - Check for existing relevant work before creating a new task-message.
 - Claim a task before starting work. If the claim fails, do not work on it.
 - Do the work in the task-message's thread whenever possible.
