@@ -30,7 +30,13 @@ import { appendChannelResetMarkers } from './channelMemoryNotes.js';
 import { buildTargetActivationContext } from './activationContext.js';
 import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
 import { deleteChannelSubscription, listChannelSubscriptions, upsertChannelSubscription } from './channelSubscriptions.js';
-import { listTargetParticipants, setTargetOwner, upsertTargetParticipant } from './targetParticipants.js';
+import {
+  listRecentTargetParticipants,
+  listTargetParticipants,
+  setTargetOwner,
+  TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
+  upsertTargetParticipant,
+} from './targetParticipants.js';
 import { bindTaskToThread, getBoundTaskForThread, getThreadCollaborationSummary, unbindTaskFromThread } from './threadTaskBindings.js';
 import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
 import { isValidTransition } from './taskStatusTransitions.js';
@@ -1475,9 +1481,10 @@ export async function startServer(params: {
       }
 
       if (!threadRootId && mentionedAgents.length === 0 && channel.collaborationMode === 'subscribed_agents') {
-        const rootParticipants = listTargetParticipants(db, {
+        const rootParticipants = listRecentTargetParticipants(db, {
           channelId: req.params.id,
           threadRootId: null,
+          activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
         });
         const subscribedAgents = listChannelSubscriptions(db, req.params.id);
         const agentsToWake = rootParticipants.length > 0

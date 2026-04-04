@@ -603,7 +603,7 @@ describe('internalAgentRouter', () => {
     });
 
     expect(res.status).toBe(200);
-    expect(dispatches.filter((msg) => msg.type === 'run.dispatch')).toHaveLength(1);
+    await expectDispatchCount(1);
 
     const bobConv = manager.openAgentChannelThread(bob.agentId, 'default', 'thrd1234');
     if (!bobConv) throw new Error('missing mentioned thread conversation');
@@ -700,6 +700,65 @@ describe('internalAgentRouter', () => {
        WHERE channel_id = ? AND thread_root_id = '' AND from_agent_id = ? AND to_agent_id = ?`,
     ).get('default', tab.agentId, bob.agentId) as { count: number };
     expect(cooldownRows.count).toBe(1);
+  });
+
+  it('agent mention 命中当前 target 的活跃 conversation 时应进入 queue，而不是并行 dispatch', async () => {
+    const alice = manager.createAgent({
+      name: 'QueueAlice',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/queue-alice-router',
+      channelId: 'default',
+    });
+    const bob = manager.createAgent({
+      name: 'QueueBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/queue-bob-router',
+      channelId: 'default',
+    });
+    manager.joinChannel(alice.agentId, 'default');
+    manager.joinChannel(bob.agentId, 'default');
+
+    const threadRootId = 'thrdq123';
+    const aliceConv = manager.openAgentChannelThread(alice.agentId, 'default', threadRootId);
+    const bobConv = manager.openAgentChannelThread(bob.agentId, 'default', threadRootId);
+    if (!aliceConv || !bobConv) throw new Error('missing thread conversations');
+
+    const bobSession = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(bobConv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-agent-mention-queue',
+      sessionKey: bobSession.sessionKey,
+      promptText: 'already active on this thread',
+    });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('active', bobConv.id);
+
+    dispatches.length = 0;
+    const res = await fetch(`${baseUrl}/api/internal/agent/${alice.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target: `#default:${threadRootId}`,
+        content: 'Queue this follow-up for @QueueBob please.',
+        kind: 'progress',
+        conversationId: aliceConv.id,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await settleDispatches();
+    expect(dispatches.filter((msg) => msg.type === 'run.dispatch')).toHaveLength(0);
+
+    const queueRows = db.prepare(
+      `SELECT conversation_id as conversationId, prompt_text as promptText
+       FROM conversation_prompt_queue
+       WHERE conversation_id = ?
+       ORDER BY queue_id ASC`,
+    ).all(bobConv.id) as Array<{ conversationId: string; promptText: string }>;
+    expect(queueRows).toHaveLength(1);
+    expect(queueRows[0]?.conversationId).toBe(bobConv.id);
+    expect(queueRows[0]?.promptText).toContain('@QueueBob');
   });
 
   it('check_messages 应按 thread_root_id 分别推进 checkpoint，不同 thread 不应互相消费', async () => {

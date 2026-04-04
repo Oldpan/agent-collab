@@ -1,6 +1,10 @@
 import type { Db } from '@agent-collab/runtime-acp';
 import { getAgentMessageCheckpoint } from './messageCheckpoints.js';
-import { listTargetParticipants, type TargetParticipant } from './targetParticipants.js';
+import {
+  listRecentTargetParticipants,
+  TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
+  type TargetParticipant,
+} from './targetParticipants.js';
 import { getBoundTaskForThread } from './threadTaskBindings.js';
 
 export type ActivationContextMessage = {
@@ -80,9 +84,10 @@ export function buildTargetActivationContext(
     ).get(params.channelId, normalizedThreadRootId) as ActivationContextMessage | undefined
     : undefined;
 
-  const participants = listTargetParticipants(db, {
+  const participants = listRecentTargetParticipants(db, {
     channelId: params.channelId,
     threadRootId: normalizedThreadRootId,
+    activeSince: Date.now() - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
   });
 
   const boundTaskRow = getBoundTaskForThread(db, {

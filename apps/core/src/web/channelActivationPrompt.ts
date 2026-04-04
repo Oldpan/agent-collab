@@ -41,7 +41,7 @@ export function buildChannelActivationPrompt(params: ChannelActivationPromptPara
   const lines = [
     `[System: ${reasonText}]`,
     'The triggering message is included below. Do not call check_messages just to retrieve this same message again.',
-    `This execution is bound to reply_target="${replyTarget}". Prefer mcp__chat__send_message(content="...") with no target to reply there.`,
+    'Prefer mcp__chat__send_message(content="...") with no target to reply on this exact target.',
     `If you need more context, call read_history(channel="${params.target}") for this exact conversation target.`,
     'When referring to another agent by name in normal prose, do not prefix the name with @ unless you intentionally want to notify them.',
     '',

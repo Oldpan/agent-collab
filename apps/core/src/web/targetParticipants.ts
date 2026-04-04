@@ -10,6 +10,8 @@ export type TargetParticipant = {
   lastActiveAt: number;
 };
 
+export const TARGET_PARTICIPANT_ACTIVE_WINDOW_MS = 15 * 60 * 1000;
+
 function normalizeThreadRootId(threadRootId?: string | null): string {
   return threadRootId ?? '';
 }
@@ -73,7 +75,27 @@ export function listTargetParticipants(
        CASE tp.role WHEN 'owner' THEN 0 ELSE 1 END ASC,
        tp.last_active_at DESC,
        a.name ASC`,
-  ).all(params.channelId, normalizeThreadRootId(params.threadRootId)) as TargetParticipant[];
+     ).all(params.channelId, normalizeThreadRootId(params.threadRootId)) as TargetParticipant[];
+}
+
+export function listRecentTargetParticipants(
+  db: Db,
+  params: { channelId: string; threadRootId?: string | null; activeSince: number },
+): TargetParticipant[] {
+  return db.prepare(
+    `SELECT tp.agent_id as agentId,
+            a.name as name,
+            tp.role as role,
+            tp.joined_at as joinedAt,
+            tp.last_active_at as lastActiveAt
+     FROM target_participants tp
+     JOIN agents a ON a.agent_id = tp.agent_id
+     WHERE tp.channel_id = ? AND tp.thread_root_id = ? AND tp.last_active_at >= ?
+     ORDER BY
+       CASE tp.role WHEN 'owner' THEN 0 ELSE 1 END ASC,
+       tp.last_active_at DESC,
+       a.name ASC`,
+  ).all(params.channelId, normalizeThreadRootId(params.threadRootId), params.activeSince) as TargetParticipant[];
 }
 
 export function setTargetOwner(

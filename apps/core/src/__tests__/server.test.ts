@@ -8,9 +8,15 @@ import { createRun } from '@agent-collab/runtime-acp';
 import WebSocket from 'ws';
 import { findMentionedAgents } from '../web/channelMentions.js';
 import { buildChannelActivationPrompt } from '../web/channelActivationPrompt.js';
+import { buildTargetActivationContext } from '../web/activationContext.js';
 import { bumpAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
 import { listChannelSubscriptions } from '../web/channelSubscriptions.js';
-import { listTargetParticipants, upsertTargetParticipant } from '../web/targetParticipants.js';
+import {
+  listRecentTargetParticipants,
+  listTargetParticipants,
+  TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
+  upsertTargetParticipant,
+} from '../web/targetParticipants.js';
 import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
 
 let db: Db;
@@ -349,9 +355,10 @@ beforeAll(async () => {
       }
 
       if (!threadRootId && mentionedAgents.length === 0 && channel.collaborationMode === 'subscribed_agents') {
-        const rootParticipants = listTargetParticipants(db, {
+        const rootParticipants = listRecentTargetParticipants(db, {
           channelId: req.params.id,
           threadRootId: null,
+          activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
         });
         const subscribedAgents = listChannelSubscriptions(db, req.params.id);
         const agentsToWake = rootParticipants.length > 0
@@ -777,27 +784,26 @@ describe('REST API', () => {
     expect(kimiConv).not.toBeNull();
     expect(bobConv).not.toBeNull();
 
-    const kimiPrompt = db.prepare(
-      `SELECT r.prompt_text as promptText
-       FROM runs r
-       JOIN conversations c ON c.session_key = r.session_key
-       WHERE c.id = ?
-       ORDER BY r.started_at DESC
-       LIMIT 1`,
-    ).get(kimiConv?.id) as { promptText: string } | undefined;
-    const bobPrompt = db.prepare(
-      `SELECT r.prompt_text as promptText
-       FROM runs r
-       JOIN conversations c ON c.session_key = r.session_key
-       WHERE c.id = ?
-       ORDER BY r.started_at DESC
-       LIMIT 1`,
-    ).get(bobConv?.id) as { promptText: string } | undefined;
+    const triggerSeq = response.body.seq as number;
+    const kimiContext = buildTargetActivationContext(db, {
+      agentId: kimi.agentId,
+      channelId: channel.channelId,
+      replyTarget: kimiConv?.replyTarget ?? `#${channel.name}`,
+      triggerSeq,
+      threadRootId: null,
+    });
+    const bobContext = buildTargetActivationContext(db, {
+      agentId: bob.agentId,
+      channelId: channel.channelId,
+      replyTarget: bobConv?.replyTarget ?? `#${channel.name}`,
+      triggerSeq,
+      threadRootId: null,
+    });
 
-    expect(kimiPrompt?.promptText).toContain('@kimi (participant)');
-    expect(kimiPrompt?.promptText).toContain('@Bob (participant)');
-    expect(bobPrompt?.promptText).toContain('@kimi (participant)');
-    expect(bobPrompt?.promptText).toContain('@Bob (participant)');
+    const kimiParticipants = kimiContext.participants.map((participant) => participant.name);
+    const bobParticipants = bobContext.participants.map((participant) => participant.name);
+    expect(kimiParticipants).toEqual(bobParticipants);
+    expect(new Set(kimiParticipants)).toEqual(new Set(['kimi', 'Bob']));
   });
 
   it('POST /api/channels/:id/messages 在 subscribed_agents 模式下，有 root participants 时应优先唤醒参与者', async () => {
@@ -854,6 +860,51 @@ describe('REST API', () => {
        WHERE c.agent_id = ? AND c.channel_id = ?`,
     ).get(watcher.agentId, channel.channelId) as { count: number };
     expect(watcherRunCount.count).toBe(0);
+  });
+
+  it('POST /api/channels/:id/messages 在 subscribed_agents 模式下，过期 root participants 不应继续拦截订阅兜底', async () => {
+    const channel = manager.createChannel({
+      name: 'subscribed-stale-root',
+      collaborationMode: 'subscribed_agents',
+    });
+    const staleOwner = manager.createAgent({
+      name: 'StaleOwner',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/stale-owner',
+    });
+    const freshSubscriber = manager.createAgent({
+      name: 'FreshSubscriber',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/fresh-subscriber',
+    });
+    manager.joinChannel(staleOwner.agentId, channel.channelId);
+    manager.joinChannel(freshSubscriber.agentId, channel.channelId);
+    upsertTargetParticipant(db, {
+      agentId: staleOwner.agentId,
+      channelId: channel.channelId,
+      threadRootId: null,
+      role: 'owner',
+      lastActiveAt: Date.now() - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS - 1_000,
+    });
+
+    const response = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '这是一个新的频道更新', senderName: 'User' }),
+    });
+
+    expect(response.status).toBe(201);
+
+    const freshRunCount = db.prepare(
+      `SELECT COUNT(*) as count
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.agent_id = ? AND c.channel_id = ?`,
+    ).get(freshSubscriber.agentId, channel.channelId) as { count: number };
+
+    expect(freshRunCount.count).toBe(1);
   });
 
   it('POST /api/channels/:id/messages 在主频道 @agent 时应直接把触发消息写进激活 prompt', async () => {

@@ -64,12 +64,10 @@ export function PromptComposer({
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        if (status !== "queued" && status !== "submitted" && status !== "streaming" && status !== "recovering" && status !== "awaiting_approval") {
-          handleSubmit();
-        }
+        handleSubmit();
       }
     },
-    [status, handleSubmit],
+    [handleSubmit],
   );
 
   const handleInput = useCallback(() => {
@@ -153,27 +151,28 @@ export function PromptComposer({
           rows={1}
         />
 
-        {shouldShowCancel ? (
-          <Button
-            size="icon"
-            variant="outline"
-            onClick={onCancel}
-            className="shrink-0 rounded-sm border-2 border-zinc-900 bg-white text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff0a8]"
-            title="Cancel"
-          >
-            <SquareIcon className="size-4" />
-          </Button>
-        ) : (
+        <div className="flex shrink-0 items-center gap-2">
+          {shouldShowCancel && (
+            <Button
+              size="icon"
+              variant="outline"
+              onClick={onCancel}
+              className="rounded-sm border-2 border-zinc-900 bg-white text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff0a8]"
+              title="Cancel"
+            >
+              <SquareIcon className="size-4" />
+            </Button>
+          )}
           <Button
             size="icon"
             onClick={handleSubmit}
-            className="shrink-0 rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
+            className="rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
             title="Send"
-            disabled={isBusy || uploading}
+            disabled={uploading}
           >
             <SendIcon className="size-4" />
           </Button>
-        )}
+        </div>
       </div>
     </div>
   );

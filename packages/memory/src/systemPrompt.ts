@@ -41,8 +41,9 @@ export function buildAgentSystemPrompt(
   const startupSteps = [
     `1. Review the provided [Local Memory] block, then read only the additional memory files you need from your workspace.`,
     `2. If the current turn already includes a concrete message and it needs a visible acknowledgment, blocker question, or ownership signal, send that early with ${tool('send_message')}.`,
-    `3. If you need more context, call ${tool('read_history')}(channel="<the exact target from the message metadata>").`,
-    `4. Finish the work, report the result, and then stop.`,
+    `3. Follow-up messages in the same conversation will be delivered in later runs. Do not poll ${tool('check_messages')} just to watch that same conversation.`,
+    `4. If you need more context, call ${tool('read_history')}(channel="<the exact target from the message metadata>").`,
+    `5. Finish the work, report the result, and then stop.`,
   ];
 
   const agentName = config.displayName || config.name;

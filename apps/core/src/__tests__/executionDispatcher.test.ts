@@ -163,6 +163,7 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.systemPromptText).toContain('Compaction safety');
     expect(dispatch.systemPromptText).toContain('This is your only user-visible output channel');
     expect(dispatch.systemPromptText).toContain('If the run needs a user-visible reply, send it with `mcp__chat__send_message`');
+    expect(dispatch.systemPromptText).toContain('Follow-up messages in the same conversation will be delivered in later runs');
     expect(dispatch.systemPromptText).toContain('prefer `mcp__chat__send_message(content="...")` with no target');
     expect(dispatch.systemPromptText).toContain('Do **not** convert a main-channel message');
     expect(dispatch.systemPromptText).toContain('Do **not** quote or repeat that metadata block back to the user');

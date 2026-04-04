@@ -136,12 +136,7 @@ export function ChatPanel({
     status === "streaming" ||
     status === "recovering" ||
     status === "awaiting_approval";
-  const shouldDisableInput =
-    status === "queued" ||
-    status === "submitted" ||
-    status === "streaming" ||
-    status === "recovering" ||
-    status === "awaiting_approval";
+  const shouldDisableInput = false;
   const canShowCodexDebug = isAdmin && (conversation.agentType === "codex_acp" || conversation.agentType === "claude_acp");
 
   const displayStatus =
