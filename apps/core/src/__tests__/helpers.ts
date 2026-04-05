@@ -31,6 +31,7 @@ export function createTestDb(): Db {
       prompt_text      TEXT NOT NULL,
       record_as_user_message INTEGER NOT NULL DEFAULT 1,
       activation_context_text TEXT,
+      replay_overlap_recent_messages_json TEXT,
       client_message_id TEXT,
       created_at       INTEGER NOT NULL,
       updated_at       INTEGER NOT NULL
@@ -42,6 +43,9 @@ export function createTestDb(): Db {
   }
   if (!queueCols.some((col) => col.name === 'activation_context_text')) {
     db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN activation_context_text TEXT;`);
+  }
+  if (!queueCols.some((col) => col.name === 'replay_overlap_recent_messages_json')) {
+    db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN replay_overlap_recent_messages_json TEXT;`);
   }
   if (!queueCols.some((col) => col.name === 'client_message_id')) {
     db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN client_message_id TEXT;`);
@@ -129,7 +133,7 @@ export function createTestDb(): Db {
   if (!taskCols.some((col) => col.name === 'thread_unbound')) {
     db.exec(`ALTER TABLE tasks ADD COLUMN thread_unbound INTEGER NOT NULL DEFAULT 0;`);
   }
-  db.exec(`UPDATE schema_version SET version = MAX(version, 51);`);
+  db.exec(`UPDATE schema_version SET version = MAX(version, 52);`);
   return db;
 }
 

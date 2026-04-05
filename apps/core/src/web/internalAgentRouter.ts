@@ -373,6 +373,7 @@ export function registerInternalAgentRoutes(
               boundTask: activationContext.boundTask,
               openTasks: activationContext.openTasks,
             }) || undefined,
+            replayOverlapRecentMessages: activationContext.recentMessages,
           },
         ).then(() => {
           bumpAgentMessageCheckpoint(db, targetAgentId, channelId, seq, threadRootId);

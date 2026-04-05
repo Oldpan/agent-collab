@@ -28,7 +28,7 @@ describe('migrations', () => {
   it('schema_version 应为最新版本', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBeGreaterThanOrEqual(51);
+    expect(row.version).toBeGreaterThanOrEqual(52);
     db.close();
   });
 
@@ -87,6 +87,7 @@ describe('migrations', () => {
     const queueCols = db.prepare("PRAGMA table_info('conversation_prompt_queue')").all() as Array<{ name: string }>;
     expect(queueCols.map((c) => c.name)).toContain('record_as_user_message');
     expect(queueCols.map((c) => c.name)).toContain('activation_context_text');
+    expect(queueCols.map((c) => c.name)).toContain('replay_overlap_recent_messages_json');
     db.close();
   });
 
@@ -287,6 +288,38 @@ describe('migrations', () => {
     expect(bindingCount.count).toBe(0);
     expect(taskFlags.threadUnbound).toBe(0);
 
+    db.close();
+  });
+
+  it('v52 migration 应为 conversation_prompt_queue 增加 replay overlap 列', () => {
+    const dbPath = join(tmpdir(), `migration-v52-${randomUUID()}.db`);
+    const db = openDb(dbPath);
+
+    db.exec(`
+      CREATE TABLE schema_version(version INTEGER NOT NULL);
+      INSERT INTO schema_version(version) VALUES(51);
+
+      CREATE TABLE conversation_prompt_queue (
+        queue_id INTEGER PRIMARY KEY AUTOINCREMENT,
+        agent_id TEXT NOT NULL,
+        conversation_id TEXT NOT NULL,
+        prompt_text TEXT NOT NULL,
+        record_as_user_message INTEGER NOT NULL DEFAULT 1,
+        activation_context_text TEXT,
+        sender_name TEXT,
+        client_message_id TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+    `);
+
+    migrate(db);
+
+    const queueCols = db.prepare("PRAGMA table_info('conversation_prompt_queue')").all() as Array<{ name: string }>;
+    expect(queueCols.map((c) => c.name)).toContain('replay_overlap_recent_messages_json');
+
+    const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
+    expect(row.version).toBe(52);
     db.close();
   });
 });

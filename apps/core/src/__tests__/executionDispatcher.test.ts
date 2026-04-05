@@ -6,6 +6,7 @@ import type { Db } from '@agent-collab/runtime-acp';
 import { createTestConfig, createTestDb } from './helpers.js';
 import { ConversationManager } from '../web/conversationManager.js';
 import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
+import { buildChannelActivationContextText, buildChannelActivationPrompt } from '../web/channelActivationPrompt.js';
 
 describe('ExecutionDispatcher', () => {
   let db: Db;
@@ -423,9 +424,75 @@ describe('ExecutionDispatcher', () => {
     if (!secondDispatch || secondDispatch.type !== 'run.dispatch') throw new Error('missing second dispatch');
     expect(secondDispatch.dispatchMode).toBe('resume');
     expect(secondDispatch.contextText ?? '').toContain('真实可见回复');
-    expect(secondDispatch.contextText ?? '').toContain('Replay Bob: 真实可见回复');
     expect(secondDispatch.contextText ?? '').not.toContain('Assistant: 真实可见回复');
     expect(secondDispatch.contextText ?? '').not.toContain('Empty response:');
+  });
+
+  it('私聊 restore 时不应把 replay 和 exact-target recent messages 重复注入两遍', async () => {
+    manager.close();
+    db.close();
+    db = createTestDb();
+    sent.length = 0;
+    manager = new ConversationManager({
+      db,
+      config: createTestConfig({ contextReplayEnabled: true, contextReplayRuns: 16 }),
+      nodeRegistry: fakeRegistry as any,
+    });
+    manager.start();
+
+    const agent = manager.createAgent({
+      name: 'kimi',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/kimi-dm-restore',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    const dmChannelId = `dm:${agent.agentId}`;
+    const insertFinalReply = (runId: string, content: string) => {
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
+         VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        randomUUID(),
+        dmChannelId,
+        agent.agentId,
+        agent.name,
+        'dm:@oldpan',
+        content,
+        allocateNextChannelMessageSeq(db, dmChannelId),
+        Date.now(),
+        runId,
+        'final',
+      );
+      finishRun(db, { runId, stopReason: 'end_turn' });
+      db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', conv.id);
+    };
+
+    await manager.submitPrompt(conv.id, '你好', { senderName: 'oldpan' });
+    const firstDispatch = sent[0]?.msg;
+    if (!firstDispatch || firstDispatch.type !== 'run.dispatch') throw new Error('missing first dispatch');
+    insertFinalReply(firstDispatch.runId, '你好！我是 kimi，打杂小能手。有什么我可以帮你的吗？');
+
+    await manager.submitPrompt(conv.id, '我们刚才聊了什么', { senderName: 'oldpan' });
+    const secondSeedDispatch = sent[1]?.msg;
+    if (!secondSeedDispatch || secondSeedDispatch.type !== 'run.dispatch') throw new Error('missing second seed dispatch');
+    insertFinalReply(
+      secondSeedDispatch.runId,
+      '我们刚才聊了两句：你先打了招呼，然后让我回顾刚才的对话。',
+    );
+
+    sent.length = 0;
+    await manager.submitPrompt(conv.id, '你真棒', { senderName: 'oldpan' });
+
+    const replayDispatch = sent[0]?.msg;
+    if (!replayDispatch || replayDispatch.type !== 'run.dispatch') throw new Error('missing replay dispatch');
+    expect(replayDispatch.dispatchMode).toBe('resume');
+    expect(replayDispatch.contextText ?? '').toContain('[Recent messages on this exact target]');
+    expect(replayDispatch.contextText ?? '').toContain('你好！我是 kimi，打杂小能手。有什么我可以帮你的吗？');
+    expect(replayDispatch.contextText ?? '').toContain('我们刚才聊了什么');
+    expect(replayDispatch.contextText ?? '').not.toContain('Context (previous messages, for continuity after restart):');
   });
 
   it('resume replay 应去掉旧 activation envelope，仅回放触发正文', async () => {
@@ -495,10 +562,182 @@ describe('ExecutionDispatcher', () => {
     if (!dispatch || dispatch.type !== 'run.dispatch') throw new Error('missing dispatch');
     expect(dispatch.dispatchMode).toBe('resume');
     expect(dispatch.contextText ?? '').toContain('User: 再看下机器的内存状态');
-    expect(dispatch.contextText ?? '').toContain('Envelope Bob: 收到，继续检查中');
+    expect(dispatch.contextText ?? '').toContain('收到，继续检查中');
     expect(dispatch.contextText ?? '').not.toContain('[Current conversation target]');
     expect(dispatch.contextText ?? '').not.toContain('[Triggered message metadata]');
     expect(dispatch.contextText ?? '').not.toContain('[Triggered message body]');
+  });
+
+  it('thread restore 时不应把 replay 和 exact-target recent messages 重复注入两遍', async () => {
+    manager.close();
+    db.close();
+    db = createTestDb();
+    sent.length = 0;
+    manager = new ConversationManager({
+      db,
+      config: createTestConfig({ contextReplayEnabled: true, contextReplayRuns: 16 }),
+      nodeRegistry: fakeRegistry as any,
+    });
+    manager.start();
+
+    const channel = manager.createChannel({ name: 'pure-cal-related' });
+    const agent = manager.createAgent({
+      name: 'kimi',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/kimi-thread-restore',
+      channelId: channel.channelId,
+    });
+    manager.joinChannel(agent.agentId, channel.channelId);
+    const conv = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'f550d695');
+    if (!conv) throw new Error('missing thread conversation');
+
+    const channelId = channel.channelId;
+    const threadRootId = 'f550d695';
+    const target = '#pure-cal-related:f550d695';
+    const baseTime = Date.now();
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`,
+    ).run('f550d695-root', channelId, agent.agentId, agent.name, '#pure-cal-related', '你好！我是kimi，有什么可以帮你的吗？', 6, baseTime, threadRootId);
+
+    const sessionRow = db.prepare(
+      'SELECT session_key as sessionKey FROM conversations WHERE id = ?',
+    ).get(conv.id) as { sessionKey: string };
+
+    const firstRunId = randomUUID();
+    db.prepare(
+      `INSERT INTO runs(run_id, session_key, prompt_text, started_at, ended_at, stop_reason)
+       VALUES(?, ?, ?, ?, ?, ?)`,
+    ).run(
+      firstRunId,
+      sessionRow.sessionKey,
+      buildChannelActivationPrompt({
+        channelName: 'pure-cal-related',
+        target,
+        replyTarget: target,
+        senderName: 'yanzong',
+        content: '帮我看下当前机器的显存状态',
+        reason: 'thread_reply',
+      }),
+      1000,
+      1100,
+      'end_turn',
+    );
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
+       VALUES(?, ?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, NULL)`,
+    ).run('6aa79cc1-user', channelId, 'user', 'yanzong', target, '帮我看下当前机器的显存状态', 7, baseTime + 1, threadRootId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)`,
+    ).run('2e50a80d-agent', channelId, agent.agentId, agent.name, target, '当前机器显存状态如下：显存几乎完全可用。', 8, baseTime + 2, firstRunId, threadRootId, 'final');
+
+    const secondRunId = randomUUID();
+    db.prepare(
+      `INSERT INTO runs(run_id, session_key, prompt_text, started_at, ended_at, stop_reason)
+       VALUES(?, ?, ?, ?, ?, ?)`,
+    ).run(
+      secondRunId,
+      sessionRow.sessionKey,
+      buildChannelActivationPrompt({
+        channelName: 'pure-cal-related',
+        target,
+        replyTarget: target,
+        senderName: 'yanzong',
+        content: '再看下机器的内存状态',
+        reason: 'thread_reply',
+      }),
+      1200,
+      1300,
+      'end_turn',
+    );
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
+       VALUES(?, ?, ?, ?, 'user', ?, ?, ?, ?, NULL, ?, NULL)`,
+    ).run('9a33f438-user', channelId, 'user', 'yanzong', target, '再看下机器的内存状态', 9, baseTime + 3, threadRootId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)`,
+    ).run('7058b948-agent', channelId, agent.agentId, agent.name, target, '当前机器内存状态如下：可用内存很充裕。', 10, baseTime + 4, secondRunId, threadRootId, 'final');
+
+    const recentMessages = [
+      {
+        messageId: '6aa79cc1',
+        seq: 7,
+        target,
+        senderName: 'yanzong',
+        senderType: 'user' as const,
+        content: '帮我看下当前机器的显存状态',
+        createdAt: baseTime + 1,
+      },
+      {
+        messageId: '2e50a80d',
+        seq: 8,
+        target,
+        senderName: 'kimi',
+        senderType: 'agent' as const,
+        content: '当前机器显存状态如下：显存几乎完全可用。',
+        createdAt: baseTime + 2,
+      },
+      {
+        messageId: '9a33f438',
+        seq: 9,
+        target,
+        senderName: 'yanzong',
+        senderType: 'user' as const,
+        content: '再看下机器的内存状态',
+        createdAt: baseTime + 3,
+      },
+      {
+        messageId: '7058b948',
+        seq: 10,
+        target,
+        senderName: 'kimi',
+        senderType: 'agent' as const,
+        content: '当前机器内存状态如下：可用内存很充裕。',
+        createdAt: baseTime + 4,
+      },
+    ];
+
+    await manager.submitPrompt(
+      conv.id,
+      buildChannelActivationPrompt({
+        channelName: 'pure-cal-related',
+        target,
+        replyTarget: target,
+        senderName: 'yanzong',
+        content: '你刚才干了什么',
+        reason: 'thread_reply',
+      }),
+      {
+        recordAsUserMessage: false,
+        activationContextText: buildChannelActivationContextText({
+          target,
+          rootMessage: {
+            messageId: 'f550d695-root',
+            seq: 6,
+            target: '#pure-cal-related',
+            senderName: 'kimi',
+            senderType: 'agent',
+            content: '你好！我是kimi，有什么可以帮你的吗？',
+            createdAt: baseTime,
+          },
+          recentMessages,
+          oldestVisibleSeq: 7,
+        }),
+        replayOverlapRecentMessages: recentMessages,
+      },
+    );
+
+    const dispatch = sent[0]?.msg;
+    if (!dispatch || dispatch.type !== 'run.dispatch') throw new Error('missing dispatch');
+    expect(dispatch.dispatchMode).toBe('resume');
+    expect(dispatch.contextText ?? '').toContain('[Recent messages on this exact target]');
+    expect(dispatch.contextText ?? '').toContain('当前机器显存状态如下：显存几乎完全可用。');
+    expect(dispatch.contextText ?? '').toContain('当前机器内存状态如下：可用内存很充裕。');
+    expect(dispatch.contextText ?? '').not.toContain('Context (previous messages, for continuity after restart):');
   });
 
   it('cancelConversationRun 应发送 run.cancel 到节点', () => {
@@ -643,16 +882,32 @@ describe('ExecutionDispatcher', () => {
     const queued = await manager.submitPrompt(primary.id, 'second', {
       recordAsUserMessage: false,
       activationContextText: '[Thread root message]\nhello root',
+      replayOverlapRecentMessages: [
+        {
+          messageId: 'recent-1',
+          seq: 1,
+          target: '#default:abcd1234',
+          senderName: 'Queued Bob',
+          senderType: 'agent',
+          content: 'hello root',
+          createdAt: 1000,
+        },
+      ],
     });
 
     expect(queued.queued).toBe(true);
 
     const queueEntry = db.prepare(
-      `SELECT activation_context_text as activationContextText
+      `SELECT activation_context_text as activationContextText,
+              replay_overlap_recent_messages_json as replayOverlapRecentMessagesJson
        FROM conversation_prompt_queue
        WHERE conversation_id = ?`
-    ).get(primary.id) as { activationContextText: string | null } | undefined;
+    ).get(primary.id) as {
+      activationContextText: string | null;
+      replayOverlapRecentMessagesJson: string | null;
+    } | undefined;
     expect(queueEntry?.activationContextText).toBe('[Thread root message]\nhello root');
+    expect(queueEntry?.replayOverlapRecentMessagesJson).toContain('"messageId":"recent-1"');
 
     const firstDispatch = sent[0]?.msg;
     if (!firstDispatch || firstDispatch.type !== 'run.dispatch') throw new Error('missing first dispatch');

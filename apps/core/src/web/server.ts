@@ -1371,6 +1371,7 @@ export async function startServer(params: {
                 boundTask: activationContext.boundTask,
                 openTasks: activationContext.openTasks,
               }) || undefined,
+              replayOverlapRecentMessages: activationContext.recentMessages,
             },
           ).then(() => {
             bumpAgentMessageCheckpoint(db, agentId, req.params.id, seq, threadRootId ?? null);

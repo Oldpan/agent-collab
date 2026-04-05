@@ -32,6 +32,7 @@ import {
   listChannelSubscriptions,
   upsertChannelSubscription,
 } from './channelSubscriptions.js';
+import type { ActivationContextMessage } from './activationContext.js';
 import {
   deleteTargetParticipantsForAgent,
   deleteTargetParticipantsForAgentInChannel,
@@ -785,7 +786,13 @@ export class ConversationManager {
   async submitPrompt(
     conversationId: string,
     promptText: string,
-    options?: { recordAsUserMessage?: boolean; activationContextText?: string; senderName?: string; clientMessageId?: string },
+    options?: {
+      recordAsUserMessage?: boolean;
+      activationContextText?: string;
+      replayOverlapRecentMessages?: ActivationContextMessage[];
+      senderName?: string;
+      clientMessageId?: string;
+    },
   ): Promise<{ queued: boolean; runId?: string }> {
     return this.executionDispatcher.submitPrompt(conversationId, promptText, options);
   }

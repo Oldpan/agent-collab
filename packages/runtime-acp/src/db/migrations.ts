@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 51;
+const LATEST_VERSION = 52;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -929,5 +929,42 @@ export function migrate(db: Db): void {
     `);
 
     db.exec(`UPDATE schema_version SET version = 51;`);
+  }
+
+  if (current < 52) {
+    const queueTable = db.prepare(
+      `SELECT name
+       FROM sqlite_master
+       WHERE type = 'table' AND name = 'conversation_prompt_queue'`,
+    ).get() as { name: string } | undefined;
+    if (!queueTable) {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS conversation_prompt_queue (
+          queue_id         INTEGER PRIMARY KEY AUTOINCREMENT,
+          agent_id         TEXT NOT NULL,
+          conversation_id  TEXT NOT NULL,
+          prompt_text      TEXT NOT NULL,
+          record_as_user_message INTEGER NOT NULL DEFAULT 1,
+          activation_context_text TEXT,
+          replay_overlap_recent_messages_json TEXT,
+          sender_name TEXT,
+          client_message_id TEXT,
+          created_at       INTEGER NOT NULL,
+          updated_at       INTEGER NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_conversation_prompt_queue_agent
+          ON conversation_prompt_queue(agent_id, created_at ASC);
+
+        CREATE INDEX IF NOT EXISTS idx_conversation_prompt_queue_conversation
+          ON conversation_prompt_queue(conversation_id, created_at ASC);
+      `);
+    } else {
+      const queueCols = db.prepare("PRAGMA table_info('conversation_prompt_queue')").all() as Array<{ name: string }>;
+      if (!queueCols.some((c) => c.name === 'replay_overlap_recent_messages_json')) {
+        db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN replay_overlap_recent_messages_json TEXT;`);
+      }
+    }
+    db.exec(`UPDATE schema_version SET version = 52;`);
   }
 }

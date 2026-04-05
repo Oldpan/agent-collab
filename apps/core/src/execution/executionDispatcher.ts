@@ -12,7 +12,7 @@ import { buildDirectActivationPrompt } from '../web/directActivationPrompt.js';
 import { buildDirectActivationContextText } from '../web/directActivationPrompt.js';
 import { resolveConversationReplyTarget } from '../web/directReplyTargets.js';
 import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
-import { buildTargetActivationContext } from '../web/activationContext.js';
+import { buildTargetActivationContext, type ActivationContextMessage } from '../web/activationContext.js';
 
 const TURN_REPLY_CONTRACT = [
   '[Reply contract]',
@@ -33,6 +33,7 @@ type PendingDispatchAcceptance = {
 type PromptSubmitOptions = {
   recordAsUserMessage?: boolean;
   activationContextText?: string;
+  replayOverlapRecentMessages?: ActivationContextMessage[];
   senderName?: string;
   clientMessageId?: string;
 };
@@ -111,11 +112,8 @@ export class ExecutionDispatcher {
           agentType: agent.agentType,
           workspacePath: row.workspacePath ?? this.config.workspaceRoot,
         });
-
-        if (dispatchMode !== 'cold_start') {
-          const replayText = this.buildConversationReplayText(conversationId, row.sessionKey, runId);
-          if (replayText) contextText += '\n\n' + replayText;
-        }
+        let replayOverlapMessages = options?.replayOverlapRecentMessages;
+        let dmActivationContextText = '';
 
         if (recordAsUserMessage) {
           // Persist DM user messages to channel_messages so history/replay stay complete
@@ -157,16 +155,28 @@ export class ExecutionDispatcher {
               replyTarget: dmReplyTarget,
               triggerSeq: msgSeq,
             });
-            const dmContextText = buildDirectActivationContextText({
+            replayOverlapMessages = dmActivationContext.recentMessages;
+            dmActivationContextText = buildDirectActivationContextText({
               target: dmReplyTarget,
               recentMessages: dmActivationContext.recentMessages,
               unreadCount: dmActivationContext.unreadCount,
               oldestVisibleSeq: dmActivationContext.oldestVisibleSeq,
             });
-            if (dmContextText) {
-              contextText += '\n\n' + dmContextText;
-            }
           }
+        }
+
+        if (dispatchMode !== 'cold_start') {
+          const replayText = this.buildConversationReplayText(
+            conversationId,
+            row.sessionKey,
+            runId,
+            replayOverlapMessages,
+          );
+          if (replayText) contextText += '\n\n' + replayText;
+        }
+
+        if (dmActivationContextText) {
+          contextText += '\n\n' + dmActivationContextText;
         }
 
         if (options?.activationContextText?.trim()) {
@@ -359,7 +369,9 @@ export class ExecutionDispatcher {
     const next = this.db.prepare(
       `SELECT queue_id as queueId, agent_id as agentId, conversation_id as conversationId,
               prompt_text as promptText, record_as_user_message as recordAsUserMessage,
-              activation_context_text as activationContextText, sender_name as senderName,
+              activation_context_text as activationContextText,
+              replay_overlap_recent_messages_json as replayOverlapRecentMessagesJson,
+              sender_name as senderName,
               client_message_id as clientMessageId
        FROM conversation_prompt_queue
        WHERE conversation_id = ?
@@ -372,6 +384,7 @@ export class ExecutionDispatcher {
       promptText: string;
       recordAsUserMessage: number;
       activationContextText: string | null;
+      replayOverlapRecentMessagesJson: string | null;
       senderName: string | null;
       clientMessageId: string | null;
     } | undefined;
@@ -383,6 +396,7 @@ export class ExecutionDispatcher {
       await this.dispatchPrompt(next.conversationId, next.promptText, {
         recordAsUserMessage: next.recordAsUserMessage !== 0,
         activationContextText: next.activationContextText ?? undefined,
+        replayOverlapRecentMessages: parseReplayOverlapRecentMessages(next.replayOverlapRecentMessagesJson),
         senderName: next.senderName ?? undefined,
         clientMessageId: next.clientMessageId ?? undefined,
       });
@@ -432,7 +446,12 @@ export class ExecutionDispatcher {
    * Rebuild recent conversation history from core's DB (content.delta events) so that
    * a freshly restarted ACP process can recover context it would otherwise have lost.
    */
-  private buildConversationReplayText(conversationId: string, sessionKey: string, excludeRunId: string): string {
+  private buildConversationReplayText(
+    conversationId: string,
+    sessionKey: string,
+    excludeRunId: string,
+    overlapRecentMessages?: ActivationContextMessage[],
+  ): string {
     if (!this.config.contextReplayEnabled || this.config.contextReplayRuns <= 0) return '';
 
     const conversationAgentName = getConversationAgentName(this.db, conversationId);
@@ -523,7 +542,8 @@ export class ExecutionDispatcher {
       }
     }
 
-    const raw = blocks.join('\n');
+    const trimmedBlocks = trimReplayBlocksAgainstRecentMessages(blocks, overlapRecentMessages);
+    const raw = trimmedBlocks.join('\n');
     if (!raw.trim()) return '';
 
     const header = 'Context (previous messages, for continuity after restart):\n';
@@ -567,15 +587,16 @@ export class ExecutionDispatcher {
     const now = Date.now();
     this.db.prepare(
       `INSERT INTO conversation_prompt_queue(
-         agent_id, conversation_id, prompt_text, record_as_user_message, activation_context_text, sender_name, client_message_id, created_at, updated_at
+         agent_id, conversation_id, prompt_text, record_as_user_message, activation_context_text, replay_overlap_recent_messages_json, sender_name, client_message_id, created_at, updated_at
        )
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       agentId,
       conversationId,
       promptText,
       (options?.recordAsUserMessage ?? true) ? 1 : 0,
       options?.activationContextText?.trim() || null,
+      serializeReplayOverlapRecentMessages(options?.replayOverlapRecentMessages),
       options?.senderName ?? null,
       options?.clientMessageId ?? null,
       now,
@@ -659,6 +680,68 @@ function getConversationAgentName(db: Db, conversationId: string): string | null
      WHERE c.id = ?`,
   ).get(conversationId) as { agentName: string | null } | undefined;
   return row?.agentName?.trim() || null;
+}
+
+function trimReplayBlocksAgainstRecentMessages(
+  replayBlocks: string[],
+  recentMessages?: ActivationContextMessage[],
+): string[] {
+  if (!recentMessages?.length || replayBlocks.length === 0) return replayBlocks;
+
+  const recentReplayBlocks = recentMessages
+    .map(formatReplayBlockForRecentMessage)
+    .filter((block): block is string => Boolean(block));
+  if (recentReplayBlocks.length === 0) return replayBlocks;
+
+  let replayIndex = replayBlocks.length - 1;
+  let recentIndex = recentReplayBlocks.length - 1;
+
+  while (replayIndex >= 0 && recentIndex >= 0) {
+    if (replayBlocks[replayIndex] !== recentReplayBlocks[recentIndex]) break;
+    replayIndex -= 1;
+    recentIndex -= 1;
+  }
+
+  const matchedCount = recentReplayBlocks.length - 1 - recentIndex;
+  if (matchedCount <= 0) return replayBlocks;
+  return replayBlocks.slice(0, replayBlocks.length - matchedCount);
+}
+
+function formatReplayBlockForRecentMessage(message: ActivationContextMessage): string | null {
+  const content = message.content.trim();
+  if (!content) return null;
+  if (message.senderType === 'agent') {
+    return `${message.senderName}: ${content}`;
+  }
+  return `User: ${content}`;
+}
+
+function serializeReplayOverlapRecentMessages(messages?: ActivationContextMessage[]): string | null {
+  if (!messages?.length) return null;
+  return JSON.stringify(messages);
+}
+
+function parseReplayOverlapRecentMessages(raw: string | null): ActivationContextMessage[] | undefined {
+  if (!raw?.trim()) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return undefined;
+    return parsed.filter(isActivationContextMessage);
+  } catch {
+    return undefined;
+  }
+}
+
+function isActivationContextMessage(value: unknown): value is ActivationContextMessage {
+  if (!value || typeof value !== 'object') return false;
+  const row = value as Record<string, unknown>;
+  return typeof row.messageId === 'string'
+    && typeof row.seq === 'number'
+    && typeof row.target === 'string'
+    && typeof row.senderName === 'string'
+    && (row.senderType === 'user' || row.senderType === 'agent')
+    && typeof row.content === 'string'
+    && typeof row.createdAt === 'number';
 }
 
 function prependTurnReplyContract(promptText: string): string {
