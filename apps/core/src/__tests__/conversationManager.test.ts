@@ -838,6 +838,26 @@ describe('ConversationManager', () => {
       expect(third?.threadRootId).toBe('efgh5678');
     });
 
+    it('openAgentChannelThread 传入完整 message id 时应归一化到 short threadRootId', () => {
+      const channel = manager.createChannel({ name: 'eng-thread-normalized' });
+      const agent = manager.createAgent({
+        name: 'BobNormalized',
+        agentType: 'claude_acp',
+        nodeId: 'node-1',
+        workspacePath: '/tmp/bob-eng-thread-normalized',
+      });
+      manager.joinChannel(agent.agentId, channel.channelId);
+
+      const fromShort = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'abcd1234');
+      const fromFull = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'abcd1234-dead-beef-cafe-0123456789ab');
+
+      expect(fromShort).not.toBeNull();
+      expect(fromFull).not.toBeNull();
+      expect(fromShort?.id).toBe(fromFull?.id);
+      expect(fromFull?.threadRootId).toBe('abcd1234');
+      expect(fromFull?.replyTarget).toBe('#eng-thread-normalized:abcd1234');
+    });
+
     it('openAgentChannelThread 在无 threadRootId 时应复用同一个 channel root branch', () => {
       const channel = manager.createChannel({ name: 'eng-root' });
       const agent = manager.createAgent({

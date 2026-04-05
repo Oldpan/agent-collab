@@ -49,6 +49,12 @@ function slugifyAgentName(name: string): string {
     .slice(0, 40);
 }
 
+function normalizeChannelThreadRootId(threadRootId?: string | null): string | null {
+  const normalized = threadRootId?.trim();
+  if (!normalized) return null;
+  return normalized.slice(0, 8);
+}
+
 type AgentRow = {
   agentId: string;
   name: string;
@@ -449,7 +455,7 @@ export class ConversationManager {
     const agent = this.getAgent(agentId);
     if (!agent) return null;
 
-    const normalizedThreadRootId = threadRootId ?? null;
+    const normalizedThreadRootId = normalizeChannelThreadRootId(threadRootId);
     const existing = (normalizedThreadRootId
       ? this.db.prepare(
         `SELECT id, channel_id as channelId, title, agent_type as agentType,

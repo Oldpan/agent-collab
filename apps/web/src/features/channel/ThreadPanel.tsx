@@ -54,7 +54,7 @@ function ThreadMessage({
   const isUser = message.senderType === "user";
   const showFallbackBadge = message.messageSource === "delta_fallback" && !isUser;
   return (
-    <div className="flex gap-2.5 px-4 py-2">
+    <div className={cn("flex gap-2.5 px-4 py-2", isUser ? "flex-row-reverse" : "flex-row")}>
       <div
         className={cn(
           "flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-zinc-900 text-[10px] font-bold shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
@@ -64,7 +64,7 @@ function ThreadMessage({
       >
         {message.senderName.slice(0, 2).toUpperCase()}
       </div>
-      <div className="min-w-0 flex-1">
+      <div className={cn("min-w-0 flex flex-col", isUser ? "items-end text-left" : "items-start text-left")}>
         <div className="flex items-baseline gap-1.5">
           <span className="text-[11px] font-semibold text-zinc-700">{message.senderName}</span>
           <span className="text-[10px] text-zinc-400">{formatTime(message.createdAt)}</span>
@@ -83,7 +83,7 @@ function ThreadMessage({
         )}
         <div
           className={cn(
-            "mt-0.5 rounded-md border-2 border-zinc-900 px-3 py-2 text-sm shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]",
+            "mt-0.5 w-fit min-w-[20px] rounded-md border-2 border-zinc-900 px-3 py-2 text-sm shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]",
             isUser ? "bg-[#d8efff] text-zinc-900" : "bg-[#d8f8c8] text-zinc-900",
           )}
         >
@@ -369,7 +369,7 @@ export function ThreadPanel({
 
       {/* Root message */}
       <div className="shrink-0 border-b-2 border-dashed border-zinc-300 bg-[#fffdf5]">
-        <div className="flex gap-2.5 px-4 py-3">
+        <div className={cn("flex gap-2.5 px-4 py-3", isRootUser ? "flex-row-reverse" : "flex-row")}>
           <div
             className={cn(
               "flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-zinc-900 text-[10px] font-bold shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
@@ -378,7 +378,7 @@ export function ThreadPanel({
           >
             {rootMessage.senderName.slice(0, 2).toUpperCase()}
           </div>
-          <div className="min-w-0 flex-1">
+          <div className={cn("min-w-0 flex flex-col", isRootUser ? "items-end text-left" : "items-start text-left")}>
             <div className="flex items-baseline gap-1.5">
               <span className="text-[11px] font-semibold text-zinc-700">{rootMessage.senderName}</span>
               <span className="text-[10px] text-zinc-400">{formatTime(rootMessage.createdAt)}</span>
@@ -389,13 +389,18 @@ export function ThreadPanel({
                   size="sm"
                   variant="outline"
                   className="h-6 rounded-sm border-2 border-zinc-900 bg-[#fffdf4] px-2 text-[10px] text-zinc-900 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#fff1a9]"
-                  onClick={() => void onOpenAgentSession(rootAgent.agentId, channelId, rootMessage.id)}
+                  onClick={() => void onOpenAgentSession(rootAgent.agentId, channelId, threadRootId)}
                 >
                   Open agent session
                 </Button>
               </div>
             )}
-            <div className="mt-0.5 text-sm text-zinc-800">
+            <div
+              className={cn(
+                "mt-0.5 w-fit min-w-[20px] rounded-md border-2 border-zinc-900 px-3 py-2 text-sm shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]",
+                isRootUser ? "bg-[#d8efff] text-zinc-900" : "bg-[#d8f8c8] text-zinc-900",
+              )}
+            >
               {isRootUser ? (
                 <span style={{ whiteSpace: "pre-wrap", wordBreak: "break-word" }}>
                   {renderContent(rootMessage.content)}
@@ -451,7 +456,7 @@ export function ThreadPanel({
                 message={msg}
                 agent={channelMembers.find((agent) => agent.name === msg.senderName)}
                 channelId={channelId}
-                threadRootId={rootMessage.id}
+                threadRootId={threadRootId}
                 onOpenAgentSession={onOpenAgentSession}
               />
             ))}
