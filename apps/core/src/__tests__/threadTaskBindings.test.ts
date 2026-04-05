@@ -1,75 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { createTestDb } from './helpers.js';
 import {
-  bindTaskToThread,
+  getBoundTaskForThread,
+  getTaskThreadRootId,
   getThreadBindingForTask,
   getThreadCollaborationSummary,
-  getBoundTaskForThread,
-  unbindTaskFromThread,
+  syncTaskThreadOwner,
 } from '../web/threadTaskBindings.js';
 import { upsertTargetParticipant } from '../web/targetParticipants.js';
 
 describe('threadTaskBindings', () => {
-  it('同一个 thread 只能绑定一个 task', () => {
-    const db = createTestDb();
-    const now = Date.now();
-
-    db.prepare(
-      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, created_at, updated_at)
-       VALUES(?, 'default', 1, 'Task A', 'todo', ?, ?)`,
-    ).run('task-a', now, now);
-    db.prepare(
-      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, created_at, updated_at)
-       VALUES(?, 'default', 2, 'Task B', 'todo', ?, ?)`,
-    ).run('task-b', now, now);
-
-    expect(bindTaskToThread(db, {
-      channelId: 'default',
-      threadRootId: 'abcd1234',
-      taskId: 'task-a',
-      boundAt: now,
-    })).toEqual({ ok: true });
-
-    expect(bindTaskToThread(db, {
-      channelId: 'default',
-      threadRootId: 'abcd1234',
-      taskId: 'task-b',
-      boundAt: now,
-    })).toEqual({ ok: false, reason: 'Thread is already bound to #t1' });
-
-    db.close();
-  });
-
-  it('summary 应优先返回绑定 task 的 assignee 作为 owner', () => {
-    const db = createTestDb();
-    const now = Date.now();
-    db.prepare(`INSERT INTO agents(agent_id, name, agent_type, created_at, updated_at, channel_id) VALUES(?, ?, 'claude_acp', ?, ?, 'default')`)
-      .run('agent-1', 'Bob', now, now);
-    db.prepare(`INSERT INTO agents(agent_id, name, agent_type, created_at, updated_at, channel_id) VALUES(?, ?, 'claude_acp', ?, ?, 'default')`)
-      .run('agent-2', 'Alice', now, now);
-    db.prepare(
-      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, claimed_by_agent_id, claimed_by_name, created_at, updated_at)
-       VALUES(?, 'default', 3, 'Bound task', 'in_progress', 'agent-1', 'Bob', ?, ?)`,
-    ).run('task-bound', now, now);
-    bindTaskToThread(db, { channelId: 'default', threadRootId: 'thread000', taskId: 'task-bound', boundAt: now });
-    upsertTargetParticipant(db, { agentId: 'agent-1', channelId: 'default', threadRootId: 'thread000', role: 'owner', lastActiveAt: now });
-    upsertTargetParticipant(db, { agentId: 'agent-2', channelId: 'default', threadRootId: 'thread000', role: 'participant', lastActiveAt: now });
-
-    const summary = getThreadCollaborationSummary(db, { channelId: 'default', threadRootId: 'thread000' });
-    expect(summary.boundTask?.taskNumber).toBe(3);
-    expect(summary.ownerName).toBe('Bob');
-    expect(summary.participants).toEqual(['Bob', 'Alice']);
-
-    db.close();
-  });
-
-  it('隐式 task-root 线程 unbind 后应不可再命中，重新绑定原 thread 时恢复', () => {
+  it('只应把 task root thread 识别为 task thread', () => {
     const db = createTestDb();
     const now = Date.now();
 
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
-       VALUES(?, 'default', 'system', 'system', 'system', '#default', 'Implicit task', 1, ?)`,
+       VALUES(?, 'default', 'system', 'system', 'system', '#default', 'Root task', 1, ?)`,
     ).run('abc12345-0000-0000-0000-000000000000', now);
 
     db.prepare(
@@ -77,23 +24,92 @@ describe('threadTaskBindings', () => {
        VALUES(?, 'default', 4, 'Implicit task', 'todo', ?, ?, ?)`,
     ).run('task-implicit', 'abc12345-0000-0000-0000-000000000000', now, now);
 
+    expect(getTaskThreadRootId('abc12345-0000-0000-0000-000000000000')).toBe('abc12345');
     expect(getBoundTaskForThread(db, { channelId: 'default', threadRootId: 'abc12345' })?.taskId).toBe('task-implicit');
+    expect(getBoundTaskForThread(db, { channelId: 'default', threadRootId: 'other1234' })).toBeUndefined();
     expect(getThreadBindingForTask(db, 'task-implicit')).toEqual({ channelId: 'default', threadRootId: 'abc12345' });
 
-    unbindTaskFromThread(db, { channelId: 'default', threadRootId: 'abc12345' });
+    db.close();
+  });
 
-    expect(getBoundTaskForThread(db, { channelId: 'default', threadRootId: 'abc12345' })).toBeUndefined();
-    expect(getThreadBindingForTask(db, 'task-implicit')).toBeUndefined();
+  it('summary 应优先返回 task root assignee 作为 owner', () => {
+    const db = createTestDb();
+    const now = Date.now();
+    db.prepare(`INSERT INTO agents(agent_id, name, agent_type, created_at, updated_at, channel_id) VALUES(?, ?, 'claude_acp', ?, ?, 'default')`)
+      .run('agent-1', 'Bob', now, now);
+    db.prepare(`INSERT INTO agents(agent_id, name, agent_type, created_at, updated_at, channel_id) VALUES(?, ?, 'claude_acp', ?, ?, 'default')`)
+      .run('agent-2', 'Alice', now, now);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('feedbeef-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Bound task', 1, ?)`,
+    ).run(now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
+       VALUES(?, 'default', 3, 'Bound task', 'in_progress', 'agent-1', 'Bob', 'feedbeef-0000-0000-0000-000000000000', ?, ?)`,
+    ).run('task-bound', now, now);
+    upsertTargetParticipant(db, { agentId: 'agent-1', channelId: 'default', threadRootId: 'feedbeef', role: 'owner', lastActiveAt: now });
+    upsertTargetParticipant(db, { agentId: 'agent-2', channelId: 'default', threadRootId: 'feedbeef', role: 'participant', lastActiveAt: now });
 
-    expect(bindTaskToThread(db, {
+    const summary = getThreadCollaborationSummary(db, { channelId: 'default', threadRootId: 'feedbeef' });
+    expect(summary.boundTask?.taskNumber).toBe(3);
+    expect(summary.ownerName).toBe('Bob');
+    expect(summary.participants).toEqual(['Bob', 'Alice']);
+
+    db.close();
+  });
+
+  it('summary 应只显示 recent participants，过期 owner 不应残留', () => {
+    const db = createTestDb();
+    const now = Date.now();
+    db.prepare(`INSERT INTO agents(agent_id, name, agent_type, created_at, updated_at, channel_id) VALUES(?, ?, 'claude_acp', ?, ?, 'default')`)
+      .run('agent-stale', 'StaleBob', now, now);
+    db.prepare(`INSERT INTO agents(agent_id, name, agent_type, created_at, updated_at, channel_id) VALUES(?, ?, 'claude_acp', ?, ?, 'default')`)
+      .run('agent-fresh', 'FreshAlice', now, now);
+
+    upsertTargetParticipant(db, {
+      agentId: 'agent-stale',
       channelId: 'default',
-      threadRootId: 'abc12345',
-      taskId: 'task-implicit',
-      boundAt: now,
-    })).toEqual({ ok: true });
+      threadRootId: 'plain1234',
+      role: 'owner',
+      lastActiveAt: now - (16 * 60 * 1000),
+    });
+    upsertTargetParticipant(db, {
+      agentId: 'agent-fresh',
+      channelId: 'default',
+      threadRootId: 'plain1234',
+      role: 'participant',
+      lastActiveAt: now,
+    });
 
-    expect(getBoundTaskForThread(db, { channelId: 'default', threadRootId: 'abc12345' })?.taskId).toBe('task-implicit');
-    expect(getThreadBindingForTask(db, 'task-implicit')).toEqual({ channelId: 'default', threadRootId: 'abc12345' });
+    const summary = getThreadCollaborationSummary(db, { channelId: 'default', threadRootId: 'plain1234' });
+    expect(summary.boundTask).toBeUndefined();
+    expect(summary.ownerName).toBeNull();
+    expect(summary.participants).toEqual(['FreshAlice']);
+
+    db.close();
+  });
+
+  it('syncTaskThreadOwner 应只同步 task root thread', () => {
+    const db = createTestDb();
+    const now = Date.now();
+    db.prepare(`INSERT INTO agents(agent_id, name, agent_type, created_at, updated_at, channel_id) VALUES(?, ?, 'claude_acp', ?, ?, 'default')`)
+      .run('agent-1', 'Bob', now, now);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('abc12345-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Task root', 1, ?)`,
+    ).run(now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
+       VALUES('task-owner', 'default', 1, 'Task root', 'todo', 'abc12345-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(now, now);
+
+    syncTaskThreadOwner(db, { taskId: 'task-owner', agentId: 'agent-1', lastActiveAt: now });
+
+    const owner = db.prepare(
+      `SELECT role FROM target_participants
+       WHERE agent_id = 'agent-1' AND channel_id = 'default' AND thread_root_id = 'abc12345'`,
+    ).get() as { role: string } | undefined;
+    expect(owner?.role).toBe('owner');
 
     db.close();
   });

@@ -37,8 +37,15 @@ import {
   TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
   upsertTargetParticipant,
 } from './targetParticipants.js';
-import { bindTaskToThread, getBoundTaskForThread, getThreadCollaborationSummary, unbindTaskFromThread } from './threadTaskBindings.js';
+import {
+  clearTaskThreadState,
+  getChannelTaskByNumber,
+  getThreadCollaborationSummary,
+  listChannelTasks,
+  syncTaskThreadOwner,
+} from './threadTaskBindings.js';
 import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
+import { allocateNextTaskNumber } from './taskNumbers.js';
 import { isValidTransition } from './taskStatusTransitions.js';
 import type { User } from '../services/auth.js';
 import {
@@ -1214,86 +1221,6 @@ export async function startServer(params: {
     },
   );
 
-  app.post<{ Params: { id: string; shortId: string }; Body: { taskNumber?: number } }>(
-    '/api/channels/:id/threads/:shortId/task',
-    async (req, reply) => {
-      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
-      const channel = conversationManager.getChannel(req.params.id);
-      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
-      const taskNumber = req.body?.taskNumber;
-      if (taskNumber == null) { reply.code(400); return { error: 'taskNumber is required' }; }
-
-      const task = db.prepare(
-        `SELECT task_id as taskId, claimed_by_agent_id as assigneeId
-         FROM tasks
-         WHERE channel_id = ? AND task_number = ?`,
-      ).get(req.params.id, taskNumber) as { taskId: string; assigneeId: string | null } | undefined;
-      if (!task) { reply.code(404); return { error: 'Task not found' }; }
-
-      const result = bindTaskToThread(db, {
-        channelId: req.params.id,
-        threadRootId: req.params.shortId,
-        taskId: task.taskId,
-      });
-      if (!result.ok) {
-        reply.code(409);
-        return { error: result.reason };
-      }
-
-      if (task.assigneeId) {
-        upsertTargetParticipant(db, {
-          agentId: task.assigneeId,
-          channelId: req.params.id,
-          threadRootId: req.params.shortId,
-          role: 'owner',
-        });
-      } else {
-        setTargetOwner(db, {
-          channelId: req.params.id,
-          threadRootId: req.params.shortId,
-          agentId: null,
-        });
-      }
-
-      broadcastChannelTasksChanged(req.params.id);
-
-      return getThreadCollaborationSummary(db, {
-        channelId: req.params.id,
-        threadRootId: req.params.shortId,
-      });
-    },
-  );
-
-  app.delete<{ Params: { id: string; shortId: string } }>(
-    '/api/channels/:id/threads/:shortId/task',
-    async (req, reply) => {
-      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
-      const channel = conversationManager.getChannel(req.params.id);
-      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
-      const boundTask = getBoundTaskForThread(db, {
-        channelId: req.params.id,
-        threadRootId: req.params.shortId,
-      });
-      if (!boundTask) { reply.code(404); return { error: 'Thread is not bound to a task' }; }
-
-      unbindTaskFromThread(db, {
-        channelId: req.params.id,
-        threadRootId: req.params.shortId,
-      });
-      setTargetOwner(db, {
-        channelId: req.params.id,
-        threadRootId: req.params.shortId,
-        agentId: null,
-      });
-      broadcastChannelTasksChanged(req.params.id);
-
-      return getThreadCollaborationSummary(db, {
-        channelId: req.params.id,
-        threadRootId: req.params.shortId,
-      });
-    },
-  );
-
   // ─── User-facing attachment upload ──────────────────────────────────────────
 
   /** POST /api/attachments/upload — upload a file as the current user */
@@ -1642,32 +1569,12 @@ export async function startServer(params: {
       if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
-      const rows = req.query.status && req.query.status !== 'all'
-        ? db.prepare(
-            `SELECT t.task_id as taskId, t.channel_id as channelId, t.task_number as taskNumber,
-                    t.title, t.description, t.status,
-                    t.claimed_by_agent_id as assigneeId, t.claimed_by_name as assigneeName,
-                    t.created_at as createdAt, t.updated_at as updatedAt,
-                    t.message_id as messageId,
-                    COALESCE(SUBSTR(t.message_id, 1, 8), b.thread_root_id) as linkedThreadId,
-                    COALESCE(SUBSTR(t.message_id, 1, 8), b.thread_root_id) as linkedThreadShortId
-             FROM tasks t
-             LEFT JOIN thread_task_bindings b ON b.task_id = t.task_id
-             WHERE t.channel_id = ? AND t.status = ? ORDER BY t.task_number ASC`,
-          ).all(req.params.id, req.query.status)
-        : db.prepare(
-            `SELECT t.task_id as taskId, t.channel_id as channelId, t.task_number as taskNumber,
-                    t.title, t.description, t.status,
-                    t.claimed_by_agent_id as assigneeId, t.claimed_by_name as assigneeName,
-                    t.created_at as createdAt, t.updated_at as updatedAt,
-                    t.message_id as messageId,
-                    COALESCE(SUBSTR(t.message_id, 1, 8), b.thread_root_id) as linkedThreadId,
-                    COALESCE(SUBSTR(t.message_id, 1, 8), b.thread_root_id) as linkedThreadShortId
-             FROM tasks t
-             LEFT JOIN thread_task_bindings b ON b.task_id = t.task_id
-             WHERE t.channel_id = ? ORDER BY t.task_number ASC`,
-          ).all(req.params.id);
-      return { tasks: rows };
+      return {
+        tasks: listChannelTasks(db, {
+          channelId: req.params.id,
+          status: (req.query.status as 'todo' | 'in_progress' | 'in_review' | 'done' | 'all' | undefined) ?? 'all',
+        }),
+      };
     },
   );
 
@@ -1683,22 +1590,24 @@ export async function startServer(params: {
       const now = Date.now();
       const taskId = randomUUID();
       const messageId = randomUUID();
-      const seqRow = db.prepare('SELECT MAX(task_number) as maxNum FROM tasks WHERE channel_id = ?').get(req.params.id) as { maxNum: number | null };
-      const taskNumber = (seqRow.maxNum ?? 0) + 1;
-      const seq = allocateNextChannelMessageSeq(db, req.params.id);
       const target = `#${channel.name}`;
+      let taskNumber = 0;
+      let seq = 0;
 
-      // Insert the task message (becomes the thread root)
-      db.prepare(
-        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
-         VALUES(?, ?, 'system', 'system', 'system', ?, ?, ?, ?, NULL, NULL, 'task')`,
-      ).run(messageId, req.params.id, target, title, seq, now);
+      db.transaction(() => {
+        taskNumber = allocateNextTaskNumber(db, req.params.id);
+        seq = allocateNextChannelMessageSeq(db, req.params.id);
 
-      // Insert the task, linking it to the message
-      db.prepare(
-        `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, created_at, updated_at)
-         VALUES(?, ?, ?, ?, ?, 'todo', ?, ?, ?)`,
-      ).run(taskId, req.params.id, taskNumber, title, description ?? null, messageId, now, now);
+        db.prepare(
+          `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
+           VALUES(?, ?, 'system', 'system', 'system', ?, ?, ?, ?, NULL, NULL, 'task')`,
+        ).run(messageId, req.params.id, target, title, seq, now);
+
+        db.prepare(
+          `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, created_at, updated_at)
+           VALUES(?, ?, ?, ?, ?, 'todo', ?, ?, ?)`,
+        ).run(taskId, req.params.id, taskNumber, title, description ?? null, messageId, now, now);
+      })();
 
       const shortId = messageId.slice(0, 8);
       // Broadcast the task message to channel subscribers
@@ -1737,15 +1646,16 @@ export async function startServer(params: {
       if (existing) { reply.code(409); return { error: 'Message is already a task' }; }
       const now = Date.now();
       const taskId = randomUUID();
-      const seqRow = db.prepare('SELECT MAX(task_number) as maxNum FROM tasks WHERE channel_id = ?').get(req.params.id) as { maxNum: number | null };
-      const taskNumber = (seqRow.maxNum ?? 0) + 1;
+      let taskNumber = 0;
       const taskTitle = title?.trim() || msg.content.slice(0, 120);
-      db.prepare(
-        `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
-         VALUES(?, ?, ?, ?, 'todo', ?, ?, ?)`,
-      ).run(taskId, req.params.id, taskNumber, taskTitle, msg.message_id, now, now);
-      // Update the message kind to 'task'
-      db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.message_id);
+      db.transaction(() => {
+        taskNumber = allocateNextTaskNumber(db, req.params.id);
+        db.prepare(
+          `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
+           VALUES(?, ?, ?, ?, 'todo', ?, ?, ?)`,
+        ).run(taskId, req.params.id, taskNumber, taskTitle, msg.message_id, now, now);
+        db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.message_id);
+      })();
       const shortId = msg.message_id.slice(0, 8);
       broadcastChannelTasksChanged(req.params.id);
       reply.code(201);
@@ -1766,27 +1676,33 @@ export async function startServer(params: {
       if (!validStatuses.includes(status)) { reply.code(400); return { error: `Invalid status: ${status}` }; }
       const nextStatus = status as 'todo' | 'in_progress' | 'in_review' | 'done';
       const current = db.prepare(
-        `SELECT task_id as taskId, status as currentStatus
+        `SELECT task_id as taskId, status as currentStatus, claimed_by_agent_id as claimedByAgentId
          FROM tasks WHERE channel_id = ? AND task_number = ?`,
-      ).get(req.params.id, taskNumber) as { taskId: string; currentStatus: 'todo' | 'in_progress' | 'in_review' | 'done' } | undefined;
+      ).get(req.params.id, taskNumber) as {
+        taskId: string;
+        currentStatus: 'todo' | 'in_progress' | 'in_review' | 'done';
+        claimedByAgentId: string | null;
+      } | undefined;
       if (!current) { reply.code(404); return { error: 'Task not found' }; }
       if (!isValidTransition(current.currentStatus, nextStatus)) {
         reply.code(400);
         return { error: `Invalid transition: ${current.currentStatus} → ${nextStatus}` };
       }
       const now = Date.now();
-      db.prepare(
-        `UPDATE tasks SET status = ?, updated_at = ? WHERE channel_id = ? AND task_number = ?`,
-      ).run(nextStatus, now, req.params.id, taskNumber);
-      const row = db.prepare(
-        `SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
-                title, description, status, claimed_by_agent_id as assigneeId,
-                claimed_by_name as assigneeName, message_id as messageId,
-                SUBSTR(message_id, 1, 8) as linkedThreadShortId,
-                SUBSTR(message_id, 1, 8) as linkedThreadId,
-                created_at as createdAt, updated_at as updatedAt
-         FROM tasks WHERE channel_id = ? AND task_number = ?`,
-      ).get(req.params.id, taskNumber);
+      db.transaction(() => {
+        db.prepare(
+          `UPDATE tasks SET status = ?, updated_at = ? WHERE channel_id = ? AND task_number = ?`,
+        ).run(nextStatus, now, req.params.id, taskNumber);
+        syncTaskThreadOwner(db, {
+          taskId: current.taskId,
+          agentId: nextStatus === 'done' ? null : current.claimedByAgentId,
+          lastActiveAt: now,
+        });
+      })();
+      const row = getChannelTaskByNumber(db, {
+        channelId: req.params.id,
+        taskNumber,
+      });
       broadcastChannelTasksChanged(req.params.id);
       return row;
     },
@@ -1815,23 +1731,14 @@ export async function startServer(params: {
         return { error: 'Task not found' };
       }
 
-      const threadRootId = task.messageId ? task.messageId.slice(0, 8) : null;
-
       db.transaction(() => {
-        db.prepare(`DELETE FROM thread_task_bindings WHERE task_id = ?`).run(task.taskId);
+        clearTaskThreadState(db, {
+          channelId: req.params.id,
+          taskId: task.taskId,
+        });
         db.prepare(`DELETE FROM tasks WHERE task_id = ?`).run(task.taskId);
         if (task.messageId) {
           db.prepare(`UPDATE channel_messages SET message_kind = NULL WHERE message_id = ?`).run(task.messageId);
-        }
-        if (threadRootId) {
-          db.prepare(
-            `DELETE FROM target_participants
-             WHERE channel_id = ? AND thread_root_id = ?`,
-          ).run(req.params.id, threadRootId);
-          db.prepare(
-            `DELETE FROM agent_message_checkpoints
-             WHERE channel_id = ? AND thread_root_id = ?`,
-          ).run(req.params.id, threadRootId);
         }
       })();
 

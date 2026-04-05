@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 50;
+const LATEST_VERSION = 51;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -889,5 +889,45 @@ export function migrate(db: Db): void {
       db.exec(`ALTER TABLE conversations ADD COLUMN history_reset_at INTEGER;`);
     }
     db.exec(`UPDATE schema_version SET version = 50;`);
+  }
+
+  if (current < 51) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS channel_task_sequences (
+        channel_id        TEXT PRIMARY KEY,
+        next_task_number  INTEGER NOT NULL
+      );
+
+      INSERT INTO channel_task_sequences(channel_id, next_task_number)
+      SELECT channel_id, MAX(task_number) + 1
+      FROM tasks
+      GROUP BY channel_id
+      ON CONFLICT(channel_id) DO NOTHING;
+
+      UPDATE target_participants
+      SET role = 'participant'
+      WHERE role = 'owner'
+        AND EXISTS (
+          SELECT 1
+          FROM thread_task_bindings b
+          JOIN tasks t ON t.task_id = b.task_id
+          WHERE b.channel_id = target_participants.channel_id
+            AND b.thread_root_id = target_participants.thread_root_id
+            AND t.message_id IS NOT NULL
+            AND SUBSTR(t.message_id, 1, 8) != b.thread_root_id
+            AND NOT EXISTS (
+              SELECT 1
+              FROM tasks task_root
+              WHERE task_root.channel_id = target_participants.channel_id
+                AND task_root.message_id IS NOT NULL
+                AND SUBSTR(task_root.message_id, 1, 8) = target_participants.thread_root_id
+            )
+        );
+
+      DELETE FROM thread_task_bindings;
+      UPDATE tasks SET thread_unbound = 0 WHERE thread_unbound != 0;
+    `);
+
+    db.exec(`UPDATE schema_version SET version = 51;`);
   }
 }

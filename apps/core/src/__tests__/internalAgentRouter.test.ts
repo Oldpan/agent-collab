@@ -1086,7 +1086,7 @@ describe('internalAgentRouter', () => {
     expect(body.error).toBe('Agent has no skill roots configured.');
   });
 
-  it('thread 中 claim task 时应自动绑定 thread 并同步 owner', async () => {
+  it('thread 中 claim task 时应忽略 conversationId，并把 owner 同步到 task root thread', async () => {
     const now = Date.now();
     const agent = manager.createAgent({
       name: 'TaskOwnerBob',
@@ -1099,9 +1099,14 @@ describe('internalAgentRouter', () => {
     const conv = manager.openAgentChannelThread(agent.agentId, 'default', 'bind1234');
     if (!conv) throw new Error('missing thread conversation');
 
+    const seq = allocateNextChannelMessageSeq(db, 'default');
     db.prepare(
-      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, created_at, updated_at)
-       VALUES(?, 'default', 7, 'Bind me', 'todo', ?, ?)`,
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('feedbeef-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Bind me', ?, ?)`,
+    ).run(seq, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
+       VALUES(?, 'default', 7, 'Bind me', 'todo', 'feedbeef-0000-0000-0000-000000000000', ?, ?)`,
     ).run('task-bind-7', now, now);
 
     const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
@@ -1115,15 +1120,27 @@ describe('internalAgentRouter', () => {
     });
 
     expect(res.status).toBe(200);
-    const body = await res.json() as { results: Array<{ taskNumber: number; success: boolean }> };
-    expect(body.results).toEqual([{ taskNumber: 7, success: true, messageId: null, context: [] }]);
+    const body = await res.json() as {
+      results: Array<{
+        taskNumber: number;
+        success: boolean;
+        messageId?: string | null;
+        context?: Array<unknown>;
+      }>;
+    };
+    expect(body.results[0]).toMatchObject({
+      taskNumber: 7,
+      success: true,
+      messageId: 'feedbeef-0000-0000-0000-000000000000',
+    });
+    expect(Array.isArray(body.results[0].context)).toBe(true);
 
     const binding = db.prepare(
       `SELECT channel_id as channelId, thread_root_id as threadRootId, task_id as taskId
        FROM thread_task_bindings
        WHERE channel_id = 'default' AND thread_root_id = 'bind1234'`,
     ).get() as { channelId: string; threadRootId: string; taskId: string } | undefined;
-    expect(binding).toEqual({ channelId: 'default', threadRootId: 'bind1234', taskId: 'task-bind-7' });
+    expect(binding).toBeUndefined();
 
     const task = db.prepare(
       `SELECT claimed_by_agent_id as claimedByAgentId, claimed_by_name as claimedByName, status
@@ -1137,104 +1154,102 @@ describe('internalAgentRouter', () => {
 
     const participant = db.prepare(
       `SELECT role FROM target_participants
-       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'bind1234'`,
+       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'feedbeef'`,
     ).get(agent.agentId) as { role: string } | undefined;
     expect(participant?.role).toBe('owner');
+    const branchParticipant = db.prepare(
+      `SELECT role FROM target_participants
+       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'bind1234'`,
+    ).get(agent.agentId) as { role: string } | undefined;
+    expect(branchParticipant).toBeUndefined();
   });
 
-  it('同一 thread 绑定第二个 task 时应拒绝，不隐式覆盖', async () => {
+  it('legacy task claim 成功时 context 应为空，且 conversationId 不应创建 branch owner', async () => {
     const now = Date.now();
     const agent = manager.createAgent({
-      name: 'TaskConflictBob',
+      name: 'LegacyTaskBob',
       agentType: 'claude_acp',
       nodeId: 'node-1',
-      workspacePath: '/tmp/task-conflict-bob',
+      workspacePath: '/tmp/legacy-task-bob',
       channelId: 'default',
     });
     manager.joinChannel(agent.agentId, 'default');
-    const conv = manager.openAgentChannelThread(agent.agentId, 'default', 'conf1234');
+    const conv = manager.openAgentChannelThread(agent.agentId, 'default', 'legacy123');
     if (!conv) throw new Error('missing thread conversation');
 
     db.prepare(
       `INSERT INTO tasks(task_id, channel_id, task_number, title, status, created_at, updated_at)
-       VALUES
-       ('task-conflict-1', 'default', 11, 'First', 'todo', ?, ?),
-       ('task-conflict-2', 'default', 12, 'Second', 'todo', ?, ?)`,
-    ).run(now, now, now, now);
+       VALUES('task-legacy-1', 'default', 21, 'Legacy task', 'todo', ?, ?)`,
+    ).run(now, now);
 
-    let res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         channel: '#default',
-        task_numbers: [11],
+        task_numbers: [21],
         conversationId: conv.id,
       }),
     });
-    expect(res.status).toBe(200);
-
-    res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        channel: '#default',
-        task_numbers: [12],
-        conversationId: conv.id,
-      }),
-    });
-    expect(res.status).toBe(200);
-    const body = await res.json() as { results: Array<{ taskNumber: number; success: boolean; reason?: string }> };
-    expect(body.results).toEqual([{ taskNumber: 12, success: false, reason: 'Thread is already bound to #t11' }]);
-  });
-
-  it('已绑定 thread 的 task 标记 done 后应清空 thread owner 但保留绑定', async () => {
-    const now = Date.now();
-    const agent = manager.createAgent({
-      name: 'TaskDoneBob',
-      agentType: 'claude_acp',
-      nodeId: 'node-1',
-      workspacePath: '/tmp/task-done-bob',
-      channelId: 'default',
-    });
-    manager.joinChannel(agent.agentId, 'default');
-    const conv = manager.openAgentChannelThread(agent.agentId, 'default', 'done1234');
-    if (!conv) throw new Error('missing thread conversation');
-
-    db.prepare(
-      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, claimed_by_agent_id, claimed_by_name, created_at, updated_at)
-       VALUES('task-done-1', 'default', 21, 'Done me', 'in_review', ?, ?, ?, ?)`,
-    ).run(agent.agentId, agent.name, now, now);
-    db.prepare(
-      `INSERT INTO thread_task_bindings(channel_id, thread_root_id, task_id, bound_at)
-       VALUES('default', 'done1234', 'task-done-1', ?)`,
-    ).run(now);
-    db.prepare(
-      `INSERT INTO target_participants(agent_id, channel_id, thread_root_id, role, joined_at, last_active_at)
-       VALUES(?, 'default', 'done1234', 'owner', ?, ?)`,
-    ).run(agent.agentId, now, now);
-
-    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/update-status`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        channel: '#default',
-        task_number: 21,
-        status: 'done',
-      }),
-    });
 
     expect(res.status).toBe(200);
-    const participant = db.prepare(
-      `SELECT role FROM target_participants
-       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'done1234'`,
-    ).get(agent.agentId) as { role: string } | undefined;
-    expect(participant?.role).toBe('participant');
+    const body = await res.json() as {
+      results: Array<{ taskNumber: number; success: boolean; messageId?: string | null; context?: Array<unknown> }>;
+    };
+    expect(body.results).toEqual([{ taskNumber: 21, success: true, messageId: null, context: [] }]);
 
     const binding = db.prepare(
       `SELECT task_id as taskId FROM thread_task_bindings
-       WHERE channel_id = 'default' AND thread_root_id = 'done1234'`,
+       WHERE channel_id = 'default' AND thread_root_id = 'legacy123'`,
     ).get() as { taskId: string } | undefined;
-    expect(binding?.taskId).toBe('task-done-1');
+    expect(binding).toBeUndefined();
+
+    const branchParticipant = db.prepare(
+      `SELECT role FROM target_participants
+       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'legacy123'`,
+    ).get(agent.agentId) as { role: string } | undefined;
+    expect(branchParticipant).toBeUndefined();
+  });
+
+  it('claim_message 提升为 task 后应同步 task root owner', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'ClaimMsgBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/claim-msg-bob',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    const seq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('c0ffee00-0000-0000-0000-000000000000', 'default', 'user', 'User', 'user', '#default', 'Promote me', ?, ?)`,
+    ).run(seq, now);
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim-message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: '#default',
+        message_ids: ['c0ffee00'],
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json() as { results: Array<{ messageId: string; taskNumber?: number; success: boolean; context?: Array<unknown> }> };
+    expect(body.results).toHaveLength(1);
+    expect(body.results[0]).toMatchObject({
+      messageId: 'c0ffee00-0000-0000-0000-000000000000',
+      success: true,
+    });
+    expect(Array.isArray(body.results[0].context)).toBe(true);
+
+    const participant = db.prepare(
+      `SELECT role FROM target_participants
+       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'c0ffee00'`,
+    ).get(agent.agentId) as { role: string } | undefined;
+    expect(participant?.role).toBe('owner');
   });
 
   it('agent 不应允许非法状态流转 todo → done', async () => {
@@ -1319,11 +1334,11 @@ describe('internalAgentRouter', () => {
     const seq = allocateNextChannelMessageSeq(db, 'default');
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
-       VALUES('feedbeef-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Implicit owner', ?, ?)`,
+       VALUES('f00d0000-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Implicit owner', ?, ?)`,
     ).run(seq, now);
     db.prepare(
       `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
-       VALUES('task-implicit-owner', 'default', 33, 'Implicit owner', 'todo', 'feedbeef-0000-0000-0000-000000000000', ?, ?)`,
+       VALUES('task-implicit-owner', 'default', 33, 'Implicit owner', 'todo', 'f00d0000-0000-0000-0000-000000000000', ?, ?)`,
     ).run(now, now);
 
     let res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
@@ -1338,7 +1353,7 @@ describe('internalAgentRouter', () => {
 
     let participant = db.prepare(
       `SELECT role FROM target_participants
-       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'feedbeef'`,
+       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'f00d0000'`,
     ).get(agent.agentId) as { role: string } | undefined;
     expect(participant?.role).toBe('owner');
 
@@ -1366,7 +1381,7 @@ describe('internalAgentRouter', () => {
 
     participant = db.prepare(
       `SELECT role FROM target_participants
-       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'feedbeef'`,
+       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'f00d0000'`,
     ).get(agent.agentId) as { role: string } | undefined;
     expect(participant?.role).toBe('participant');
   });

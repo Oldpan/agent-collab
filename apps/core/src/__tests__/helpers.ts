@@ -119,11 +119,17 @@ export function createTestDb(): Db {
       next_seq   INTEGER NOT NULL
     );
   `);
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS channel_task_sequences (
+      channel_id       TEXT PRIMARY KEY,
+      next_task_number INTEGER NOT NULL
+    );
+  `);
   const taskCols = db.prepare("PRAGMA table_info('tasks')").all() as Array<{ name: string }>;
   if (!taskCols.some((col) => col.name === 'thread_unbound')) {
     db.exec(`ALTER TABLE tasks ADD COLUMN thread_unbound INTEGER NOT NULL DEFAULT 0;`);
   }
-  db.exec(`UPDATE schema_version SET version = MAX(version, 49);`);
+  db.exec(`UPDATE schema_version SET version = MAX(version, 51);`);
   return db;
 }
 

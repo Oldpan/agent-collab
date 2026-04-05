@@ -1232,7 +1232,6 @@ export function ChannelPanel({
       {activeTab === "tasks" ? (
         <TasksTab
           channelId={channel.channelId}
-          activeThreadShortId={openThread ? openThread.id.slice(0, 8) : undefined}
           onOpenThread={handleOpenTaskThread}
           taskVersion={taskVersion}
         />

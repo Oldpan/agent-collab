@@ -2,11 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { TaskInfo } from "@agent-collab/protocol";
 import { Button } from "@/components/ui/button";
 import {
-  bindThreadTask,
   createChannelTask,
   deleteChannelTask,
   getChannelTasks,
-  unbindThreadTask,
   updateTaskStatus,
   type ChannelTask,
 } from "@/lib/api";
@@ -14,7 +12,6 @@ import { cn } from "@/lib/utils";
 
 type TasksTabProps = {
   channelId: string;
-  activeThreadShortId?: string;
   onOpenThread?: (threadShortId: string) => void;
   taskVersion?: number;
 };
@@ -52,7 +49,7 @@ function statusClassName(status: TaskInfo["status"]): string {
   }
 }
 
-export function TasksTab({ channelId, activeThreadShortId, onOpenThread, taskVersion = 0 }: TasksTabProps) {
+export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabProps) {
   const [tasks, setTasks] = useState<ChannelTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -60,7 +57,6 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread, taskVer
   const [description, setDescription] = useState("");
   const [creating, setCreating] = useState(false);
   const [updatingTaskNumber, setUpdatingTaskNumber] = useState<number | null>(null);
-  const [bindingTaskNumber, setBindingTaskNumber] = useState<number | null>(null);
   const [deletingTaskNumber, setDeletingTaskNumber] = useState<number | null>(null);
   const [showDone, setShowDone] = useState(false);
 
@@ -118,7 +114,7 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread, taskVer
     } finally {
       setCreating(false);
     }
-  }, [channelId, creating, title]);
+  }, [channelId, creating, description, title]);
 
   const handleAdvance = useCallback(async (task: TaskInfo) => {
     if (task.status === "done" || updatingTaskNumber === task.taskNumber) return;
@@ -133,34 +129,6 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread, taskVer
       setUpdatingTaskNumber(null);
     }
   }, [channelId, updatingTaskNumber]);
-
-  const handleBind = useCallback(async (task: ChannelTask) => {
-    if (!activeThreadShortId || bindingTaskNumber === task.taskNumber) return;
-    setBindingTaskNumber(task.taskNumber);
-    setError(null);
-    try {
-      await bindThreadTask(channelId, activeThreadShortId, task.taskNumber);
-      await loadTasks();
-    } catch (err) {
-      setError(String((err as Error)?.message ?? err));
-    } finally {
-      setBindingTaskNumber(null);
-    }
-  }, [activeThreadShortId, bindingTaskNumber, channelId, loadTasks]);
-
-  const handleUnbind = useCallback(async (task: ChannelTask) => {
-    if (!task.linkedThreadShortId || bindingTaskNumber === task.taskNumber) return;
-    setBindingTaskNumber(task.taskNumber);
-    setError(null);
-    try {
-      await unbindThreadTask(channelId, task.linkedThreadShortId);
-      await loadTasks();
-    } catch (err) {
-      setError(String((err as Error)?.message ?? err));
-    } finally {
-      setBindingTaskNumber(null);
-    }
-  }, [bindingTaskNumber, channelId, loadTasks]);
 
   const handleDelete = useCallback(async (task: ChannelTask) => {
     if (deletingTaskNumber === task.taskNumber) return;
@@ -231,9 +199,7 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread, taskVer
           </div>
         )}
         <div className="mt-3 rounded-sm border border-zinc-900/10 bg-white/60 px-3 py-2 text-xs text-zinc-600">
-          {activeThreadShortId
-            ? <>Current thread: <span className="font-mono">{activeThreadShortId}</span>. Unbound task-messages can be attached here.</>
-            : "New tasks create task root messages and default threads in Chat. Click a task thread link to open it."}
+          New tasks create task root messages and default threads in Chat. Click a task thread link to open it.
         </div>
       </div>
 
@@ -345,31 +311,6 @@ export function TasksTab({ channelId, activeThreadShortId, onOpenThread, taskVer
                               >
                                 {updatingTaskNumber === task.taskNumber ? "Updating..." : formatStatus(task.status)}
                               </button>
-                              {activeThreadShortId ? (
-                                task.linkedThreadShortId === activeThreadShortId ? (
-                                  <Button
-                                    size="sm"
-                                    disabled={bindingTaskNumber === task.taskNumber}
-                                    onClick={() => void handleUnbind(task)}
-                                    className="h-8 rounded-sm border-2 border-zinc-900 bg-[#ffd8d8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#ffc6c6]"
-                                  >
-                                    {bindingTaskNumber === task.taskNumber ? "Saving..." : "Unbind"}
-                                  </Button>
-                                ) : task.linkedThreadShortId ? (
-                                  <div className="text-[11px] text-zinc-400">
-                                    Bound to task thread {task.linkedThreadShortId}
-                                  </div>
-                                ) : (
-                                  <Button
-                                    size="sm"
-                                    disabled={task.status === "done" || bindingTaskNumber === task.taskNumber}
-                                    onClick={() => void handleBind(task)}
-                                    className="h-8 rounded-sm border-2 border-zinc-900 bg-[#d8f8c8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#c8efb8]"
-                                  >
-                                    {bindingTaskNumber === task.taskNumber ? "Saving..." : "Bind to current task thread"}
-                                  </Button>
-                                )
-                              ) : null}
                               <Button
                                 size="sm"
                                 disabled={deletingTaskNumber === task.taskNumber}

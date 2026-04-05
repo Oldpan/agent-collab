@@ -503,41 +503,6 @@ export async function getThreadSummary(
   return res.json();
 }
 
-export async function bindThreadTask(
-  channelId: string,
-  shortId: string,
-  taskNumber: number,
-): Promise<ThreadCollaborationSummary> {
-  const res = await fetch(
-    `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/task`,
-    {
-      method: "POST",
-      headers: withAuthHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ taskNumber }),
-    },
-  );
-  if (!res.ok) {
-    const body = await safeReadErrorBody(res);
-    throw new Error(body ?? `Failed to bind task to thread: ${res.statusText}`);
-  }
-  return res.json();
-}
-
-export async function unbindThreadTask(
-  channelId: string,
-  shortId: string,
-): Promise<ThreadCollaborationSummary> {
-  const res = await fetch(
-    `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/task`,
-    { method: "DELETE", headers: withAuthHeaders() },
-  );
-  if (!res.ok) {
-    const body = await safeReadErrorBody(res);
-    throw new Error(body ?? `Failed to unbind task from thread: ${res.statusText}`);
-  }
-  return res.json();
-}
-
 export async function listNodes(): Promise<NodeInfoRest[]> {
   const res = await fetch(`${API_BASE}/nodes`, { headers: withAuthHeaders() });
   if (!res.ok) throw new Error(`Failed to list nodes: ${res.statusText}`);

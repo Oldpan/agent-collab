@@ -1,3 +1,7 @@
+import { randomUUID } from 'node:crypto';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { openDb, migrate } from '@agent-collab/runtime-acp';
 import { describe, it, expect } from 'vitest';
 import { createTestDb } from './helpers.js';
 
@@ -24,7 +28,7 @@ describe('migrations', () => {
   it('schema_version 应为最新版本', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBeGreaterThanOrEqual(48);
+    expect(row.version).toBeGreaterThanOrEqual(51);
     db.close();
   });
 
@@ -115,6 +119,7 @@ describe('migrations', () => {
       .all() as Array<{ name: string }>;
     expect(tables.map((t) => t.name)).toContain('target_participants');
     expect(tables.map((t) => t.name)).toContain('thread_task_bindings');
+    expect(tables.map((t) => t.name)).toContain('channel_task_sequences');
     expect(tables.map((t) => t.name)).toContain('channel_subscriptions');
     expect(tables.map((t) => t.name)).toContain('agent_mention_cooldowns');
     db.close();
@@ -164,6 +169,124 @@ describe('migrations', () => {
     const cols = db.prepare("PRAGMA table_info('tasks')").all() as Array<{ name: string }>;
     expect(cols.map((c) => c.name)).toContain('message_id');
     expect(cols.map((c) => c.name)).toContain('thread_unbound');
+    db.close();
+  });
+
+  it('v51 migration 应保守清理 legacy bindings，只 demote 明确的 non-root owner', () => {
+    const dbPath = join(tmpdir(), `migration-v51-${randomUUID()}.db`);
+    const db = openDb(dbPath);
+    const now = Date.now();
+
+    db.exec(`
+      CREATE TABLE schema_version(version INTEGER NOT NULL);
+      INSERT INTO schema_version(version) VALUES(50);
+
+      CREATE TABLE channels (
+        channel_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+      );
+      INSERT INTO channels(channel_id, name, created_at, updated_at) VALUES('default', 'default', ${now}, ${now});
+
+      CREATE TABLE agents (
+        agent_id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        agent_type TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        channel_id TEXT
+      );
+      INSERT INTO agents(agent_id, name, agent_type, created_at, updated_at, channel_id)
+      VALUES('agent-1', 'OwnerBob', 'claude_acp', ${now}, ${now}, 'default');
+
+      CREATE TABLE channel_messages (
+        message_id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        sender_id TEXT,
+        sender_name TEXT,
+        sender_type TEXT,
+        target TEXT,
+        content TEXT,
+        seq INTEGER,
+        created_at INTEGER
+      );
+
+      CREATE TABLE tasks (
+        task_id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        task_number INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        description TEXT,
+        status TEXT NOT NULL,
+        claimed_by_agent_id TEXT,
+        claimed_by_name TEXT,
+        created_by_agent_id TEXT,
+        created_by_name TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        message_id TEXT,
+        thread_unbound INTEGER NOT NULL DEFAULT 0
+      );
+
+      CREATE TABLE thread_task_bindings (
+        channel_id TEXT NOT NULL,
+        thread_root_id TEXT NOT NULL,
+        task_id TEXT NOT NULL UNIQUE,
+        bound_at INTEGER NOT NULL,
+        PRIMARY KEY (channel_id, thread_root_id)
+      );
+
+      CREATE TABLE target_participants (
+        agent_id TEXT NOT NULL,
+        channel_id TEXT NOT NULL,
+        thread_root_id TEXT NOT NULL DEFAULT '',
+        role TEXT NOT NULL DEFAULT 'participant',
+        joined_at INTEGER NOT NULL,
+        last_active_at INTEGER NOT NULL,
+        PRIMARY KEY (agent_id, channel_id, thread_root_id)
+      );
+
+      -- task-1 root is 'feedbeef', task-2 root is 'ambig001' (both 8-char prefixes)
+      INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, thread_unbound, created_at, updated_at)
+      VALUES
+        ('task-1', 'default', 1, 'Task 1', 'todo', 'feedbeef-0000-0000-0000-000000000000', 1, ${now}, ${now}),
+        ('task-2', 'default', 2, 'Task 2', 'todo', 'ambig001-0000-0000-0000-000000000000', 0, ${now}, ${now});
+
+      -- wrongthr: task-1 explicitly bound here but root is 'feedbeef' → should demote owner
+      -- ambig001: task-2 bound here and root IS 'ambig001' → ambiguous, keep owner
+      INSERT INTO thread_task_bindings(channel_id, thread_root_id, task_id, bound_at)
+      VALUES
+        ('default', 'wrongthr', 'task-1', ${now}),
+        ('default', 'ambig001', 'task-2', ${now});
+
+      INSERT INTO target_participants(agent_id, channel_id, thread_root_id, role, joined_at, last_active_at)
+      VALUES
+        ('agent-1', 'default', 'wrongthr', 'owner', ${now}, ${now}),
+        ('agent-1', 'default', 'ambig001', 'owner', ${now}, ${now}),
+        ('agent-1', 'default', 'feedbeef', 'owner', ${now}, ${now});
+    `);
+
+    migrate(db);
+
+    const demotedLegacyOwner = db.prepare(
+      `SELECT role FROM target_participants WHERE agent_id = 'agent-1' AND channel_id = 'default' AND thread_root_id = 'wrongthr'`,
+    ).get() as { role: string } | undefined;
+    const ambiguousLegacyOwner = db.prepare(
+      `SELECT role FROM target_participants WHERE agent_id = 'agent-1' AND channel_id = 'default' AND thread_root_id = 'ambig001'`,
+    ).get() as { role: string } | undefined;
+    const rootOwner = db.prepare(
+      `SELECT role FROM target_participants WHERE agent_id = 'agent-1' AND channel_id = 'default' AND thread_root_id = 'feedbeef'`,
+    ).get() as { role: string } | undefined;
+    const bindingCount = db.prepare(`SELECT count(*) as count FROM thread_task_bindings`).get() as { count: number };
+    const taskFlags = db.prepare(`SELECT thread_unbound as threadUnbound FROM tasks WHERE task_id = 'task-1'`).get() as { threadUnbound: number };
+
+    expect(demotedLegacyOwner?.role).toBe('participant');
+    expect(ambiguousLegacyOwner?.role).toBe('owner');
+    expect(rootOwner?.role).toBe('owner');
+    expect(bindingCount.count).toBe(0);
+    expect(taskFlags.threadUnbound).toBe(0);
+
     db.close();
   });
 });

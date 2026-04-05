@@ -17,7 +17,15 @@ import {
   upsertTargetParticipant,
 } from '../web/targetParticipants.js';
 import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
-import { getThreadCollaborationSummary } from '../web/threadTaskBindings.js';
+import {
+  getThreadCollaborationSummary,
+  listChannelTasks,
+  getChannelTaskByNumber,
+  clearTaskThreadState,
+  syncTaskThreadOwner,
+} from '../web/threadTaskBindings.js';
+import { isValidTransition } from '../web/taskStatusTransitions.js';
+import type { TaskInfo } from '@agent-collab/protocol';
 
 let db: Db;
 let manager: ConversationManager;
@@ -448,6 +456,63 @@ beforeAll(async () => {
     reply.code(204);
     return;
   });
+
+  // Task routes
+  app.get<{ Params: { id: string }; Querystring: { status?: string } }>(
+    '/api/channels/:id/tasks',
+    async (req, reply) => {
+      const channel = manager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const statusFilter = req.query.status as TaskInfo['status'] | 'all' | undefined;
+      return { tasks: listChannelTasks(db, { channelId: req.params.id, status: statusFilter }) };
+    },
+  );
+
+  app.patch<{ Params: { id: string; num: string }; Body: { status: string } }>(
+    '/api/channels/:id/tasks/:num/status',
+    async (req, reply) => {
+      const channel = manager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const taskNumber = Number(req.params.num);
+      const { status } = req.body ?? {};
+      const validStatuses = ['todo', 'in_progress', 'in_review', 'done'];
+      if (!validStatuses.includes(status)) { reply.code(400); return { error: `Invalid status: ${status}` }; }
+      const nextStatus = status as TaskInfo['status'];
+      const current = db.prepare(
+        `SELECT task_id as taskId, status as currentStatus, claimed_by_agent_id as claimedByAgentId
+         FROM tasks WHERE channel_id = ? AND task_number = ?`,
+      ).get(req.params.id, taskNumber) as { taskId: string; currentStatus: TaskInfo['status']; claimedByAgentId: string | null } | undefined;
+      if (!current) { reply.code(404); return { error: 'Task not found' }; }
+      if (!isValidTransition(current.currentStatus, nextStatus)) {
+        reply.code(400); return { error: `Invalid transition: ${current.currentStatus} → ${nextStatus}` };
+      }
+      const now = Date.now();
+      db.transaction(() => {
+        db.prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE channel_id = ? AND task_number = ?`).run(nextStatus, now, req.params.id, taskNumber);
+        syncTaskThreadOwner(db, { taskId: current.taskId, agentId: nextStatus === 'done' ? null : current.claimedByAgentId, lastActiveAt: now });
+      })();
+      return getChannelTaskByNumber(db, { channelId: req.params.id, taskNumber });
+    },
+  );
+
+  app.delete<{ Params: { id: string; num: string } }>(
+    '/api/channels/:id/tasks/:num',
+    async (req, reply) => {
+      const channel = manager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const taskNumber = Number(req.params.num);
+      const task = db.prepare(
+        `SELECT task_id as taskId, message_id as messageId FROM tasks WHERE channel_id = ? AND task_number = ?`,
+      ).get(req.params.id, taskNumber) as { taskId: string; messageId: string | null } | undefined;
+      if (!task) { reply.code(404); return { error: 'Task not found' }; }
+      db.transaction(() => {
+        clearTaskThreadState(db, { channelId: req.params.id, taskId: task.taskId });
+        db.prepare(`DELETE FROM tasks WHERE task_id = ?`).run(task.taskId);
+        if (task.messageId) db.prepare(`UPDATE channel_messages SET message_kind = NULL WHERE message_id = ?`).run(task.messageId);
+      })();
+      return { ok: true, taskNumber };
+    },
+  );
 
   // WebSocket route — 使用 @fastify/websocket 的正确写法
   app.register(async function (fastify) {
@@ -1162,6 +1227,122 @@ describe('REST API', () => {
     expect(manager.getAgent(agent.agentId)?.channelIds).not.toContain(channel.channelId);
   });
 
+  it('GET /api/channels/:id/tasks 应始终返回 task root thread', async () => {
+    const now = Date.now();
+    const seq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('feedbeef-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Root task', ?, ?)`,
+    ).run(seq, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, thread_unbound, created_at, updated_at)
+       VALUES('task-list-root', 'default', 90, 'Root task', 'todo', 'feedbeef-0000-0000-0000-000000000000', 1, ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO thread_task_bindings(channel_id, thread_root_id, task_id, bound_at)
+       VALUES('default', 'legacy999', 'task-list-root', ?)`,
+    ).run(now);
+
+    const { status, body } = await fetchJson('/api/channels/default/tasks');
+
+    expect(status).toBe(200);
+    const task = (body.tasks as Array<{ taskId: string; linkedThreadShortId?: string | null }>).find((item) => item.taskId === 'task-list-root');
+    expect(task?.linkedThreadShortId).toBe('feedbeef');
+  });
+
+  it('PATCH /api/channels/:id/tasks/:num/status 标记 done 时应清空 task root owner', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'PublicTaskBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/public-task-bob',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    const seq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('donebeef-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Done task', ?, ?)`,
+    ).run(seq, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
+       VALUES('task-public-done', 'default', 91, 'Done task', 'in_review', ?, ?, 'donebeef-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(agent.agentId, agent.name, now, now);
+    upsertTargetParticipant(db, {
+      agentId: agent.agentId,
+      channelId: 'default',
+      threadRootId: 'donebeef',
+      role: 'owner',
+      lastActiveAt: now,
+    });
+
+    const { status } = await fetchJson('/api/channels/default/tasks/91/status', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'done' }),
+    });
+
+    expect(status).toBe(200);
+    const participant = db.prepare(
+      `SELECT role FROM target_participants
+       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'donebeef'`,
+    ).get(agent.agentId) as { role: string } | undefined;
+    expect(participant?.role).toBe('participant');
+  });
+
+  it('DELETE /api/channels/:id/tasks/:num 应清理 task root 的 participants 与 checkpoints', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'DeleteTaskBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/delete-task-bob',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    const seq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('deadbeef-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Delete me', ?, ?, 'task')`,
+    ).run(seq, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
+       VALUES('task-delete-root', 'default', 92, 'Delete me', 'todo', 'deadbeef-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO thread_task_bindings(channel_id, thread_root_id, task_id, bound_at)
+       VALUES('default', 'legacydel', 'task-delete-root', ?)`,
+    ).run(now);
+    upsertTargetParticipant(db, {
+      agentId: agent.agentId,
+      channelId: 'default',
+      threadRootId: 'deadbeef',
+      role: 'owner',
+      lastActiveAt: now,
+    });
+    db.prepare(
+      `INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq)
+       VALUES(?, 'default', 'deadbeef', 3)`,
+    ).run(agent.agentId);
+
+    const { status, body } = await fetchJson('/api/channels/default/tasks/92', {
+      method: 'DELETE',
+    });
+
+    expect(status).toBe(200);
+    expect(body.ok).toBe(true);
+
+    const participantsCount = db.prepare(
+      `SELECT count(*) as count FROM target_participants WHERE channel_id = 'default' AND thread_root_id = 'deadbeef'`,
+    ).get() as { count: number };
+    const checkpointsCount = db.prepare(
+      `SELECT count(*) as count FROM agent_message_checkpoints WHERE channel_id = 'default' AND thread_root_id = 'deadbeef'`,
+    ).get() as { count: number };
+    expect(participantsCount.count).toBe(0);
+    expect(checkpointsCount.count).toBe(0);
+  });
+
   it('POST /api/channels/:id/clear-chat 应清空 channel 消息并重置 branch 历史，但保留 tasks', async () => {
     const agent = manager.createAgent({
       name: 'ClearRoomBob',
@@ -1232,7 +1413,7 @@ describe('REST API', () => {
     expect(oldRunCount.count).toBe(0);
     expect(eventCount.count).toBe(0);
     expect(queueCount.count).toBe(0);
-    expect(taskCount.count).toBe(1);
+    expect(taskCount.count).toBeGreaterThanOrEqual(1); // tasks survive clear-chat
   });
 });
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-04-04 (task threads simplified to task-message roots)
+
+- task/thread 关联现在收口为单一路径：每个 task 只认自己的 task-message root thread（`message_id` 的 8 位 short id），不再支持显式 `bind / unbind` 到其他 thread。
+- public task API、internal agent task API 和 thread summary 都改成只围绕 task root thread 工作；`claim / unclaim / update-status / delete` 现在会一致地同步 owner、participants 和 checkpoints，不再出现 done 后 owner 残留或删错 thread 状态的问题。
+- thread collaboration summary 里的 participants 也统一改为 recent-active 视图，避免 task thread 上长期不活跃的旧参与者继续显示在 summary 中。
+- schema 升到 `v51`，新增 `channel_task_sequences` 解决 task number 分配竞态；migration 会保守清理 legacy `thread_task_bindings` / `thread_unbound`，并只 demote 明确属于旧非 root binding 的 owner，歧义行保持不动。
+- TasksTab / ThreadPanel 去掉了 bind/unbind 交互，agent prompt 也同步收口为“尽量在 task-message 对应的 thread 中工作”。
+
 ## 2026-04-04 (thread collaboration wakeups + participant cleanup)
 
 - thread 中 agent 发出的普通回复现在也会像人类 thread reply 一样，优先唤醒该 thread 上最近活跃的其他协作者，不再只能依赖显式 `@mention` 才继续协作。

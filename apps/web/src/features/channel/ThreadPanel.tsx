@@ -4,12 +4,8 @@ import { XIcon, SendIcon, MessageSquareIcon, ChevronDownIcon } from "lucide-reac
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AgentInfo } from "@agent-collab/protocol";
 import {
-  bindThreadTask,
-  getChannelTasks,
   type ChannelMessage,
-  type ChannelTask,
   type ThreadCollaborationSummary,
-  unbindThreadTask,
 } from "@/lib/api";
 import { useThreadStream } from "@/hooks/useThreadStream";
 import { Streamdown } from "streamdown";
@@ -118,22 +114,8 @@ function ThreadMessage({
 
 function ThreadSummaryCard({
   summary,
-  availableTasks,
-  selectedTaskNumber,
-  binding,
-  error,
-  onSelectTask,
-  onBind,
-  onUnbind,
 }: {
   summary?: ThreadCollaborationSummary | null;
-  availableTasks: ChannelTask[];
-  selectedTaskNumber: string;
-  binding: boolean;
-  error: string | null;
-  onSelectTask: (value: string) => void;
-  onBind: () => void;
-  onUnbind: () => void;
 }) {
   const participants = summary?.participants ?? [];
   const hasBoundTask = Boolean(summary?.boundTask);
@@ -144,55 +126,17 @@ function ThreadSummaryCard({
         <div className="rounded-md border-2 border-zinc-900 bg-[#fffdf4] px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
           <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Bound task-message</div>
           <div className="mt-1 text-sm font-medium text-zinc-900">
-            {hasBoundTask ? `#${summary?.boundTask?.taskNumber} ${summary?.boundTask?.title}` : "Not linked yet"}
+            {hasBoundTask ? `#${summary?.boundTask?.taskNumber} ${summary?.boundTask?.title}` : "Not a task thread"}
           </div>
           <div className="mt-1 text-[11px] text-zinc-500">
             {summary?.boundTask?.linkedThreadShortId
               ? `Task thread ${summary.boundTask.linkedThreadShortId}`
               : "No linked task thread"}
           </div>
-          <div className="mt-3 space-y-2">
-            {hasBoundTask ? (
-              <Button
-                size="sm"
-                disabled={binding}
-                onClick={onUnbind}
-                className="h-8 w-full rounded-sm border-2 border-zinc-900 bg-[#ffd8d8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#ffc6c6]"
-              >
-                {binding ? "Saving..." : "Unbind task"}
-              </Button>
-            ) : (
-              <>
-                <select
-                  value={selectedTaskNumber}
-                  onChange={(e) => onSelectTask(e.target.value)}
-                  className="h-8 w-full rounded-sm border-2 border-zinc-900 bg-white px-2 text-xs text-zinc-900"
-                >
-                  <option value="">Select a task…</option>
-                  {availableTasks.map((task) => (
-                    <option key={task.taskId} value={task.taskNumber}>
-                      #{task.taskNumber} {task.title}
-                    </option>
-                  ))}
-                </select>
-                <Button
-                  size="sm"
-                  disabled={binding || !selectedTaskNumber}
-                  onClick={onBind}
-                  className="h-8 w-full rounded-sm border-2 border-zinc-900 bg-[#d8f8c8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#c8efb8]"
-                >
-                  {binding ? "Saving..." : "Bind task"}
-                </Button>
-                {availableTasks.length === 0 ? (
-                  <div className="text-[11px] text-zinc-500">No open unbound tasks available.</div>
-                ) : null}
-              </>
-            )}
-            {error ? (
-              <div className="rounded-sm border border-red-300 bg-red-50 px-2 py-1 text-[11px] text-red-700">
-                {error}
-              </div>
-            ) : null}
+          <div className="mt-3 text-[11px] text-zinc-500">
+            {hasBoundTask
+              ? "Task threads are fixed to their task-message root."
+              : "This thread is not a task thread."}
           </div>
         </div>
 
@@ -200,7 +144,7 @@ function ThreadSummaryCard({
           <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Owner</div>
           <div className="mt-1 text-sm font-medium text-zinc-900">{summary?.ownerName ? `@${summary.ownerName}` : "No owner"}</div>
           <div className="mt-1 text-[11px] text-zinc-500">
-            {summary?.boundTask ? "Owner follows the current task-message assignee while work is active." : "Bind a task-message to make ownership explicit."}
+            {summary?.boundTask ? "Owner follows the current task-message assignee while work is active." : "Ownership appears when work happens in this thread."}
           </div>
         </div>
 
@@ -382,62 +326,15 @@ export function ThreadPanel({
   );
   const [showSummary, setShowSummary] = useState(false);
   const [summaryState, setSummaryState] = useState<ThreadCollaborationSummary | null>(null);
-  const [availableTasks, setAvailableTasks] = useState<ChannelTask[]>([]);
-  const [selectedTaskNumber, setSelectedTaskNumber] = useState("");
-  const [binding, setBinding] = useState(false);
-  const [bindingError, setBindingError] = useState<string | null>(null);
 
   useEffect(() => {
     setSummaryState(summary);
   }, [summary]);
 
   useEffect(() => {
-    let cancelled = false;
-    void getChannelTasks(channelId).then((result) => {
-      if (cancelled) return;
-      setAvailableTasks(
-        result.tasks.filter((task) => task.status !== "done" && !task.linkedThreadShortId),
-      );
-    }).catch(() => {
-      if (!cancelled) setAvailableTasks([]);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [channelId, summaryState?.boundTask?.taskId, taskVersion]);
-
-  useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
-
-  const handleBind = useCallback(async () => {
-    if (!selectedTaskNumber) return;
-    setBinding(true);
-    setBindingError(null);
-    try {
-      const next = await bindThreadTask(channelId, threadRootId, Number(selectedTaskNumber));
-      setSummaryState(next);
-      setSelectedTaskNumber("");
-    } catch (err) {
-      setBindingError(String((err as Error)?.message ?? err));
-    } finally {
-      setBinding(false);
-    }
-  }, [channelId, selectedTaskNumber, threadRootId]);
-
-  const handleUnbind = useCallback(async () => {
-    setBinding(true);
-    setBindingError(null);
-    try {
-      const next = await unbindThreadTask(channelId, threadRootId);
-      setSummaryState(next);
-    } catch (err) {
-      setBindingError(String((err as Error)?.message ?? err));
-    } finally {
-      setBinding(false);
-    }
-  }, [channelId, threadRootId]);
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col border-l-2 border-zinc-900 bg-[#fefce8]", className)}>
@@ -526,13 +423,6 @@ export function ThreadPanel({
       {showSummary && (
         <ThreadSummaryCard
           summary={summaryState}
-          availableTasks={availableTasks}
-          selectedTaskNumber={selectedTaskNumber}
-          binding={binding}
-          error={bindingError}
-          onSelectTask={setSelectedTaskNumber}
-          onBind={handleBind}
-          onUnbind={handleUnbind}
         />
       )}
 

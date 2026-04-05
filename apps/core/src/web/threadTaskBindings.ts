@@ -1,5 +1,24 @@
+import type { TaskInfo } from '@agent-collab/protocol';
 import type { Db } from '@agent-collab/runtime-acp';
-import { listTargetParticipants } from './targetParticipants.js';
+import {
+  listRecentTargetParticipants,
+  setTargetOwner,
+  TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
+} from './targetParticipants.js';
+
+type TaskThreadRow = {
+  taskId: string;
+  channelId: string;
+  taskNumber: number;
+  title: string;
+  description?: string | null;
+  status: string;
+  assigneeId: string | null;
+  assigneeName: string | null;
+  messageId: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
 
 export type BoundThreadTask = {
   taskId: string;
@@ -27,6 +46,49 @@ function normalizeThreadRootId(threadRootId?: string | null): string {
   return threadRootId ?? '';
 }
 
+export function getTaskThreadRootId(messageId?: string | null): string | null {
+  return messageId ? messageId.slice(0, 8) : null;
+}
+
+function toBoundThreadTask(row: TaskThreadRow): BoundThreadTask | undefined {
+  const threadRootId = getTaskThreadRootId(row.messageId);
+  if (!threadRootId) return undefined;
+
+  return {
+    taskId: row.taskId,
+    channelId: row.channelId,
+    threadRootId,
+    linkedThreadId: threadRootId,
+    linkedThreadShortId: threadRootId,
+    taskNumber: row.taskNumber,
+    title: row.title,
+    description: row.description,
+    status: row.status,
+    assigneeId: row.assigneeId,
+    assigneeName: row.assigneeName,
+    boundAt: row.createdAt,
+  };
+}
+
+function toTaskInfo(row: TaskThreadRow): TaskInfo {
+  const linkedThreadId = getTaskThreadRootId(row.messageId);
+  return {
+    taskId: row.taskId,
+    channelId: row.channelId,
+    taskNumber: row.taskNumber,
+    title: row.title,
+    ...(row.description != null ? { description: row.description } : {}),
+    status: row.status as TaskInfo['status'],
+    assigneeId: row.assigneeId,
+    assigneeName: row.assigneeName,
+    messageId: row.messageId,
+    linkedThreadId,
+    linkedThreadShortId: linkedThreadId,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+  };
+}
+
 export function getBoundTaskForThread(
   db: Db,
   params: { channelId: string; threadRootId?: string | null },
@@ -34,134 +96,142 @@ export function getBoundTaskForThread(
   const threadRootId = normalizeThreadRootId(params.threadRootId);
   if (!threadRootId) return undefined;
 
-  // New design: task IS the thread root (message_id short prefix matches)
-  const byMessageId = db.prepare(
+  const row = db.prepare(
     `SELECT t.task_id as taskId,
             t.channel_id as channelId,
-            SUBSTR(t.message_id, 1, 8) as threadRootId,
-            SUBSTR(t.message_id, 1, 8) as linkedThreadId,
-            SUBSTR(t.message_id, 1, 8) as linkedThreadShortId,
             t.task_number as taskNumber,
             t.title as title,
             t.description as description,
             t.status as status,
             t.claimed_by_agent_id as assigneeId,
             t.claimed_by_name as assigneeName,
-            t.created_at as boundAt
+            t.message_id as messageId,
+            t.created_at as createdAt,
+            t.updated_at as updatedAt
      FROM tasks t
-     WHERE t.channel_id = ? AND SUBSTR(t.message_id, 1, 8) = ? AND t.thread_unbound = 0
+     WHERE t.channel_id = ? AND t.message_id IS NOT NULL AND SUBSTR(t.message_id, 1, 8) = ?
      LIMIT 1`,
-  ).get(params.channelId, threadRootId) as BoundThreadTask | undefined;
-  if (byMessageId) return byMessageId;
+  ).get(params.channelId, threadRootId) as TaskThreadRow | undefined;
 
-  // Legacy design: explicit thread_task_bindings table
-  return db.prepare(
-    `SELECT t.task_id as taskId,
-            t.channel_id as channelId,
-            b.thread_root_id as threadRootId,
-            b.thread_root_id as linkedThreadId,
-            b.thread_root_id as linkedThreadShortId,
-            t.task_number as taskNumber,
-            t.title as title,
-            t.description as description,
-            t.status as status,
-            t.claimed_by_agent_id as assigneeId,
-            t.claimed_by_name as assigneeName,
-            b.bound_at as boundAt
-     FROM thread_task_bindings b
-     JOIN tasks t ON t.task_id = b.task_id
-     WHERE b.channel_id = ? AND b.thread_root_id = ?
-     LIMIT 1`,
-  ).get(params.channelId, threadRootId) as BoundThreadTask | undefined;
+  return row ? toBoundThreadTask(row) : undefined;
 }
 
-export function getThreadBindingForTask(db: Db, taskId: string): { channelId: string; threadRootId: string } | undefined {
-  const explicit = db.prepare(
-    `SELECT channel_id as channelId, thread_root_id as threadRootId
-     FROM thread_task_bindings
-     WHERE task_id = ?
-     LIMIT 1`,
-  ).get(taskId) as { channelId: string; threadRootId: string } | undefined;
-  if (explicit) return explicit;
-
-  return db.prepare(
-    `SELECT channel_id as channelId, SUBSTR(message_id, 1, 8) as threadRootId
+export function getThreadBindingForTask(
+  db: Db,
+  taskId: string,
+): { channelId: string; threadRootId: string } | undefined {
+  const row = db.prepare(
+    `SELECT channel_id as channelId, message_id as messageId
      FROM tasks
-     WHERE task_id = ? AND message_id IS NOT NULL AND thread_unbound = 0
+     WHERE task_id = ? AND message_id IS NOT NULL
      LIMIT 1`,
-  ).get(taskId) as { channelId: string; threadRootId: string } | undefined;
+  ).get(taskId) as { channelId: string; messageId: string | null } | undefined;
+
+  const threadRootId = getTaskThreadRootId(row?.messageId);
+  if (!row || !threadRootId) return undefined;
+  return { channelId: row.channelId, threadRootId };
 }
 
-export function bindTaskToThread(
+export function syncTaskThreadOwner(
   db: Db,
   params: {
-    channelId: string;
-    threadRootId?: string | null;
     taskId: string;
-    boundAt?: number;
+    agentId?: string | null;
+    lastActiveAt?: number;
   },
-): { ok: true } | { ok: false; reason: string } {
-  const threadRootId = normalizeThreadRootId(params.threadRootId);
-  if (!threadRootId) {
-    return { ok: false, reason: 'Tasks can only be bound inside a thread' };
-  }
+): void {
+  const binding = getThreadBindingForTask(db, params.taskId);
+  if (!binding) return;
 
-  const existingThreadBinding = getBoundTaskForThread(db, {
-    channelId: params.channelId,
-    threadRootId,
+  setTargetOwner(db, {
+    channelId: binding.channelId,
+    threadRootId: binding.threadRootId,
+    agentId: params.agentId ?? null,
+    lastActiveAt: params.lastActiveAt,
   });
-  if (existingThreadBinding && existingThreadBinding.taskId !== params.taskId) {
-    return {
-      ok: false,
-      reason: `Thread is already bound to #t${existingThreadBinding.taskNumber}`,
-    };
-  }
-
-  const existingTaskBinding = getThreadBindingForTask(db, params.taskId);
-  if (
-    existingTaskBinding &&
-    (existingTaskBinding.channelId !== params.channelId || existingTaskBinding.threadRootId !== threadRootId)
-  ) {
-    return {
-      ok: false,
-      reason: `Task is already bound to thread ${existingTaskBinding.threadRootId}`,
-    };
-  }
-
-  db.prepare(
-    `INSERT OR IGNORE INTO thread_task_bindings(channel_id, thread_root_id, task_id, bound_at)
-     VALUES(?, ?, ?, ?)`,
-  ).run(params.channelId, threadRootId, params.taskId, params.boundAt ?? Date.now());
-
-  db.prepare(
-    `UPDATE tasks
-     SET thread_unbound = CASE
-       WHEN SUBSTR(message_id, 1, 8) = ? THEN 0
-       ELSE thread_unbound
-     END,
-     updated_at = ?
-     WHERE task_id = ?`,
-  ).run(threadRootId, params.boundAt ?? Date.now(), params.taskId);
-
-  return { ok: true };
 }
 
-export function unbindTaskFromThread(
+export function clearTaskThreadState(
   db: Db,
-  params: { channelId: string; threadRootId?: string | null },
+  params: { channelId: string; taskId: string },
 ): void {
-  const threadRootId = normalizeThreadRootId(params.threadRootId);
-  if (!threadRootId) return;
-  const now = Date.now();
+  const binding = getThreadBindingForTask(db, params.taskId);
+  if (!binding) return;
+
   db.prepare(
-    `DELETE FROM thread_task_bindings
+    `DELETE FROM target_participants
      WHERE channel_id = ? AND thread_root_id = ?`,
-  ).run(params.channelId, threadRootId);
+  ).run(binding.channelId, binding.threadRootId);
+
   db.prepare(
-    `UPDATE tasks
-     SET thread_unbound = 1, updated_at = ?
-     WHERE channel_id = ? AND SUBSTR(message_id, 1, 8) = ? AND thread_unbound = 0`,
-  ).run(now, params.channelId, threadRootId);
+    `DELETE FROM agent_message_checkpoints
+     WHERE channel_id = ? AND thread_root_id = ?`,
+  ).run(binding.channelId, binding.threadRootId);
+}
+
+export function listChannelTasks(
+  db: Db,
+  params: { channelId: string; status?: TaskInfo['status'] | 'all' },
+): TaskInfo[] {
+  const rows = params.status && params.status !== 'all'
+    ? db.prepare(
+      `SELECT t.task_id as taskId,
+              t.channel_id as channelId,
+              t.task_number as taskNumber,
+              t.title as title,
+              t.description as description,
+              t.status as status,
+              t.claimed_by_agent_id as assigneeId,
+              t.claimed_by_name as assigneeName,
+              t.message_id as messageId,
+              t.created_at as createdAt,
+              t.updated_at as updatedAt
+       FROM tasks t
+       WHERE t.channel_id = ? AND t.status = ?
+       ORDER BY t.task_number ASC`,
+    ).all(params.channelId, params.status)
+    : db.prepare(
+      `SELECT t.task_id as taskId,
+              t.channel_id as channelId,
+              t.task_number as taskNumber,
+              t.title as title,
+              t.description as description,
+              t.status as status,
+              t.claimed_by_agent_id as assigneeId,
+              t.claimed_by_name as assigneeName,
+              t.message_id as messageId,
+              t.created_at as createdAt,
+              t.updated_at as updatedAt
+       FROM tasks t
+       WHERE t.channel_id = ?
+       ORDER BY t.task_number ASC`,
+    ).all(params.channelId);
+
+  return (rows as TaskThreadRow[]).map(toTaskInfo);
+}
+
+export function getChannelTaskByNumber(
+  db: Db,
+  params: { channelId: string; taskNumber: number },
+): TaskInfo | undefined {
+  const row = db.prepare(
+    `SELECT t.task_id as taskId,
+            t.channel_id as channelId,
+            t.task_number as taskNumber,
+            t.title as title,
+            t.description as description,
+            t.status as status,
+            t.claimed_by_agent_id as assigneeId,
+            t.claimed_by_name as assigneeName,
+            t.message_id as messageId,
+            t.created_at as createdAt,
+            t.updated_at as updatedAt
+     FROM tasks t
+     WHERE t.channel_id = ? AND t.task_number = ?
+     LIMIT 1`,
+  ).get(params.channelId, params.taskNumber) as TaskThreadRow | undefined;
+
+  return row ? toTaskInfo(row) : undefined;
 }
 
 export function getThreadCollaborationSummary(
@@ -169,7 +239,11 @@ export function getThreadCollaborationSummary(
   params: { channelId: string; threadRootId?: string | null },
 ): ThreadCollaborationSummary {
   const boundTask = getBoundTaskForThread(db, params);
-  const participants = listTargetParticipants(db, params);
+  const participants = listRecentTargetParticipants(db, {
+    channelId: params.channelId,
+    threadRootId: params.threadRootId,
+    activeSince: Date.now() - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
+  });
   const ownerParticipant = participants.find((participant) => participant.role === 'owner');
   const taskOwner = boundTask && boundTask.status !== 'done' && boundTask.assigneeId
     ? { ownerAgentId: boundTask.assigneeId, ownerName: boundTask.assigneeName }

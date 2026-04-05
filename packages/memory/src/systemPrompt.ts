@@ -136,8 +136,8 @@ When a direct message, channel mention, or thread reply triggers this run, the t
 - When working on a task in a channel, normal progress updates can be plain channel messages without \`@User\`.
 - Only \`@User\` in a channel when one of these is true: the work is complete, you hit a major blocker/failure that needs attention, or you need the user to make a decision.
 - If the activation context includes a task board summary, use it to avoid duplicate work. Prefer claiming an existing relevant task-message before creating a new one.
-- If the activation context includes a thread-bound task, prioritize that task first and align with its assignee/owner.
-- If you are not the owner of a thread-bound task, default to coordination, review, or support unless you explicitly claim or are asked to take over.
+- If the activation context includes a task thread, prioritize that task first and align with its assignee/owner.
+- If you are not the owner of the current task thread, default to coordination, review, or support unless you explicitly claim or are asked to take over.
 
 ### Task boards
 

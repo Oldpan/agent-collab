@@ -25,11 +25,11 @@ import {
   upsertTargetParticipant,
 } from './targetParticipants.js';
 import {
-  bindTaskToThread,
-  getThreadBindingForTask,
   getThreadCollaborationSummary,
+  syncTaskThreadOwner,
 } from './threadTaskBindings.js';
 import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
+import { allocateNextTaskNumber } from './taskNumbers.js';
 import { isValidTransition } from './taskStatusTransitions.js';
 
 const AGENT_MENTION_COOLDOWN_MS = 60_000;
@@ -841,24 +841,26 @@ export function registerInternalAgentRoutes(
        VALUES(?, ?, ?, ?, ?, 'todo', ?, ?, ?, ?, ?)`,
     );
 
-    for (const taskDef of tasks) {
-      const taskId = randomUUID();
-      const messageId = randomUUID();
-      const taskNumber = nextTaskNumber(db, channelId);
-      const seq = allocateNextChannelMessageSeq(db, channelId);
-      const target = `#${channelName}`;
-      insertMessage.run(messageId, channelId, agentId, agent.name, target, taskDef.title, seq, now);
-      insertTask.run(taskId, channelId, taskNumber, taskDef.title, taskDef.description ?? null, messageId, agentId, agent.name, now, now);
-      created.push({ taskId, taskNumber, title: taskDef.title, messageId });
-      broadcastToChannel(channelId, {
-        type: 'channel.message',
-        message: {
-          id: messageId, senderName: agent.name, senderType: 'agent', content: taskDef.title,
-          createdAt: new Date(now).toISOString(), seq,
-          taskNumber, taskStatus: 'todo', taskAssigneeName: null,
-        },
-      });
-    }
+    db.transaction(() => {
+      for (const taskDef of tasks) {
+        const taskId = randomUUID();
+        const messageId = randomUUID();
+        const taskNumber = allocateNextTaskNumber(db, channelId);
+        const seq = allocateNextChannelMessageSeq(db, channelId);
+        const target = `#${channelName}`;
+        insertMessage.run(messageId, channelId, agentId, agent.name, target, taskDef.title, seq, now);
+        insertTask.run(taskId, channelId, taskNumber, taskDef.title, taskDef.description ?? null, messageId, agentId, agent.name, now, now);
+        created.push({ taskId, taskNumber, title: taskDef.title, messageId });
+        broadcastToChannel(channelId, {
+          type: 'channel.message',
+          message: {
+            id: messageId, senderName: agent.name, senderType: 'agent', content: taskDef.title,
+            createdAt: new Date(now).toISOString(), seq,
+            taskNumber, taskStatus: 'todo', taskAssigneeName: null,
+          },
+        });
+      }
+    })();
 
     if (created.length > 0) broadcastChannelTasksChanged(channelId);
 
@@ -905,15 +907,23 @@ export function registerInternalAgentRoutes(
       if (existing) { results.push({ messageId: msgShortId, success: false, reason: 'Message is already a task' }); continue; }
 
       const taskId = randomUUID();
-      const taskNumber = nextTaskNumber(db, channelId);
+      let taskNumber = 0;
       const taskTitle = title?.trim() || msg.content.slice(0, 120);
-      db.prepare(
-        `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id,
-                           claimed_by_agent_id, claimed_by_name,
-                           created_by_agent_id, created_by_name, created_at, updated_at)
-         VALUES(?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?)`,
-      ).run(taskId, channelId, taskNumber, taskTitle, msg.message_id, agentId, agent.name, agentId, agent.name, now, now);
-      db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.message_id);
+      db.transaction(() => {
+        taskNumber = allocateNextTaskNumber(db, channelId);
+        db.prepare(
+          `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id,
+                             claimed_by_agent_id, claimed_by_name,
+                             created_by_agent_id, created_by_name, created_at, updated_at)
+           VALUES(?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(taskId, channelId, taskNumber, taskTitle, msg.message_id, agentId, agent.name, agentId, agent.name, now, now);
+        db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.message_id);
+        syncTaskThreadOwner(db, {
+          taskId,
+          agentId,
+          lastActiveAt: now,
+        });
+      })();
       changed = true;
 
       results.push({
@@ -944,7 +954,7 @@ export function registerInternalAgentRoutes(
       return { error: 'Agent not found' };
     }
 
-    const { channel, task_numbers, conversationId } = req.body ?? {};
+    const { channel, task_numbers } = req.body ?? {};
     if (!channel || !Array.isArray(task_numbers)) {
       reply.code(400);
       return { error: 'channel and task_numbers array are required' };
@@ -958,7 +968,6 @@ export function registerInternalAgentRoutes(
 
     const now = Date.now();
     const results: Array<{ taskNumber: number; success: boolean; reason?: string; messageId?: string | null; context?: ContextMsg[] }> = [];
-    const threadBinding = resolveThreadBindingContext(db, conversationId, channelId);
     let changed = false;
 
     for (const taskNumber of task_numbers) {
@@ -987,37 +996,20 @@ export function registerInternalAgentRoutes(
         continue;
       }
 
-      if (threadBinding.threadRootId) {
-        const bindResult = bindTaskToThread(db, {
-          channelId,
-          threadRootId: threadBinding.threadRootId,
-          taskId: row.taskId,
-          boundAt: now,
-        });
-        if (!bindResult.ok) {
-          results.push({ taskNumber, success: false, reason: bindResult.reason });
-          continue;
-        }
-      }
-
       const newStatus = row.status === 'todo' ? 'in_progress' : row.status;
-      db.prepare(
-        `UPDATE tasks SET claimed_by_agent_id = ?, claimed_by_name = ?, status = ?, updated_at = ?
-         WHERE task_id = ?`,
-      ).run(agentId, agent.name, newStatus, now, row.taskId);
-      changed = true;
+      db.transaction(() => {
+        db.prepare(
+          `UPDATE tasks SET claimed_by_agent_id = ?, claimed_by_name = ?, status = ?, updated_at = ?
+           WHERE task_id = ?`,
+        ).run(agentId, agent.name, newStatus, now, row.taskId);
 
-      const ownerBinding = threadBinding.threadRootId
-        ? { channelId, threadRootId: threadBinding.threadRootId }
-        : getThreadBindingForTask(db, row.taskId);
-      if (ownerBinding) {
-        setTargetOwner(db, {
-          channelId: ownerBinding.channelId,
-          threadRootId: ownerBinding.threadRootId,
+        syncTaskThreadOwner(db, {
+          taskId: row.taskId,
           agentId,
           lastActiveAt: now,
         });
-      }
+      })();
+      changed = true;
 
       results.push({
         taskNumber, success: true, messageId: row.messageId ?? null,
@@ -1074,20 +1066,19 @@ export function registerInternalAgentRoutes(
     }
 
     const newStatus = row.status === 'in_progress' ? 'todo' : row.status;
-    db.prepare(
-      `UPDATE tasks SET claimed_by_agent_id = NULL, claimed_by_name = NULL, status = ?, updated_at = ?
-       WHERE task_id = ?`,
-    ).run(newStatus, Date.now(), row.taskId);
+    const now = Date.now();
+    db.transaction(() => {
+      db.prepare(
+        `UPDATE tasks SET claimed_by_agent_id = NULL, claimed_by_name = NULL, status = ?, updated_at = ?
+         WHERE task_id = ?`,
+      ).run(newStatus, now, row.taskId);
 
-    const binding = getThreadBindingForTask(db, row.taskId);
-    if (binding) {
-      setTargetOwner(db, {
-        channelId: binding.channelId,
-        threadRootId: binding.threadRootId,
+      syncTaskThreadOwner(db, {
+        taskId: row.taskId,
         agentId: null,
-        lastActiveAt: Date.now(),
+        lastActiveAt: now,
       });
-    }
+    })();
 
     broadcastChannelTasksChanged(channelId);
 
@@ -1157,21 +1148,20 @@ export function registerInternalAgentRoutes(
       return { error: 'You must be the task assignee to update its status' };
     }
 
-    db.prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?`).run(
-      nextStatus,
-      Date.now(),
-      row.taskId,
-    );
+    const now = Date.now();
+    db.transaction(() => {
+      db.prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?`).run(
+        nextStatus,
+        now,
+        row.taskId,
+      );
 
-    const binding = getThreadBindingForTask(db, row.taskId);
-    if (binding) {
-      setTargetOwner(db, {
-        channelId: binding.channelId,
-        threadRootId: binding.threadRootId,
+      syncTaskThreadOwner(db, {
+        taskId: row.taskId,
         agentId: nextStatus === 'done' ? null : (row.claimedByAgentId ?? null),
-        lastActiveAt: Date.now(),
+        lastActiveAt: now,
       });
-    }
+    })();
 
     broadcastChannelTasksChanged(channelId);
 
@@ -1251,28 +1241,6 @@ function normalizeTargetForConversation(db: Db, conversationId: string, target: 
   return target;
 }
 
-function resolveThreadBindingContext(
-  db: Db,
-  conversationId: string | undefined,
-  channelId: string,
-): { threadRootId: string | null } {
-  if (!conversationId) return { threadRootId: null };
-  const row = db.prepare(
-    `SELECT channel_id as channelId, thread_kind as threadKind, thread_root_id as threadRootId
-     FROM conversations
-     WHERE id = ?`,
-  ).get(conversationId) as {
-    channelId: string;
-    threadKind: 'direct' | 'branch';
-    threadRootId: string | null;
-  } | undefined;
-
-  if (!row || row.channelId !== channelId || row.threadKind !== 'branch' || !row.threadRootId) {
-    return { threadRootId: null };
-  }
-  return { threadRootId: row.threadRootId };
-}
-
 /** Extracts the thread shortId from targets like "#general:a1b2c3d4". Returns null for non-thread targets. */
 function resolveThreadRootId(target: string): string | null {
   const match = target.match(/^(?:#[^:]+|dm:@[^:]+):([a-zA-Z0-9]+)$/);
@@ -1292,10 +1260,4 @@ function findActiveConversationRunId(db: Db, conversationId: string): string | n
     )
     .get(conversationId) as { runId: string } | undefined;
   return row?.runId ?? null;
-}
-function nextTaskNumber(db: Db, channelId: string): number {
-  const row = db
-    .prepare('SELECT MAX(task_number) as maxNum FROM tasks WHERE channel_id = ?')
-    .get(channelId) as { maxNum: number | null };
-  return (row.maxNum ?? 0) + 1;
 }

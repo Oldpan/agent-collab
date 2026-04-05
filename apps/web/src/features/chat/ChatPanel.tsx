@@ -415,18 +415,18 @@ function MessageRow({
     ? "border-zinc-900 bg-[#d8efff] text-zinc-950 shadow-[4px_4px_0_0_rgba(47,116,193,0.18)]"
     : "border-zinc-900 bg-[#d8f8c8] text-zinc-950 shadow-[4px_4px_0_0_rgba(51,128,44,0.18)]";
   const rowAlign = isUser ? "justify-end" : "justify-start";
-  const contentAlign = isUser ? "items-end text-right" : "items-start text-left";
+  const contentAlign = "items-start text-left";
   const metaAlign = isUser ? "justify-end" : "justify-between";
   const infoAlign = isUser ? "justify-end" : "justify-start";
   const showFallbackBadge = message.messageSource === "delta_fallback";
 
   const body = isUser ? (
-    <UserMessageContent className={cn("w-fit max-w-full self-end rounded-md border-2 px-3 py-2.5", cardTone)}>
+    <UserMessageContent className={cn("w-fit min-w-[20px] max-w-full self-end rounded-md border-2 px-3 py-2.5", cardTone)}>
       {message.text}
       {message.attachmentIds?.map((id) => <AttachmentImage key={id} attachmentId={id} />)}
     </UserMessageContent>
   ) : (
-    <MessageContent className={cn("relative rounded-md border-2 px-3 py-2.5", cardTone)}>
+    <MessageContent className={cn("relative w-fit min-w-[80px] rounded-md border-2 px-3 py-2.5", cardTone)}>
       {showFallbackBadge ? (
         <div className="mb-2 flex items-start justify-end">
           <MessageSourceBadge messageSource={message.messageSource} />
