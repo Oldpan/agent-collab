@@ -214,6 +214,19 @@ export async function startServer(params: {
     return user;
   };
 
+  const isTaskClaimedByUser = (
+    task: { claimedByAgentId: string | null; claimedByName: string | null },
+    user: User,
+  ): boolean => !task.claimedByAgentId && task.claimedByName === user.username;
+
+  const isTaskClaimedByOtherActor = (
+    task: { claimedByAgentId: string | null; claimedByName: string | null },
+    user: User,
+  ): boolean => (
+    !!task.claimedByAgentId
+    || (!!task.claimedByName && task.claimedByName !== user.username)
+  );
+
   const canAccessConversation = (user: User, conversationId: string): boolean => {
     if (user.isAdmin) return true;
     const conv = conversationManager.getConversation(conversationId);
@@ -770,7 +783,7 @@ export async function startServer(params: {
       const messages = rows.reverse().map((r) => ({
         id: r.id,
         senderName: r.senderName,
-        senderType: r.senderType as 'user' | 'agent',
+        senderType: r.senderType as 'user' | 'agent' | 'system',
         content: r.content,
         createdAt: new Date(r.createdAt).toISOString(),
         seq: r.seq,
@@ -1060,6 +1073,7 @@ export async function startServer(params: {
         });
       }
       broadcastToChannel(req.params.id, { type: 'channel.history.reset' });
+      broadcastChannelTasksChanged(req.params.id);
 
       return {
         ok: true,
@@ -1151,7 +1165,7 @@ export async function startServer(params: {
         messages: rows.reverse().map((r) => ({
           id: r.id,
           senderName: r.senderName,
-          senderType: r.senderType as 'user' | 'agent',
+          senderType: r.senderType as 'user' | 'agent' | 'system',
           content: r.content,
           createdAt: new Date(r.createdAt).toISOString(),
           seq: r.seq,
@@ -1196,7 +1210,7 @@ export async function startServer(params: {
         messages: ordered.map((r) => ({
           id: r.id,
           senderName: r.senderName,
-          senderType: r.senderType as 'user' | 'agent',
+          senderType: r.senderType as 'user' | 'agent' | 'system',
           content: r.content,
           createdAt: new Date(r.createdAt).toISOString(),
           seq: r.seq,
@@ -1615,7 +1629,7 @@ export async function startServer(params: {
       broadcastToChannel(req.params.id, {
         type: 'channel.message',
         message: {
-          id: messageId, senderName: 'system', senderType: 'agent', content: title,
+          id: messageId, senderName: 'system', senderType: 'system', content: title,
           createdAt: new Date(now).toISOString(), seq,
           taskNumber, taskStatus: 'todo', taskAssigneeName: null,
         },
@@ -1631,7 +1645,8 @@ export async function startServer(params: {
   app.post<{ Params: { id: string }; Body: { messageId: string; title?: string } }>(
     '/api/channels/:id/tasks/claim-message',
     async (req, reply) => {
-      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
+      const chanUser = requireChannelAccess(req, reply, req.params.id);
+      if (!chanUser) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const { messageId, title } = req.body ?? {};
@@ -1652,15 +1667,145 @@ export async function startServer(params: {
       db.transaction(() => {
         taskNumber = allocateNextTaskNumber(db, req.params.id);
         db.prepare(
-          `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
-           VALUES(?, ?, ?, ?, 'todo', ?, ?, ?)`,
-        ).run(taskId, req.params.id, taskNumber, taskTitle, msg.message_id, now, now);
+          `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id,
+                             claimed_by_agent_id, claimed_by_name, created_at, updated_at)
+           VALUES(?, ?, ?, ?, 'in_progress', ?, NULL, ?, ?, ?)`,
+        ).run(taskId, req.params.id, taskNumber, taskTitle, msg.message_id, chanUser.username, now, now);
         db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.message_id);
+        syncTaskThreadOwner(db, {
+          taskId,
+          agentId: null,
+          lastActiveAt: now,
+        });
       })();
-      const shortId = msg.message_id.slice(0, 8);
       broadcastChannelTasksChanged(req.params.id);
       reply.code(201);
-      return { taskId, channelId: req.params.id, taskNumber, title: taskTitle, status: 'todo', messageId: msg.message_id, linkedThreadId: shortId, linkedThreadShortId: shortId, assigneeId: null, assigneeName: null, createdAt: now, updatedAt: now };
+      return getChannelTaskByNumber(db, {
+        channelId: req.params.id,
+        taskNumber,
+      });
+    },
+  );
+
+  // POST /api/channels/:id/tasks/:num/claim
+  app.post<{ Params: { id: string; num: string } }>(
+    '/api/channels/:id/tasks/:num/claim',
+    async (req, reply) => {
+      const chanUser = requireChannelAccess(req, reply, req.params.id);
+      if (!chanUser) return { error: 'Access denied' };
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const taskNumber = Number(req.params.num);
+      if (!Number.isFinite(taskNumber)) {
+        reply.code(400);
+        return { error: 'Invalid task number' };
+      }
+
+      const current = db.prepare(
+        `SELECT task_id as taskId,
+                status as currentStatus,
+                claimed_by_agent_id as claimedByAgentId,
+                claimed_by_name as claimedByName
+         FROM tasks
+         WHERE channel_id = ? AND task_number = ?`,
+      ).get(req.params.id, taskNumber) as {
+        taskId: string;
+        currentStatus: 'todo' | 'in_progress' | 'in_review' | 'done';
+        claimedByAgentId: string | null;
+        claimedByName: string | null;
+      } | undefined;
+      if (!current) {
+        reply.code(404);
+        return { error: 'Task not found' };
+      }
+      if (current.currentStatus === 'done') {
+        reply.code(409);
+        return { error: 'Task is already done' };
+      }
+      if (isTaskClaimedByOtherActor(current, chanUser)) {
+        reply.code(409);
+        return { error: 'Task is already claimed' };
+      }
+
+      const now = Date.now();
+      const nextStatus = current.currentStatus === 'todo' ? 'in_progress' : current.currentStatus;
+      db.transaction(() => {
+        db.prepare(
+          `UPDATE tasks
+           SET claimed_by_agent_id = NULL, claimed_by_name = ?, status = ?, updated_at = ?
+           WHERE task_id = ?`,
+        ).run(chanUser.username, nextStatus, now, current.taskId);
+        syncTaskThreadOwner(db, {
+          taskId: current.taskId,
+          agentId: null,
+          lastActiveAt: now,
+        });
+      })();
+
+      broadcastChannelTasksChanged(req.params.id);
+      return getChannelTaskByNumber(db, {
+        channelId: req.params.id,
+        taskNumber,
+      });
+    },
+  );
+
+  // POST /api/channels/:id/tasks/:num/unclaim
+  app.post<{ Params: { id: string; num: string } }>(
+    '/api/channels/:id/tasks/:num/unclaim',
+    async (req, reply) => {
+      const chanUser = requireChannelAccess(req, reply, req.params.id);
+      if (!chanUser) return { error: 'Access denied' };
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const taskNumber = Number(req.params.num);
+      if (!Number.isFinite(taskNumber)) {
+        reply.code(400);
+        return { error: 'Invalid task number' };
+      }
+
+      const current = db.prepare(
+        `SELECT task_id as taskId,
+                status as currentStatus,
+                claimed_by_agent_id as claimedByAgentId,
+                claimed_by_name as claimedByName
+         FROM tasks
+         WHERE channel_id = ? AND task_number = ?`,
+      ).get(req.params.id, taskNumber) as {
+        taskId: string;
+        currentStatus: 'todo' | 'in_progress' | 'in_review' | 'done';
+        claimedByAgentId: string | null;
+        claimedByName: string | null;
+      } | undefined;
+      if (!current) {
+        reply.code(404);
+        return { error: 'Task not found' };
+      }
+      if (!isTaskClaimedByUser(current, chanUser)) {
+        reply.code(403);
+        return { error: 'You must be the task assignee to unclaim it' };
+      }
+
+      const now = Date.now();
+      const nextStatus = current.currentStatus === 'in_progress' ? 'todo' : current.currentStatus;
+      db.transaction(() => {
+        db.prepare(
+          `UPDATE tasks
+           SET claimed_by_agent_id = NULL, claimed_by_name = NULL, status = ?, updated_at = ?
+           WHERE task_id = ?`,
+        ).run(nextStatus, now, current.taskId);
+        syncTaskThreadOwner(db, {
+          taskId: current.taskId,
+          agentId: null,
+          lastActiveAt: now,
+        });
+      })();
+
+      broadcastChannelTasksChanged(req.params.id);
+      return getChannelTaskByNumber(db, {
+        channelId: req.params.id,
+        taskNumber,
+      });
     },
   );
 
@@ -1668,7 +1813,8 @@ export async function startServer(params: {
   app.patch<{ Params: { id: string; num: string }; Body: { status: string } }>(
     '/api/channels/:id/tasks/:num/status',
     async (req, reply) => {
-      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
+      const chanUser = requireChannelAccess(req, reply, req.params.id);
+      if (!chanUser) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const taskNumber = Number(req.params.num);
@@ -1677,17 +1823,26 @@ export async function startServer(params: {
       if (!validStatuses.includes(status)) { reply.code(400); return { error: `Invalid status: ${status}` }; }
       const nextStatus = status as 'todo' | 'in_progress' | 'in_review' | 'done';
       const current = db.prepare(
-        `SELECT task_id as taskId, status as currentStatus, claimed_by_agent_id as claimedByAgentId
+        `SELECT task_id as taskId,
+                status as currentStatus,
+                claimed_by_agent_id as claimedByAgentId,
+                claimed_by_name as claimedByName
          FROM tasks WHERE channel_id = ? AND task_number = ?`,
       ).get(req.params.id, taskNumber) as {
         taskId: string;
         currentStatus: 'todo' | 'in_progress' | 'in_review' | 'done';
         claimedByAgentId: string | null;
+        claimedByName: string | null;
       } | undefined;
       if (!current) { reply.code(404); return { error: 'Task not found' }; }
       if (!isValidTransition(current.currentStatus, nextStatus)) {
         reply.code(400);
         return { error: `Invalid transition: ${current.currentStatus} → ${nextStatus}` };
+      }
+      const isReviewToDone = current.currentStatus === 'in_review' && nextStatus === 'done';
+      if (!isReviewToDone && !isTaskClaimedByUser(current, chanUser)) {
+        reply.code(403);
+        return { error: 'You must be the task assignee to update its status' };
       }
       const now = Date.now();
       db.transaction(() => {
@@ -1696,7 +1851,7 @@ export async function startServer(params: {
         ).run(nextStatus, now, req.params.id, taskNumber);
         syncTaskThreadOwner(db, {
           taskId: current.taskId,
-          agentId: nextStatus === 'done' ? null : current.claimedByAgentId,
+          agentId: nextStatus === 'done' ? null : (current.claimedByAgentId ?? null),
           lastActiveAt: now,
         });
       })();

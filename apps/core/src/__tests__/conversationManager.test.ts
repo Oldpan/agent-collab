@@ -576,6 +576,10 @@ describe('ConversationManager', () => {
          VALUES(?, 'default', 'user', 'User', 'user', '#default:abc12345', 'thread hello', 2, ?, 'abc12345')`,
       ).run('msg-default-2', Date.now());
       db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, message_kind)
+         VALUES(?, 'default', 'system', 'system', 'system', '#default', 'Task root', 3, ?, NULL, 'task')`,
+      ).run('taskroot1-0000-0000-0000-000000000000', Date.now());
+      db.prepare(
         `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
          VALUES(?, ?, 'user', 'User', 'user', ?, 'dm hello', 1, ?, NULL)`,
       ).run('msg-dm-1', `dm:${agent.agentId}`, 'dm:@User', Date.now());
@@ -586,6 +590,9 @@ describe('ConversationManager', () => {
 
       db.prepare(
         `INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq) VALUES(?, 'default', '', 2)`,
+      ).run(agent.agentId);
+      db.prepare(
+        `INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq) VALUES(?, 'default', 'taskroot1', 3)`,
       ).run(agent.agentId);
       db.prepare(
         `INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq) VALUES(?, ?, '', 1)`,
@@ -603,6 +610,14 @@ describe('ConversationManager', () => {
       db.prepare(
         'INSERT INTO conversation_prompt_queue(agent_id, conversation_id, prompt_text, created_at, updated_at) VALUES(?, ?, ?, ?, ?)',
       ).run(agent.agentId, defaultBranch.id, 'queued default', Date.now(), Date.now());
+      db.prepare(
+        `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
+         VALUES('task-clear-chat', 'default', 1, 'Task root', 'todo', 'taskroot1-0000-0000-0000-000000000000', ?, ?)`,
+      ).run(Date.now(), Date.now());
+      db.prepare(
+        `INSERT INTO thread_task_bindings(channel_id, thread_root_id, task_id, bound_at)
+         VALUES('default', 'taskroot1', 'task-clear-chat', ?)`,
+      ).run(Date.now());
 
       db.prepare(
         'INSERT INTO runs(run_id, session_key, prompt_text, started_at) VALUES(?, ?, ?, ?)',
@@ -662,6 +677,12 @@ describe('ConversationManager', () => {
       const defaultQueue = db.prepare(
         'SELECT count(*) as count FROM conversation_prompt_queue WHERE conversation_id = ?',
       ).get(defaultBranch.id) as { count: number };
+      const defaultTasks = db.prepare(
+        `SELECT count(*) as count FROM tasks WHERE channel_id = 'default'`,
+      ).get() as { count: number };
+      const defaultTaskBindings = db.prepare(
+        `SELECT count(*) as count FROM thread_task_bindings WHERE channel_id = 'default'`,
+      ).get() as { count: number };
       const directRuns = db.prepare(
         'SELECT count(*) as count FROM runs WHERE session_key = ?',
       ).get(directSession.sessionKey) as { count: number };
@@ -672,6 +693,8 @@ describe('ConversationManager', () => {
       expect(oldDefaultRuns.count).toBe(0);
       expect(oldDefaultEvents.count).toBe(0);
       expect(defaultQueue.count).toBe(0);
+      expect(defaultTasks.count).toBe(0);
+      expect(defaultTaskBindings.count).toBe(0);
       expect(directRuns.count).toBe(1);
       expect(opsRuns.count).toBe(1);
     });

@@ -186,7 +186,7 @@ agent 详情中的基础信息集中在 `Profile`：
 
 ### Channel / Tasks
 
-当前 channel 产品能力是基础版：
+当前 channel 产品能力已经包含可用的 task 协作闭环：
 
 - agent 可加入多个 channel
 - `channel.description` 已存在并可被前端展示
@@ -195,9 +195,17 @@ agent 详情中的基础信息集中在 `Profile`：
   - 任务列表
   - 按状态分组
   - 新建任务
+  - claim / unclaim
   - 推进状态
-- assignee 当前只读展示，不支持用户侧分配
+  - 删除任务
+- chat 中普通 channel 根消息可直接 `Promote to task`
+- 被提升或新建的 task 都会绑定到自己的 task thread
+- `clear-chat` 会同时清空该 channel 的 task board，避免悬空 task
 - DM Thread UI 已按当前产品模型暂缓，不在 direct chat 中继续扩展 thread
+
+更完整的使用方式见：
+
+- [Task 模块使用说明](./task-module.md)
 
 ### Reset
 

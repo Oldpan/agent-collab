@@ -12,7 +12,7 @@ export type ActivationContextMessage = {
   seq: number;
   target: string;
   senderName: string;
-  senderType: 'user' | 'agent';
+  senderType: 'user' | 'agent' | 'system';
   content: string;
   createdAt: number;
 };

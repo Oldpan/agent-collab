@@ -917,6 +917,9 @@ export class ConversationManager {
     const now = Date.now();
 
     this.db.prepare(`DELETE FROM channel_messages WHERE channel_id = ?`).run(channelId);
+    this.db.prepare(`DELETE FROM tasks WHERE channel_id = ?`).run(channelId);
+    this.db.prepare(`DELETE FROM thread_task_bindings WHERE channel_id = ?`).run(channelId);
+    this.db.prepare(`DELETE FROM channel_task_sequences WHERE channel_id = ?`).run(channelId);
     this.db.prepare(`DELETE FROM agent_message_checkpoints WHERE channel_id = ?`).run(channelId);
     deleteTargetParticipantsForChannel(this.db, channelId);
 

@@ -159,7 +159,7 @@ export type ChannelMessageEvent = {
   message: {
     id: string;
     senderName: string;
-    senderType: 'user' | 'agent';
+    senderType: 'user' | 'agent' | 'system';
     content: string;
     createdAt: string;
     seq?: number;

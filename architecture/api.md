@@ -50,7 +50,27 @@
 | `POST` | `/api/channels` | 创建 Channel（`{ name, workspacePath? }`） |
 | `GET` | `/api/channels/:id/conversations` | 获取指定 Channel 下的 Conversation |
 
-> Channel 当前在 UI 中不展示，仅保留 DB 兼容。所有新 Conversation 默认归属 `default` channel。
+Channel 当前已经在 UI 中作为协作空间使用，包含 `Chat / Tasks / Members / Settings` 视图。所有新 Conversation 默认归属 `default` channel。
+
+## Task（Channel Task Board）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/channels/:id/tasks` | 获取指定 Channel 的 task board |
+| `POST` | `/api/channels/:id/tasks` | 新建 task；会同时创建 task message |
+| `POST` | `/api/channels/:id/tasks/claim-message` | 把一条 channel 根消息提升为 task，并立即 claim 给当前用户 |
+| `POST` | `/api/channels/:id/tasks/:num/claim` | claim 指定 task |
+| `POST` | `/api/channels/:id/tasks/:num/unclaim` | 释放自己 claim 的 task |
+| `PATCH` | `/api/channels/:id/tasks/:num/status` | 更新 task 状态 |
+| `DELETE` | `/api/channels/:id/tasks/:num` | 删除 task |
+| `POST` | `/api/channels/:id/clear-chat` | 清空 channel 聊天历史；同时清空该 channel 的 task board |
+
+补充说明：
+
+- task 状态流转为 `todo -> in_progress -> in_review -> done`
+- `claim-message` 会把任务直接置为 `in_progress`
+- 除 `in_review -> done` 外，其它状态更新都要求当前用户就是 assignee
+- `clear-chat` 不再保留 tasks，避免留下失去 task message / thread 的悬空任务
 
 ## Nodes（兼容，仅返回在线节点）
 

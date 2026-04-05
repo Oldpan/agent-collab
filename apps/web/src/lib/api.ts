@@ -395,6 +395,36 @@ export async function claimMessageAsTask(
   return res.json();
 }
 
+export async function claimChannelTask(
+  channelId: string,
+  taskNumber: number,
+): Promise<ChannelTask> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks/${taskNumber}/claim`, {
+    method: "POST",
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Failed to claim task: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function unclaimChannelTask(
+  channelId: string,
+  taskNumber: number,
+): Promise<ChannelTask> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks/${taskNumber}/unclaim`, {
+    method: "POST",
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Failed to unclaim task: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function updateTaskStatus(
   channelId: string,
   taskNumber: number,
@@ -405,7 +435,10 @@ export async function updateTaskStatus(
     headers: withAuthHeaders({ "Content-Type": "application/json" }),
     body: JSON.stringify({ status }),
   });
-  if (!res.ok) throw new Error(`Failed to update task status: ${res.statusText}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Failed to update task status: ${res.statusText}`);
+  }
   return res.json();
 }
 

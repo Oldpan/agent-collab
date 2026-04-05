@@ -17,6 +17,7 @@ import {
   upsertTargetParticipant,
 } from '../web/targetParticipants.js';
 import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
+import { allocateNextTaskNumber } from '../web/taskNumbers.js';
 import {
   getThreadCollaborationSummary,
   listChannelTasks,
@@ -26,6 +27,26 @@ import {
 } from '../web/threadTaskBindings.js';
 import { isValidTransition } from '../web/taskStatusTransitions.js';
 import type { TaskInfo } from '@agent-collab/protocol';
+
+type TestTaskClaimRow = {
+  taskId: string;
+  currentStatus: TaskInfo['status'];
+  claimedByAgentId: string | null;
+  claimedByName: string | null;
+};
+
+function getTaskUserName(req: { headers: Record<string, unknown> }): string {
+  const header = req.headers['x-user-name'];
+  return typeof header === 'string' && header.trim() ? header.trim() : 'User';
+}
+
+function isTaskClaimedByUserName(task: TestTaskClaimRow, userName: string): boolean {
+  return !task.claimedByAgentId && task.claimedByName === userName;
+}
+
+function isTaskClaimedByOtherUserName(task: TestTaskClaimRow, userName: string): boolean {
+  return !!task.claimedByAgentId || (!!task.claimedByName && task.claimedByName !== userName);
+}
 
 let db: Db;
 let manager: ConversationManager;
@@ -154,7 +175,7 @@ beforeAll(async () => {
         messages: rows.reverse().map((row) => ({
           id: row.id,
           senderName: row.senderName,
-          senderType: row.senderType as 'user' | 'agent',
+          senderType: row.senderType as 'user' | 'agent' | 'system',
           content: row.content,
           createdAt: new Date(row.createdAt).toISOString(),
           seq: row.seq,
@@ -468,6 +489,131 @@ beforeAll(async () => {
     },
   );
 
+  app.post<{ Params: { id: string }; Body: { messageId: string; title?: string } }>(
+    '/api/channels/:id/tasks/claim-message',
+    async (req, reply) => {
+      const channel = manager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const { messageId, title } = req.body ?? {};
+      if (!messageId) { reply.code(400); return { error: 'messageId is required' }; }
+
+      const message = db.prepare(
+        `SELECT message_id as messageId, content, thread_root_id as threadRootId
+         FROM channel_messages
+         WHERE message_id LIKE ? AND channel_id = ?`,
+      ).get(`${messageId}%`, req.params.id) as {
+        messageId: string;
+        content: string;
+        threadRootId: string | null;
+      } | undefined;
+      if (!message) { reply.code(404); return { error: 'Message not found' }; }
+      if (message.threadRootId) { reply.code(400); return { error: 'Cannot promote a thread reply to task' }; }
+
+      const existing = db.prepare(
+        `SELECT task_id as taskId FROM tasks WHERE message_id = ?`,
+      ).get(message.messageId) as { taskId: string } | undefined;
+      if (existing) { reply.code(409); return { error: 'Message is already a task' }; }
+
+      const now = Date.now();
+      const taskId = randomUUID();
+      const taskNumber = allocateNextTaskNumber(db, req.params.id);
+      const taskTitle = title?.trim() || message.content.slice(0, 120);
+      const userName = getTaskUserName(req);
+
+      db.transaction(() => {
+        db.prepare(
+          `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id,
+                             claimed_by_agent_id, claimed_by_name, created_at, updated_at)
+           VALUES(?, ?, ?, ?, 'in_progress', ?, NULL, ?, ?, ?)`,
+        ).run(taskId, req.params.id, taskNumber, taskTitle, message.messageId, userName, now, now);
+        db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(message.messageId);
+        syncTaskThreadOwner(db, { taskId, agentId: null, lastActiveAt: now });
+      })();
+
+      reply.code(201);
+      return getChannelTaskByNumber(db, { channelId: req.params.id, taskNumber });
+    },
+  );
+
+  app.post<{ Params: { id: string; num: string } }>(
+    '/api/channels/:id/tasks/:num/claim',
+    async (req, reply) => {
+      const channel = manager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const taskNumber = Number(req.params.num);
+      if (!Number.isFinite(taskNumber)) { reply.code(400); return { error: 'Invalid task number' }; }
+
+      const current = db.prepare(
+        `SELECT task_id as taskId,
+                status as currentStatus,
+                claimed_by_agent_id as claimedByAgentId,
+                claimed_by_name as claimedByName
+         FROM tasks
+         WHERE channel_id = ? AND task_number = ?`,
+      ).get(req.params.id, taskNumber) as TestTaskClaimRow | undefined;
+      if (!current) { reply.code(404); return { error: 'Task not found' }; }
+      if (current.currentStatus === 'done') { reply.code(409); return { error: 'Task is already done' }; }
+
+      const userName = getTaskUserName(req);
+      if (isTaskClaimedByOtherUserName(current, userName)) {
+        reply.code(409);
+        return { error: 'Task is already claimed' };
+      }
+
+      const now = Date.now();
+      const nextStatus = current.currentStatus === 'todo' ? 'in_progress' : current.currentStatus;
+      db.transaction(() => {
+        db.prepare(
+          `UPDATE tasks
+           SET claimed_by_agent_id = NULL, claimed_by_name = ?, status = ?, updated_at = ?
+           WHERE task_id = ?`,
+        ).run(userName, nextStatus, now, current.taskId);
+        syncTaskThreadOwner(db, { taskId: current.taskId, agentId: null, lastActiveAt: now });
+      })();
+
+      return getChannelTaskByNumber(db, { channelId: req.params.id, taskNumber });
+    },
+  );
+
+  app.post<{ Params: { id: string; num: string } }>(
+    '/api/channels/:id/tasks/:num/unclaim',
+    async (req, reply) => {
+      const channel = manager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const taskNumber = Number(req.params.num);
+      if (!Number.isFinite(taskNumber)) { reply.code(400); return { error: 'Invalid task number' }; }
+
+      const current = db.prepare(
+        `SELECT task_id as taskId,
+                status as currentStatus,
+                claimed_by_agent_id as claimedByAgentId,
+                claimed_by_name as claimedByName
+         FROM tasks
+         WHERE channel_id = ? AND task_number = ?`,
+      ).get(req.params.id, taskNumber) as TestTaskClaimRow | undefined;
+      if (!current) { reply.code(404); return { error: 'Task not found' }; }
+
+      const userName = getTaskUserName(req);
+      if (!isTaskClaimedByUserName(current, userName)) {
+        reply.code(403);
+        return { error: 'You must be the task assignee to unclaim it' };
+      }
+
+      const now = Date.now();
+      const nextStatus = current.currentStatus === 'in_progress' ? 'todo' : current.currentStatus;
+      db.transaction(() => {
+        db.prepare(
+          `UPDATE tasks
+           SET claimed_by_agent_id = NULL, claimed_by_name = NULL, status = ?, updated_at = ?
+           WHERE task_id = ?`,
+        ).run(nextStatus, now, current.taskId);
+        syncTaskThreadOwner(db, { taskId: current.taskId, agentId: null, lastActiveAt: now });
+      })();
+
+      return getChannelTaskByNumber(db, { channelId: req.params.id, taskNumber });
+    },
+  );
+
   app.patch<{ Params: { id: string; num: string }; Body: { status: string } }>(
     '/api/channels/:id/tasks/:num/status',
     async (req, reply) => {
@@ -479,12 +625,20 @@ beforeAll(async () => {
       if (!validStatuses.includes(status)) { reply.code(400); return { error: `Invalid status: ${status}` }; }
       const nextStatus = status as TaskInfo['status'];
       const current = db.prepare(
-        `SELECT task_id as taskId, status as currentStatus, claimed_by_agent_id as claimedByAgentId
+        `SELECT task_id as taskId,
+                status as currentStatus,
+                claimed_by_agent_id as claimedByAgentId,
+                claimed_by_name as claimedByName
          FROM tasks WHERE channel_id = ? AND task_number = ?`,
-      ).get(req.params.id, taskNumber) as { taskId: string; currentStatus: TaskInfo['status']; claimedByAgentId: string | null } | undefined;
+      ).get(req.params.id, taskNumber) as TestTaskClaimRow | undefined;
       if (!current) { reply.code(404); return { error: 'Task not found' }; }
       if (!isValidTransition(current.currentStatus, nextStatus)) {
         reply.code(400); return { error: `Invalid transition: ${current.currentStatus} → ${nextStatus}` };
+      }
+      const isReviewToDone = current.currentStatus === 'in_review' && nextStatus === 'done';
+      if (!isReviewToDone && !isTaskClaimedByUserName(current, getTaskUserName(req))) {
+        reply.code(403);
+        return { error: 'You must be the task assignee to update its status' };
       }
       const now = Date.now();
       db.transaction(() => {
@@ -1291,6 +1445,92 @@ describe('REST API', () => {
     expect(participant?.role).toBe('participant');
   });
 
+  it('POST /api/channels/:id/tasks/claim-message 应自动认领并置为 in_progress', async () => {
+    const now = Date.now();
+    const seq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('claimfeed-0000-0000-0000-000000000000', 'default', 'user', 'User', 'user', '#default', 'Promote me', ?, ?)`,
+    ).run(seq, now);
+
+    const { status, body } = await fetchJson('/api/channels/default/tasks/claim-message', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': 'Alice',
+      },
+      body: JSON.stringify({ messageId: 'claimfeed' }),
+    });
+
+    expect(status).toBe(201);
+    expect(body.status).toBe('in_progress');
+    expect(body.assigneeName).toBe('Alice');
+    expect(body.linkedThreadShortId).toBe('claimfee');
+
+    const messageRow = db.prepare(
+      `SELECT message_kind as messageKind FROM channel_messages WHERE message_id = 'claimfeed-0000-0000-0000-000000000000'`,
+    ).get() as { messageKind: string | null };
+    expect(messageRow.messageKind).toBe('task');
+  });
+
+  it('POST /api/channels/:id/tasks/:num/claim 与 /unclaim 应维护 assignee 与状态', async () => {
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, created_at, updated_at)
+       VALUES('task-claim-cycle', 'default', 93, 'Claim cycle', 'todo', ?, ?)`,
+    ).run(now, now);
+
+    const claimed = await fetchJson('/api/channels/default/tasks/93/claim', {
+      method: 'POST',
+      headers: { 'x-user-name': 'Alice' },
+    });
+    expect(claimed.status).toBe(200);
+    expect(claimed.body.status).toBe('in_progress');
+    expect(claimed.body.assigneeName).toBe('Alice');
+
+    const unclaimed = await fetchJson('/api/channels/default/tasks/93/unclaim', {
+      method: 'POST',
+      headers: { 'x-user-name': 'Alice' },
+    });
+    expect(unclaimed.status).toBe(200);
+    expect(unclaimed.body.status).toBe('todo');
+    expect(unclaimed.body.assigneeName).toBeNull();
+  });
+
+  it('PATCH /api/channels/:id/tasks/:num/status 应限制非 assignee 推进状态，但允许 review 完成', async () => {
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, claimed_by_name, created_at, updated_at)
+       VALUES('task-user-owned', 'default', 94, 'User owned', 'in_progress', 'Alice', ?, ?)`,
+    ).run(now, now);
+
+    const forbidden = await fetchJson('/api/channels/default/tasks/94/status', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': 'Bob',
+      },
+      body: JSON.stringify({ status: 'in_review' }),
+    });
+    expect(forbidden.status).toBe(403);
+    expect(forbidden.body.error).toContain('task assignee');
+
+    db.prepare(
+      `UPDATE tasks SET status = 'in_review', updated_at = ? WHERE task_id = 'task-user-owned'`,
+    ).run(Date.now());
+
+    const done = await fetchJson('/api/channels/default/tasks/94/status', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': 'Bob',
+      },
+      body: JSON.stringify({ status: 'done' }),
+    });
+    expect(done.status).toBe(200);
+    expect(done.body.status).toBe('done');
+  });
+
   it('DELETE /api/channels/:id/tasks/:num 应清理 task root 的 participants 与 checkpoints', async () => {
     const now = Date.now();
     const agent = manager.createAgent({
@@ -1308,7 +1548,7 @@ describe('REST API', () => {
     ).run(seq, now);
     db.prepare(
       `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
-       VALUES('task-delete-root', 'default', 92, 'Delete me', 'todo', 'deadbeef-0000-0000-0000-000000000000', ?, ?)`,
+       VALUES('task-delete-root', 'default', 195, 'Delete me', 'todo', 'deadbeef-0000-0000-0000-000000000000', ?, ?)`,
     ).run(now, now);
     db.prepare(
       `INSERT INTO thread_task_bindings(channel_id, thread_root_id, task_id, bound_at)
@@ -1326,7 +1566,7 @@ describe('REST API', () => {
        VALUES(?, 'default', 'deadbeef', 3)`,
     ).run(agent.agentId);
 
-    const { status, body } = await fetchJson('/api/channels/default/tasks/92', {
+    const { status, body } = await fetchJson('/api/channels/default/tasks/195', {
       method: 'DELETE',
     });
 
@@ -1343,7 +1583,7 @@ describe('REST API', () => {
     expect(checkpointsCount.count).toBe(0);
   });
 
-  it('POST /api/channels/:id/clear-chat 应清空 channel 消息并重置 branch 历史，但保留 tasks', async () => {
+  it('POST /api/channels/:id/clear-chat 应清空 channel 消息、branch 历史与 tasks', async () => {
     const agent = manager.createAgent({
       name: 'ClearRoomBob',
       agentType: 'claude_acp',
@@ -1376,10 +1616,19 @@ describe('REST API', () => {
     db.prepare(
       'INSERT INTO conversation_prompt_queue(agent_id, conversation_id, prompt_text, created_at, updated_at) VALUES(?, ?, ?, ?, ?)',
     ).run(agent.agentId, branch.id, 'queued', Date.now(), Date.now());
+    const taskSeq = allocateNextChannelMessageSeq(db, 'default');
     db.prepare(
-      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, created_at, updated_at)
-       VALUES(?, 'default', 1, 'Keep task', 'todo', ?, ?)`,
-    ).run(randomUUID(), Date.now(), Date.now());
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('clear7777-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Clear task', ?, ?, 'task')`,
+    ).run(taskSeq, Date.now());
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
+       VALUES(?, 'default', 1, 'Clear task', 'todo', ?, ?, ?)`,
+    ).run(randomUUID(), 'clear7777-0000-0000-0000-000000000000', Date.now(), Date.now());
+    db.prepare(
+      `INSERT INTO thread_task_bindings(channel_id, thread_root_id, task_id, bound_at)
+       VALUES('default', 'clear7777', (SELECT task_id FROM tasks WHERE channel_id = 'default' AND task_number = 1), ?)`,
+    ).run(Date.now());
 
     const { status, body } = await fetchJson('/api/channels/default/clear-chat', {
       method: 'POST',
@@ -1407,13 +1656,21 @@ describe('REST API', () => {
     const taskCount = db.prepare(
       `SELECT count(*) as count FROM tasks WHERE channel_id = 'default'`,
     ).get() as { count: number };
+    const bindingCount = db.prepare(
+      `SELECT count(*) as count FROM thread_task_bindings WHERE channel_id = 'default'`,
+    ).get() as { count: number };
+    const taskSequenceCount = db.prepare(
+      `SELECT count(*) as count FROM channel_task_sequences WHERE channel_id = 'default'`,
+    ).get() as { count: number };
 
     expect(messageCount.count).toBe(0);
     expect(checkpointCount.count).toBe(0);
     expect(oldRunCount.count).toBe(0);
     expect(eventCount.count).toBe(0);
     expect(queueCount.count).toBe(0);
-    expect(taskCount.count).toBeGreaterThanOrEqual(1); // tasks survive clear-chat
+    expect(taskCount.count).toBe(0);
+    expect(bindingCount.count).toBe(0);
+    expect(taskSequenceCount.count).toBe(0);
   });
 });
 

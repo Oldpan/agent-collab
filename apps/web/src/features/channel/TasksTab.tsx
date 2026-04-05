@@ -2,12 +2,15 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { TaskInfo } from "@agent-collab/protocol";
 import { Button } from "@/components/ui/button";
 import {
+  claimChannelTask,
   createChannelTask,
   deleteChannelTask,
   getChannelTasks,
+  unclaimChannelTask,
   updateTaskStatus,
   type ChannelTask,
 } from "@/lib/api";
+import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 
 type TasksTabProps = {
@@ -49,13 +52,21 @@ function statusClassName(status: TaskInfo["status"]): string {
   }
 }
 
+function sameUserName(a?: string | null, b?: string | null): boolean {
+  if (!a || !b) return false;
+  return a === b;
+}
+
 export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabProps) {
+  const { user } = useAuth();
   const [tasks, setTasks] = useState<ChannelTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [creating, setCreating] = useState(false);
+  const [claimingTaskNumber, setClaimingTaskNumber] = useState<number | null>(null);
+  const [unclaimingTaskNumber, setUnclaimingTaskNumber] = useState<number | null>(null);
   const [updatingTaskNumber, setUpdatingTaskNumber] = useState<number | null>(null);
   const [deletingTaskNumber, setDeletingTaskNumber] = useState<number | null>(null);
   const [showDone, setShowDone] = useState(false);
@@ -129,6 +140,34 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
       setUpdatingTaskNumber(null);
     }
   }, [channelId, updatingTaskNumber]);
+
+  const handleClaim = useCallback(async (task: ChannelTask) => {
+    if (claimingTaskNumber === task.taskNumber) return;
+    setClaimingTaskNumber(task.taskNumber);
+    setError(null);
+    try {
+      const updated = await claimChannelTask(channelId, task.taskNumber);
+      setTasks((prev) => prev.map((item) => (item.taskId === updated.taskId ? updated : item)));
+    } catch (err) {
+      setError(String((err as Error)?.message ?? err));
+    } finally {
+      setClaimingTaskNumber(null);
+    }
+  }, [channelId, claimingTaskNumber]);
+
+  const handleUnclaim = useCallback(async (task: ChannelTask) => {
+    if (unclaimingTaskNumber === task.taskNumber) return;
+    setUnclaimingTaskNumber(task.taskNumber);
+    setError(null);
+    try {
+      const updated = await unclaimChannelTask(channelId, task.taskNumber);
+      setTasks((prev) => prev.map((item) => (item.taskId === updated.taskId ? updated : item)));
+    } catch (err) {
+      setError(String((err as Error)?.message ?? err));
+    } finally {
+      setUnclaimingTaskNumber(null);
+    }
+  }, [channelId, unclaimingTaskNumber]);
 
   const handleDelete = useCallback(async (task: ChannelTask) => {
     if (deletingTaskNumber === task.taskNumber) return;
@@ -256,7 +295,12 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
                     </div>
                   ) : (
                     <div className="space-y-2">
-                      {items.map((task) => (
+                      {items.map((task) => {
+                        const isCurrentUserAssignee = sameUserName(task.assigneeName, user?.username);
+                        const canClaim = !task.assigneeName && task.status !== "done";
+                        const canUnclaim = isCurrentUserAssignee && task.status !== "done";
+                        const canAdvance = isCurrentUserAssignee && task.status !== "done";
+                        return (
                         <div
                           key={task.taskId}
                           className="rounded-sm border-2 border-zinc-900 bg-white px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]"
@@ -298,19 +342,49 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
                               </div>
                             </div>
                             <div className="flex shrink-0 flex-col items-end gap-2">
-                              <button
-                                type="button"
-                                onClick={() => void handleAdvance(task)}
-                                disabled={task.status === "done" || updatingTaskNumber === task.taskNumber}
-                                className={cn(
-                                  "rounded-full border border-zinc-900 px-2 py-0.5 text-[11px] font-medium transition-colors",
-                                  statusClassName(task.status),
-                                  task.status !== "done" && "hover:brightness-95",
-                                  updatingTaskNumber === task.taskNumber && "opacity-60",
-                                )}
-                              >
-                                {updatingTaskNumber === task.taskNumber ? "Updating..." : formatStatus(task.status)}
-                              </button>
+                              {canAdvance ? (
+                                <button
+                                  type="button"
+                                  onClick={() => void handleAdvance(task)}
+                                  disabled={updatingTaskNumber === task.taskNumber}
+                                  className={cn(
+                                    "rounded-full border border-zinc-900 px-2 py-0.5 text-[11px] font-medium transition-colors",
+                                    statusClassName(task.status),
+                                    "hover:brightness-95",
+                                    updatingTaskNumber === task.taskNumber && "opacity-60",
+                                  )}
+                                >
+                                  {updatingTaskNumber === task.taskNumber ? "Updating..." : formatStatus(task.status)}
+                                </button>
+                              ) : (
+                                <span
+                                  className={cn(
+                                    "rounded-full border border-zinc-900 px-2 py-0.5 text-[11px] font-medium",
+                                    statusClassName(task.status),
+                                  )}
+                                >
+                                  {formatStatus(task.status)}
+                                </span>
+                              )}
+                              {canClaim ? (
+                                <Button
+                                  size="sm"
+                                  disabled={claimingTaskNumber === task.taskNumber}
+                                  onClick={() => void handleClaim(task)}
+                                  className="h-8 rounded-sm border-2 border-zinc-900 bg-[#d8f8c8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#b8f0a8]"
+                                >
+                                  {claimingTaskNumber === task.taskNumber ? "Claiming..." : "Claim"}
+                                </Button>
+                              ) : canUnclaim ? (
+                                <Button
+                                  size="sm"
+                                  disabled={unclaimingTaskNumber === task.taskNumber}
+                                  onClick={() => void handleUnclaim(task)}
+                                  className="h-8 rounded-sm border-2 border-zinc-900 bg-[#fff0d0] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#ffe4b0]"
+                                >
+                                  {unclaimingTaskNumber === task.taskNumber ? "Unclaiming..." : "Unclaim"}
+                                </Button>
+                              ) : null}
                               <Button
                                 size="sm"
                                 disabled={deletingTaskNumber === task.taskNumber}
@@ -322,7 +396,8 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
                             </div>
                           </div>
                         </div>
-                      ))}
+                        );
+                      })}
                     </div>
                   )}
                 </section>

@@ -4,18 +4,21 @@ import { AlertTriangleIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect } from "react";
 
 export type ConfirmDialogProps = {
-  isOpen: boolean;
+  isOpen?: boolean;
+  open?: boolean;
   title: string;
   message: string;
   confirmText?: string;
   cancelText?: string;
   variant?: "danger" | "warning" | "info";
   onConfirm: () => void;
-  onCancel: () => void;
+  onCancel?: () => void;
+  onOpenChange?: (open: boolean) => void;
 };
 
 export function ConfirmDialog({
   isOpen,
+  open,
   title,
   message,
   confirmText = "Confirm",
@@ -23,27 +26,31 @@ export function ConfirmDialog({
   variant = "warning",
   onConfirm,
   onCancel,
+  onOpenChange,
 }: ConfirmDialogProps) {
+  const resolvedIsOpen = isOpen ?? open ?? false;
+  const resolvedOnCancel = onCancel ?? (() => onOpenChange?.(false));
+
   // Handle ESC key
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        onCancel();
+        resolvedOnCancel();
       } else if (e.key === "Enter") {
         onConfirm();
       }
     },
-    [onCancel, onConfirm]
+    [resolvedOnCancel, onConfirm]
   );
 
   useEffect(() => {
-    if (isOpen) {
+    if (resolvedIsOpen) {
       document.addEventListener("keydown", handleKeyDown);
       return () => document.removeEventListener("keydown", handleKeyDown);
     }
-  }, [isOpen, handleKeyDown]);
+  }, [resolvedIsOpen, handleKeyDown]);
 
-  if (!isOpen) return null;
+  if (!resolvedIsOpen) return null;
 
   const variantStyles = {
     danger: {
@@ -73,7 +80,7 @@ export function ConfirmDialog({
       {/* Backdrop */}
       <div
         className="absolute inset-0 bg-black/50"
-        onClick={onCancel}
+        onClick={resolvedOnCancel}
         aria-hidden="true"
       />
 
@@ -103,7 +110,7 @@ export function ConfirmDialog({
           </div>
           <button
             type="button"
-            onClick={onCancel}
+            onClick={resolvedOnCancel}
             className="rounded-sm border-2 border-transparent p-1 hover:border-zinc-900 hover:bg-[#fff9d0]"
             aria-label="Close"
           >
@@ -126,7 +133,7 @@ export function ConfirmDialog({
           <Button
             variant="outline"
             size="sm"
-            onClick={onCancel}
+            onClick={resolvedOnCancel}
             className="rounded-sm border-2 border-zinc-900 bg-white px-4 text-xs font-semibold text-zinc-900 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f0f0f0]"
           >
             {cancelText}

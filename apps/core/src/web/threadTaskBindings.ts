@@ -245,8 +245,8 @@ export function getThreadCollaborationSummary(
     activeSince: Date.now() - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
   });
   const ownerParticipant = participants.find((participant) => participant.role === 'owner');
-  const taskOwner = boundTask && boundTask.status !== 'done' && boundTask.assigneeId
-    ? { ownerAgentId: boundTask.assigneeId, ownerName: boundTask.assigneeName }
+  const taskOwner = boundTask && boundTask.status !== 'done' && boundTask.assigneeName
+    ? { ownerAgentId: boundTask.assigneeId ?? null, ownerName: boundTask.assigneeName }
     : null;
   return {
     ...(boundTask ? { boundTask } : {}),

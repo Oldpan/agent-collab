@@ -58,6 +58,27 @@ describe('threadTaskBindings', () => {
     db.close();
   });
 
+  it('summary 应支持用户认领的 task root owner 回退到 assigneeName', () => {
+    const db = createTestDb();
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('userbeef-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'User task', 1, ?)`,
+    ).run(now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, claimed_by_name, message_id, created_at, updated_at)
+       VALUES(?, 'default', 8, 'User task', 'in_progress', 'oldpan', 'userbeef-0000-0000-0000-000000000000', ?, ?)`,
+    ).run('task-user-claimed', now, now);
+
+    const summary = getThreadCollaborationSummary(db, { channelId: 'default', threadRootId: 'userbeef' });
+    expect(summary.boundTask?.taskNumber).toBe(8);
+    expect(summary.ownerAgentId).toBeNull();
+    expect(summary.ownerName).toBe('oldpan');
+    expect(summary.participants).toEqual([]);
+
+    db.close();
+  });
+
   it('summary 应只显示 recent participants，过期 owner 不应残留', () => {
     const db = createTestDb();
     const now = Date.now();

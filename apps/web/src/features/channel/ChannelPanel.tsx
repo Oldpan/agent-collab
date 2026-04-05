@@ -977,7 +977,7 @@ function SettingsTab({
       <ConfirmDialog
         isOpen={dialogOpen}
         title="Clear Channel Chat History"
-        message={`Clear chat history for #${channel.name}?\n\nThis will remove channel messages and thread replies, and reset branch conversation activity for this channel. Members and tasks will be kept.`}
+        message={`Clear chat history for #${channel.name}?\n\nThis will remove channel messages and thread replies, reset branch conversation activity for this channel, and clear this channel's task board.`}
         confirmText={clearing ? "Clearing..." : "Clear"}
         cancelText="Cancel"
         variant="warning"
@@ -1021,7 +1021,7 @@ export function ChannelPanel({
   const [openThread, setOpenThread] = useState<ChannelMessage | null>(null);
   const [branchInspectorConversation, setBranchInspectorConversation] = useState<ConversationInfo | null>(null);
   // Local task overrides: messageId → partial fields added after claim-message
-  const [taskOverrides, setTaskOverrides] = useState<Map<string, Pick<ChannelMessage, 'taskNumber' | 'taskStatus'>>>(new Map());
+  const [taskOverrides, setTaskOverrides] = useState<Map<string, Pick<ChannelMessage, 'taskNumber' | 'taskStatus' | 'taskAssigneeName'>>>(new Map());
   const branchInspectorAgent = useMemo(
     () => {
       if (!branchInspectorConversation?.agentId) return null;
@@ -1043,7 +1043,11 @@ export function ChannelPanel({
       const task = await claimMessageAsTask(channel.channelId, message.id);
       setTaskOverrides((prev) => {
         const next = new Map(prev);
-        next.set(message.id, { taskNumber: task.taskNumber, taskStatus: task.status });
+        next.set(message.id, {
+          taskNumber: task.taskNumber,
+          taskStatus: task.status,
+          taskAssigneeName: task.assigneeName ?? null,
+        });
         return next;
       });
     } catch (err) {
