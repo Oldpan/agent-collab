@@ -41,4 +41,29 @@ describe('message formatting', () => {
     expect(text).toContain('之前我们聊过 conda develop 环境。');
     expect(text).not.toContain('[seq=12');
   });
+
+  it('多条消息之间应有清晰分隔', () => {
+    const text = formatMessages([
+      {
+        message_id: '11111111-1111-2222-3333-444444444444',
+        target: '#default',
+        timestamp: '2026-03-26T15:28:20.626Z',
+        sender_name: 'User',
+        sender_type: 'user',
+        content: 'first',
+      },
+      {
+        message_id: '22222222-1111-2222-3333-444444444444',
+        target: '#default',
+        timestamp: '2026-03-26T15:29:20.626Z',
+        sender_name: 'Bob',
+        sender_type: 'agent',
+        content: 'second',
+      },
+    ]);
+
+    expect(text).toContain('\n\n---\n\n');
+    expect(text).toContain('target: #default  msg: 11111111');
+    expect(text).toContain('sender: @Bob  sender_type: agent');
+  });
 });

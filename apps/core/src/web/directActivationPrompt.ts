@@ -19,9 +19,6 @@ export function buildDirectActivationPrompt(params: DirectActivationPromptParams
   const replyTarget = params.replyTarget ?? `dm:@${params.senderName}`;
   const lines = [
     `[System: ${params.senderName} sent you a direct message.]`,
-    'The triggering message is included below. Do not call check_messages just to retrieve this same message again.',
-    'Prefer mcp__chat__send_message(content="...") with no target to reply on this direct conversation.',
-    `If you need more context, call read_history(channel="${replyTarget}") for this direct conversation.`,
     '',
     '[Current conversation target]',
     `reply_target: ${replyTarget}`,

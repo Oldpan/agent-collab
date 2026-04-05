@@ -32,6 +32,7 @@ export function buildReplayContextFromRecentRuns(
   }>;
 
   const chronological = runs.slice().reverse();
+  const assistantLabel = getSessionAssistantLabel(db, params.sessionKey) ?? 'Assistant';
 
   const blocks: string[] = [];
 
@@ -62,8 +63,11 @@ export function buildReplayContextFromRecentRuns(
           ? `[stop_reason] ${run.stopReason}`
           : '';
 
-    blocks.push(`User: ${run.promptText}`);
-    if (assistantLine) blocks.push(`Assistant: ${assistantLine}`);
+    const normalizedUserText = normalizeReplayUserText(run.promptText);
+    if (normalizedUserText) {
+      blocks.push(`User: ${normalizedUserText}`);
+    }
+    if (assistantLine) blocks.push(`${assistantLabel}: ${assistantLine}`);
   }
 
   const raw = blocks.join('\n');
@@ -75,4 +79,32 @@ export function buildReplayContextFromRecentRuns(
 
   if (full.length <= params.maxChars) return full;
   return header + raw.slice(Math.max(0, raw.length - params.maxChars));
+}
+
+function stripReplyContract(promptText: string): string {
+  if (!promptText.startsWith('[Reply contract]')) return promptText;
+  const splitIndex = promptText.indexOf('\n\n');
+  return splitIndex >= 0 ? promptText.slice(splitIndex + 2) : promptText;
+}
+
+function extractTriggeredMessageBody(promptText: string): string | null {
+  const marker = '[Triggered message body]\n';
+  const start = promptText.indexOf(marker);
+  if (start < 0) return null;
+  return promptText.slice(start + marker.length).trim() || null;
+}
+
+function normalizeReplayUserText(promptText: string): string {
+  const stripped = stripReplyContract(promptText).trim();
+  return extractTriggeredMessageBody(stripped) ?? stripped;
+}
+
+function getSessionAssistantLabel(db: Db, sessionKey: string): string | null {
+  const row = db.prepare(
+    'SELECT system_prompt_text as systemPromptText FROM sessions WHERE session_key = ?',
+  ).get(sessionKey) as { systemPromptText: string | null } | undefined;
+  const promptText = row?.systemPromptText?.trim();
+  if (!promptText) return null;
+  const match = /You are "([^"]+)"/.exec(promptText);
+  return match?.[1]?.trim() || null;
 }

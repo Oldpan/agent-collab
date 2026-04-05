@@ -21,49 +21,63 @@ export type HistoryMessageItem = {
   taskAssigneeName?: string | null;
 };
 
-function formatMetadataBlock(lines: string[]): string {
-  return ['[Message metadata]', ...lines].join('\n');
+const MESSAGE_SEPARATOR = '\n\n---\n\n';
+
+function formatMetadataBlock(lines: Array<string | null | undefined>): string {
+  return ['[Message metadata]', ...lines.filter(Boolean)].join('\n');
 }
 
 function formatBodyBlock(label: string, body: string): string {
   return `${label}\n${body}`;
 }
 
+function joinParts(parts: Array<string | null | undefined>): string {
+  return parts.filter((part) => Boolean(part)).join('  ');
+}
+
 export function formatMessages(messages: IncomingMessageItem[]): string {
   return messages
     .map((m) => {
-      const taskLines = m.task_number != null
-        ? [`task: #${m.task_number} status=${m.task_status ?? 'todo'}${m.task_assignee_name ? ` assignee=@${m.task_assignee_name}` : ''}`]
-        : [];
+      const taskLine = m.task_number != null
+        ? `task: #${m.task_number} [${m.task_status ?? 'todo'}]${m.task_assignee_name ? ` @${m.task_assignee_name}` : ''}`
+        : null;
       const metadata = formatMetadataBlock([
-        `target: ${m.target}`,
-        `msg: ${m.message_id.slice(0, 8)}`,
-        `time: ${m.timestamp}`,
-        `sender: @${m.sender_name}`,
-        ...(m.sender_type === 'agent' ? ['sender_type: agent'] : []),
-        ...taskLines,
+        joinParts([
+          `target: ${m.target}`,
+          `msg: ${m.message_id.slice(0, 8)}`,
+        ]),
+        joinParts([
+          `time: ${m.timestamp}`,
+          `sender: @${m.sender_name}`,
+          m.sender_type === 'agent' ? 'sender_type: agent' : null,
+        ]),
+        taskLine,
       ]);
       const body = formatBodyBlock('[Message body]', m.content);
       return `${metadata}\n\n${body}`;
     })
-    .join('\n\n---\n\n');
+    .join(MESSAGE_SEPARATOR);
 }
 
 export function formatHistoryMessages(messages: HistoryMessageItem[]): string {
   return messages
     .map((m) => {
-      const taskLines = m.taskNumber != null
-        ? [`task: #${m.taskNumber} status=${m.taskStatus ?? 'todo'}${m.taskAssigneeName ? ` assignee=@${m.taskAssigneeName}` : ''}`]
-        : [];
+      const taskLine = m.taskNumber != null
+        ? `task: #${m.taskNumber} [${m.taskStatus ?? 'todo'}]${m.taskAssigneeName ? ` @${m.taskAssigneeName}` : ''}`
+        : null;
       const metadata = formatMetadataBlock([
-        `seq: ${m.seq}`,
-        `time: ${m.createdAt}`,
-        `sender: @${m.senderName}`,
-        ...(m.senderType === 'agent' ? ['sender_type: agent'] : []),
-        ...taskLines,
+        joinParts([
+          `seq: ${m.seq}`,
+          `time: ${m.createdAt}`,
+        ]),
+        joinParts([
+          `sender: @${m.senderName}`,
+          m.senderType === 'agent' ? 'sender_type: agent' : null,
+        ]),
+        taskLine,
       ]);
       const body = formatBodyBlock('[Message body]', m.content);
       return `${metadata}\n\n${body}`;
     })
-    .join('\n\n---\n\n');
+    .join(MESSAGE_SEPARATOR);
 }

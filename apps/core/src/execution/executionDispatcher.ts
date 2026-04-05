@@ -435,6 +435,8 @@ export class ExecutionDispatcher {
   private buildConversationReplayText(conversationId: string, sessionKey: string, excludeRunId: string): string {
     if (!this.config.contextReplayEnabled || this.config.contextReplayRuns <= 0) return '';
 
+    const conversationAgentName = getConversationAgentName(this.db, conversationId);
+
     const resetRow = this.db.prepare(
       `SELECT history_reset_at as historyResetAt
        FROM conversations
@@ -463,12 +465,12 @@ export class ExecutionDispatcher {
 
     for (const run of chronological) {
       const visibleAgentMessages = this.db.prepare(
-        `SELECT content, message_kind as messageKind
+        `SELECT content, message_kind as messageKind, sender_name as senderName
          FROM channel_messages
          WHERE run_id = ?
            AND sender_type = 'agent'
          ORDER BY created_at ASC, seq ASC`,
-      ).all(run.runId) as Array<{ content: string; messageKind: string | null }>;
+      ).all(run.runId) as Array<{ content: string; messageKind: string | null; senderName: string | null }>;
 
       let assistantLine = '';
       const finalMessage = [...visibleAgentMessages].reverse().find((row) => row.messageKind === 'final');
@@ -508,8 +510,17 @@ export class ExecutionDispatcher {
               : '';
       }
 
-      blocks.push(`User: ${run.promptText}`);
-      if (assistantLine) blocks.push(`Assistant: ${assistantLine}`);
+      const normalizedUserText = normalizeReplayUserText(run.promptText);
+      if (normalizedUserText) {
+        blocks.push(`User: ${normalizedUserText}`);
+      }
+      if (assistantLine) {
+        const assistantLabel = finalMessage?.senderName?.trim()
+          || lastVisibleMessage?.senderName?.trim()
+          || conversationAgentName
+          || 'Assistant';
+        blocks.push(`${assistantLabel}: ${assistantLine}`);
+      }
     }
 
     const raw = blocks.join('\n');
@@ -620,6 +631,34 @@ function parseEnvVars(raw: string | null): Record<string, string> | undefined {
     // ignore
   }
   return undefined;
+}
+
+function stripReplyContract(promptText: string): string {
+  if (!promptText.startsWith('[Reply contract]')) return promptText;
+  const splitIndex = promptText.indexOf('\n\n');
+  return splitIndex >= 0 ? promptText.slice(splitIndex + 2) : promptText;
+}
+
+function extractTriggeredMessageBody(promptText: string): string | null {
+  const marker = '[Triggered message body]\n';
+  const start = promptText.indexOf(marker);
+  if (start < 0) return null;
+  return promptText.slice(start + marker.length).trim() || null;
+}
+
+function normalizeReplayUserText(promptText: string): string {
+  const stripped = stripReplyContract(promptText).trim();
+  return extractTriggeredMessageBody(stripped) ?? stripped;
+}
+
+function getConversationAgentName(db: Db, conversationId: string): string | null {
+  const row = db.prepare(
+    `SELECT a.name as agentName
+     FROM conversations c
+     LEFT JOIN agents a ON a.agent_id = c.agent_id
+     WHERE c.id = ?`,
+  ).get(conversationId) as { agentName: string | null } | undefined;
+  return row?.agentName?.trim() || null;
 }
 
 function prependTurnReplyContract(promptText: string): string {

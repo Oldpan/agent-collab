@@ -254,8 +254,6 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.prompt).toContain('[Triggered message body]');
     expect(dispatch.prompt).toContain('你好，帮我总结一下刚才的结论');
     expect(dispatch.prompt).toContain('Reply only via mcp__chat__send_message(...)');
-    expect(dispatch.prompt).toContain('Prefer mcp__chat__send_message(content="...") with no target to reply on this direct conversation.');
-    expect(dispatch.prompt).toContain('If you need more context, call read_history(channel="dm:@oldpan") for this direct conversation.');
     expect(dispatch.prompt).not.toContain('This execution is bound to reply_target=');
     expect(dispatch.prompt).not.toContain('[Triggered message metadata]\ntarget: dm:@oldpan');
     expect(dispatch.prompt).not.toContain('[Recent messages on this exact target]');
@@ -364,6 +362,17 @@ describe('ExecutionDispatcher', () => {
   });
 
   it('resume replay 应优先使用真实 agent 回复，不应回放空响应 delta 噪音', async () => {
+    manager.close();
+    db.close();
+    db = createTestDb();
+    sent.length = 0;
+    manager = new ConversationManager({
+      db,
+      config: createTestConfig({ contextReplayEnabled: true, contextReplayRuns: 16 }),
+      nodeRegistry: fakeRegistry as any,
+    });
+    manager.start();
+
     const agent = manager.createAgent({
       name: 'Replay Bob',
       agentType: 'claude_acp',
@@ -414,7 +423,82 @@ describe('ExecutionDispatcher', () => {
     if (!secondDispatch || secondDispatch.type !== 'run.dispatch') throw new Error('missing second dispatch');
     expect(secondDispatch.dispatchMode).toBe('resume');
     expect(secondDispatch.contextText ?? '').toContain('真实可见回复');
+    expect(secondDispatch.contextText ?? '').toContain('Replay Bob: 真实可见回复');
+    expect(secondDispatch.contextText ?? '').not.toContain('Assistant: 真实可见回复');
     expect(secondDispatch.contextText ?? '').not.toContain('Empty response:');
+  });
+
+  it('resume replay 应去掉旧 activation envelope，仅回放触发正文', async () => {
+    manager.close();
+    db.close();
+    db = createTestDb();
+    sent.length = 0;
+    manager = new ConversationManager({
+      db,
+      config: createTestConfig({ contextReplayEnabled: true, contextReplayRuns: 16 }),
+      nodeRegistry: fakeRegistry as any,
+    });
+    manager.start();
+
+    const agent = manager.createAgent({
+      name: 'Envelope Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/envelope-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    const sessionRow = db.prepare(
+      'SELECT session_key as sessionKey FROM conversations WHERE id = ?',
+    ).get(conv.id) as { sessionKey: string };
+
+    const replayRunId = randomUUID();
+    const replayPrompt = [
+      '[System: Your collaborative thread in #default received a reply from oldpan.]',
+      '',
+      '[Current conversation target]',
+      'reply_target: #default:abcd1234',
+      '',
+      '[Triggered message metadata]',
+      'target: #default:abcd1234',
+      'sender: @oldpan',
+      '',
+      '[Triggered message body]',
+      '再看下机器的内存状态',
+    ].join('\n');
+    db.prepare(
+      `INSERT INTO runs(run_id, session_key, prompt_text, started_at, ended_at, stop_reason)
+       VALUES(?, ?, ?, ?, ?, ?)`,
+    ).run(replayRunId, sessionRow.sessionKey, replayPrompt, 1000, 1100, 'end_turn');
+
+    const dmChannelId = `dm:${agent.agentId}`;
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      randomUUID(),
+      dmChannelId,
+      agent.agentId,
+      agent.name,
+      'dm:@oldpan',
+      '收到，继续检查中',
+      allocateNextChannelMessageSeq(db, dmChannelId),
+      Date.now(),
+      replayRunId,
+      'final',
+    );
+
+    await manager.dispatchToNode(conv.id, '继续');
+
+    const dispatch = sent[0]?.msg;
+    if (!dispatch || dispatch.type !== 'run.dispatch') throw new Error('missing dispatch');
+    expect(dispatch.dispatchMode).toBe('resume');
+    expect(dispatch.contextText ?? '').toContain('User: 再看下机器的内存状态');
+    expect(dispatch.contextText ?? '').toContain('Envelope Bob: 收到，继续检查中');
+    expect(dispatch.contextText ?? '').not.toContain('[Current conversation target]');
+    expect(dispatch.contextText ?? '').not.toContain('[Triggered message metadata]');
+    expect(dispatch.contextText ?? '').not.toContain('[Triggered message body]');
   });
 
   it('cancelConversationRun 应发送 run.cancel 到节点', () => {

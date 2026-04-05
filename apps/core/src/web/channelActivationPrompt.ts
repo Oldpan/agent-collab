@@ -1,6 +1,8 @@
 import type { ActivationContextMessage } from './activationContext.js';
 import type { TargetParticipant } from './targetParticipants.js';
 
+const MESSAGE_SEPARATOR = '\n\n---\n\n';
+
 type ChannelActivationPromptParams = {
   channelName: string;
   target: string;
@@ -40,10 +42,6 @@ export function buildChannelActivationPrompt(params: ChannelActivationPromptPara
   const replyTarget = params.replyTarget ?? params.target;
   const lines = [
     `[System: ${reasonText}]`,
-    'The triggering message is included below. Do not call check_messages just to retrieve this same message again.',
-    'Prefer mcp__chat__send_message(content="...") with no target to reply on this exact target.',
-    `If you need more context, call read_history(channel="${params.target}") for this exact conversation target.`,
-    'When referring to another agent by name in normal prose, do not prefix the name with @ unless you intentionally want to notify them.',
     '',
     '[Current conversation target]',
     `reply_target: ${replyTarget}`,
@@ -107,7 +105,7 @@ export function buildExactTargetHistoryContextText(params: ExactTargetHistoryCon
 
   if (params.recentMessages && params.recentMessages.length > 0) {
     parts.push(
-      `[Recent messages on this exact target]\n${params.recentMessages.map(formatPromptMessage).join('\n\n')}`,
+      `[Recent messages on this exact target]\n${params.recentMessages.map(formatPromptMessage).join(MESSAGE_SEPARATOR)}`,
     );
   }
 
@@ -129,14 +127,20 @@ export function buildExactTargetHistoryContextText(params: ExactTargetHistoryCon
 }
 
 function formatPromptMessage(message: ActivationContextMessage): string {
-  const senderTypeLine = message.senderType === 'agent' ? '\nsender_type: agent' : '';
-  return [
-    '[Message metadata]',
+  const firstLine = [
     `target: ${message.target}`,
     `msg: ${message.messageId.slice(0, 8)}`,
     `seq: ${message.seq}`,
+  ].join('  ');
+  const secondLineParts = [
     `time: ${new Date(message.createdAt).toISOString()}`,
-    `sender: @${message.senderName}${senderTypeLine}`,
+    `sender: @${message.senderName}`,
+  ];
+  if (message.senderType === 'agent') secondLineParts.push('sender_type: agent');
+  return [
+    '[Message metadata]',
+    firstLine,
+    secondLineParts.join('  '),
     '',
     '[Message body]',
     message.content,
