@@ -298,13 +298,13 @@ server.tool(
 
 server.tool(
   'create_tasks',
-  "Create one or more new task-messages on a channel's board. Each created task gets a task root message and a default thread.",
+  "Create one or more new task-messages on a channel's board. Each task requires a title and a brief that states the goal and done criteria. Each created task gets a task root message and a default thread.",
   {
     channel: z.string().describe("The channel to create tasks in — e.g. '#general'"),
     tasks: z
       .array(z.object({
         title: z.string().describe('Task title'),
-        description: z.string().optional().describe('Optional task description with more detail'),
+        description: z.string().trim().min(1, 'description is required').describe('Required task brief / goal / done criteria'),
       }))
       .describe('Array of tasks to create'),
   },
@@ -334,17 +334,18 @@ server.tool(
 
 server.tool(
   'claim_message',
-  `Promote one or more existing top-level messages into task-messages and claim them. Use the 8-character msg= ID from received messages or read_history. Each promoted message becomes the task root and default thread — reply in its thread with send_message(target="${'#channel:msgid'}"). If a message is already a task-message, the claim fails.`,
+  `Promote one or more existing top-level messages into task-messages and claim them. Use the 8-character msg= ID from received messages or read_history. Each promoted message becomes the task root and default thread — reply in its thread with send_message(target="${'#channel:msgid'}"). If a message is already a task-message, the claim fails. The task brief is required; use separate calls when promoted messages need different briefs.`,
   {
     channel: z.string().describe("The channel — e.g. '#engineering'"),
     message_ids: z.array(z.string()).describe("8-char message IDs (the msg= value from check_messages or read_history, e.g. ['a1b2c3d4'])"),
     title: z.string().optional().describe('Optional task title override. If omitted, uses the message content (truncated to 120 chars).'),
+    description: z.string().trim().min(1, 'description is required').describe('Required task brief / goal / done criteria. Use one call per message when briefs differ.'),
   },
-  async ({ channel, message_ids, title }) => {
+  async ({ channel, message_ids, title, description }) => {
     try {
       const { ok, data } = await apiFetch('/tasks/claim-message', {
         method: 'POST',
-        body: { channel, message_ids, title },
+        body: { channel, message_ids, title, description },
       });
       if (!ok) return toText(`Error: ${errText(data, 'claim-message failed')}`);
 
@@ -377,6 +378,31 @@ server.tool(
       const hint = threadHints ? `\n\nFollow up in each task's thread:\n${threadHints}` : '';
 
       return toText(`Claim results (${summary}):\n${lines.join('\n')}${contextSection}${hint}`);
+    } catch (err: unknown) {
+      return toText(`Error: ${(err as Error).message}`);
+    }
+  },
+);
+
+// ── update_task_details ───────────────────────────────────────────────────────
+
+server.tool(
+  'update_task_details',
+  'Update a task title and brief. Use this when the task goal, scope, or done criteria need to be clarified after creation.',
+  {
+    channel: z.string().describe("The channel — e.g. '#general'"),
+    task_number: z.number().describe('The task number to update (e.g. 3)'),
+    title: z.string().trim().min(1, 'title is required').describe('Updated task title'),
+    description: z.string().trim().min(1, 'description is required').describe('Updated task brief / goal / done criteria'),
+  },
+  async ({ channel, task_number, title, description }) => {
+    try {
+      const { ok, data } = await apiFetch('/tasks/update-details', {
+        method: 'POST',
+        body: { channel, task_number, title, description },
+      });
+      if (!ok) return toText(`Error: ${errText(data, 'update task details failed')}`);
+      return toText(`#t${task_number} details updated.`);
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }

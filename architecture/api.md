@@ -57,18 +57,24 @@ Channel 当前已经在 UI 中作为协作空间使用，包含 `Chat / Tasks / 
 | 方法 | 路径 | 说明 |
 |------|------|------|
 | `GET` | `/api/channels/:id/tasks` | 获取指定 Channel 的 task board |
-| `POST` | `/api/channels/:id/tasks` | 新建 task；会同时创建 task message |
-| `POST` | `/api/channels/:id/tasks/claim-message` | 把一条 channel 根消息提升为 task，并立即 claim 给当前用户 |
-| `POST` | `/api/channels/:id/tasks/:num/claim` | claim 指定 task |
-| `POST` | `/api/channels/:id/tasks/:num/unclaim` | 释放自己 claim 的 task |
+| `POST` | `/api/channels/:id/tasks` | 新建 task；必须提供 `title + description`，并同时创建 dedicated task message |
+| `PATCH` | `/api/channels/:id/tasks/:num` | 更新 task 的 `title / description` |
+| `POST` | `/api/channels/:id/tasks/claim-message` | 把一条 channel 根消息提升为 task；必须提供 `description`，并立即 claim 给当前用户 |
+| `POST` | `/api/channels/:id/tasks/:num/claim` | claim 指定 task；可传 `agentId` 直接指派给 channel 内 agent |
+| `POST` | `/api/channels/:id/tasks/:num/unclaim` | 释放当前用户 claim 的 task，或 release 一个 agent-owned task |
 | `PATCH` | `/api/channels/:id/tasks/:num/status` | 更新 task 状态 |
 | `DELETE` | `/api/channels/:id/tasks/:num` | 删除 task |
 | `POST` | `/api/channels/:id/clear-chat` | 清空 channel 聊天历史；同时清空该 channel 的 task board |
 
 补充说明：
 
+- 新 task 与新 promote 的 task 都必须带 task brief，统一存放在 `tasks.description`
+- `PATCH /api/channels/:id/tasks/:num` 用于补全或修订 task brief
 - task 状态流转为 `todo -> in_progress -> in_review -> done`
 - `claim-message` 会把任务直接置为 `in_progress`
+- `claim-message` 只允许提升 channel 主时间线里的根消息，不支持 thread reply
+- `POST /api/channels/:id/tasks/:num/claim` 若带 `agentId`，会把 task assignee 设为该 agent，并自动在 task thread 中追加 kickoff prompt
+- agent 指派要求 task 已有 brief 且有 dedicated task thread
 - 除 `in_review -> done` 外，其它状态更新都要求当前用户就是 assignee
 - `clear-chat` 不再保留 tasks，避免留下失去 task message / thread 的悬空任务
 

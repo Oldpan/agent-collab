@@ -227,6 +227,239 @@ export async function startServer(params: {
     || (!!task.claimedByName && task.claimedByName !== user.username)
   );
 
+  const normalizeRequiredText = (value: unknown): string | null => {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  };
+
+  const deriveTaskTitle = (
+    explicitTitle: unknown,
+    fallbackContent?: string | null,
+  ): string | null => {
+    const normalizedTitle = normalizeRequiredText(explicitTitle);
+    if (normalizedTitle) return normalizedTitle;
+    const fallback = normalizeRequiredText(fallbackContent);
+    return fallback ? fallback.slice(0, 120) : null;
+  };
+
+  const shouldSyncTaskRootMessageContent = (
+    task: { messageId: string | null; taskCreatedAt: number; messageCreatedAt: number | null },
+  ): boolean => !!task.messageId && task.messageCreatedAt === task.taskCreatedAt;
+
+  const buildAgentTaskKickoffPrompt = (params: {
+    agentName: string;
+    taskNumber: number;
+    title: string;
+    description: string;
+  }): string => [
+    `@${params.agentName} you have been assigned task #${params.taskNumber}: ${params.title}`,
+    "",
+    "Task brief / goal / done criteria:",
+    params.description,
+    "",
+    "Please start working from this thread, post progress updates here, and move the task to in_review when the implementation is ready.",
+  ].join("\n");
+
+  const postUserChannelMessage = (params: {
+    channelId: string;
+    senderName: string;
+    content: string;
+    threadRootId?: string | null;
+    attachmentIds?: string[];
+  }): { messageId: string; seq: number } => {
+    const channel = conversationManager.getChannel(params.channelId);
+    if (!channel) throw new Error(`Channel not found: ${params.channelId}`);
+
+    const threadRootId = params.threadRootId ?? null;
+    const now = Date.now();
+    const messageId = randomUUID();
+    const seq = allocateNextChannelMessageSeq(db, params.channelId);
+    const target = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
+    const attachmentIdsJson = Array.isArray(params.attachmentIds) && params.attachmentIds.length > 0
+      ? JSON.stringify(params.attachmentIds) : null;
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, attachment_ids)
+       VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, NULL, ?, ?)`,
+    ).run(messageId, params.channelId, params.senderName, target, params.content, seq, now, threadRootId, attachmentIdsJson);
+    const event: import('@agent-collab/protocol').ServerEvent = {
+      type: 'channel.message',
+      message: {
+        id: messageId, senderName: params.senderName, senderType: 'user', content: params.content,
+        createdAt: new Date(now).toISOString(),
+        seq,
+        ...(threadRootId ? { threadRootId } : {}),
+      },
+    };
+    broadcastToChannel(params.channelId, event);
+
+    const channelAgents = conversationManager.listAgents(params.channelId);
+    const mentionedAgents = findMentionedAgents(params.content, channelAgents);
+    const notifiedAgentIds = new Set<string>();
+    const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
+    const pendingNotifications = new Map<string, { reason: 'mention' | 'thread_reply' | 'channel_activity'; role: 'owner' | 'participant' }>();
+    const reasonPriority = (reason: 'mention' | 'thread_reply' | 'channel_activity'): number => (
+      reason === 'mention' ? 3 : reason === 'thread_reply' ? 2 : 1
+    );
+    const rolePriority = (role: 'owner' | 'participant'): number => (
+      role === 'owner' ? 2 : 1
+    );
+
+    const queueAgentNotification = (
+      agentId: string,
+      reason: 'mention' | 'thread_reply' | 'channel_activity',
+      role: 'owner' | 'participant',
+    ): void => {
+      const existing = pendingNotifications.get(agentId);
+      if (!existing) {
+        pendingNotifications.set(agentId, { reason, role });
+        return;
+      }
+      pendingNotifications.set(agentId, {
+        reason: reasonPriority(reason) > reasonPriority(existing.reason) ? reason : existing.reason,
+        role: rolePriority(role) > rolePriority(existing.role) ? role : existing.role,
+      });
+    };
+
+    const flushAgentNotifications = (): void => {
+      for (const [agentId, { role }] of pendingNotifications.entries()) {
+        upsertTargetParticipant(db, {
+          agentId,
+          channelId: params.channelId,
+          threadRootId: threadRootId ?? null,
+          role,
+          lastActiveAt: now,
+        });
+      }
+
+      for (const [agentId, { reason }] of pendingNotifications.entries()) {
+        if (notifiedAgentIds.has(agentId)) continue;
+        const agent = conversationManager.getAgent(agentId);
+        if (!agent) continue;
+        const conv = conversationManager.openAgentChannelThread(agentId, params.channelId, threadRootId ?? null);
+        if (!conv) continue;
+
+        const activationContext = buildTargetActivationContext(db, {
+          agentId,
+          channelId: params.channelId,
+          replyTarget: conv.replyTarget ?? historyTarget,
+          triggerSeq: seq,
+          threadRootId: threadRootId ?? null,
+        });
+
+        if (reason === 'mention') {
+          broadcastToChannel(params.channelId, {
+            type: 'channel.notice',
+            notice: {
+              message: `@${agent.name} was mentioned and notified.`,
+              createdAt: new Date(now).toISOString(),
+            },
+          });
+        }
+
+        notifiedAgentIds.add(agentId);
+        conversationManager.submitPrompt(
+          conv.id,
+          buildChannelActivationPrompt({
+            channelName: channel.name,
+            target: historyTarget,
+            replyTarget: activationContext.replyTarget,
+            senderName: params.senderName,
+            content: params.content,
+            reason,
+          }),
+          {
+            recordAsUserMessage: false,
+            activationContextText: buildChannelActivationContextText({
+              target: historyTarget,
+              recentMessages: activationContext.recentMessages,
+              rootMessage: activationContext.rootMessage,
+              unreadCount: activationContext.unreadCount,
+              oldestVisibleSeq: activationContext.oldestVisibleSeq,
+              participants: activationContext.participants,
+              boundTask: activationContext.boundTask,
+              openTasks: activationContext.openTasks,
+            }) || undefined,
+            replayOverlapRecentMessages: activationContext.recentMessages,
+          },
+        ).then(() => {
+          bumpAgentMessageCheckpoint(db, agentId, params.channelId, seq, threadRootId ?? null);
+        }).catch(() => {});
+      }
+    };
+
+    const notifyAgent = (
+      agentId: string,
+      reason: 'mention' | 'thread_reply' | 'channel_activity',
+      role: 'owner' | 'participant',
+    ): void => {
+      if (notifiedAgentIds.has(agentId)) return;
+      const agent = conversationManager.getAgent(agentId);
+      if (!agent) return;
+      queueAgentNotification(agentId, reason, role);
+    };
+
+    if (threadRootId) {
+      const summary = getThreadCollaborationSummary(db, {
+        channelId: params.channelId,
+        threadRootId,
+      });
+      const participants = listRecentTargetParticipants(db, {
+        channelId: params.channelId,
+        threadRootId,
+        activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
+      });
+
+      const rootMsg = db.prepare(
+        `SELECT sender_id as senderId, sender_type as senderType
+         FROM channel_messages
+         WHERE channel_id = ? AND substr(message_id, 1, 8) = ?
+         LIMIT 1`,
+      ).get(params.channelId, threadRootId) as { senderId: string; senderType: string } | undefined;
+
+      if (summary.ownerAgentId) {
+        notifyAgent(summary.ownerAgentId, 'thread_reply', 'owner');
+      }
+
+      if (participants.length === 0 && !summary.ownerAgentId && rootMsg?.senderType === 'agent') {
+        notifyAgent(rootMsg.senderId, 'thread_reply', 'owner');
+      } else {
+        for (const participant of participants) {
+          notifyAgent(participant.agentId, 'thread_reply', participant.role);
+        }
+      }
+    }
+
+    for (const agent of mentionedAgents) {
+      notifyAgent(agent.agentId, 'mention', threadRootId ? 'participant' : 'owner');
+    }
+
+    if (!threadRootId && mentionedAgents.length === 0 && channel.collaborationMode === 'subscribed_agents') {
+      const rootParticipants = listRecentTargetParticipants(db, {
+        channelId: params.channelId,
+        threadRootId: null,
+        activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
+      });
+      const subscribedAgents = listChannelSubscriptions(db, params.channelId);
+      const agentsToWake = rootParticipants.length > 0
+        ? rootParticipants.map((participant) => ({
+            agentId: participant.agentId,
+            role: participant.role,
+          }))
+        : subscribedAgents.map((agent) => ({
+            agentId: agent.agentId,
+            role: 'participant' as const,
+          }));
+
+      for (const agent of agentsToWake) {
+        notifyAgent(agent.agentId, 'channel_activity', agent.role);
+      }
+    }
+
+    flushAgentNotifications();
+    return { messageId, seq };
+  };
+
   const canAccessConversation = (user: User, conversationId: string): boolean => {
     if (user.isAdmin) return true;
     const conv = conversationManager.getConversation(conversationId);
@@ -1276,193 +1509,13 @@ export async function startServer(params: {
       const { content, replyTo, attachmentIds } = req.body ?? {};
       const senderName = chanUser.username;
       if (!content) { reply.code(400); return { error: 'content is required' }; }
-      const threadRootId = replyTo ?? null;
-      const now = Date.now();
-      const messageId = randomUUID();
-      const seq = allocateNextChannelMessageSeq(db, req.params.id);
-      const target = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
-      const attachmentIdsJson = Array.isArray(attachmentIds) && attachmentIds.length > 0
-        ? JSON.stringify(attachmentIds) : null;
-      db.prepare(
-        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, attachment_ids)
-         VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, NULL, ?, ?)`,
-      ).run(messageId, req.params.id, senderName, target, content, seq, now, threadRootId, attachmentIdsJson);
-      const event: import('@agent-collab/protocol').ServerEvent = {
-        type: 'channel.message',
-        message: {
-          id: messageId, senderName, senderType: 'user', content,
-          createdAt: new Date(now).toISOString(),
-          seq,
-          ...(threadRootId ? { threadRootId } : {}),
-        },
-      };
-      broadcastToChannel(req.params.id, event);
-
-      const channelAgents = conversationManager.listAgents(req.params.id);
-      const mentionedAgents = findMentionedAgents(content, channelAgents);
-      const notifiedAgentIds = new Set<string>();
-      const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
-      const pendingNotifications = new Map<string, { reason: 'mention' | 'thread_reply' | 'channel_activity'; role: 'owner' | 'participant' }>();
-      const reasonPriority = (reason: 'mention' | 'thread_reply' | 'channel_activity'): number => (
-        reason === 'mention' ? 3 : reason === 'thread_reply' ? 2 : 1
-      );
-      const rolePriority = (role: 'owner' | 'participant'): number => (
-        role === 'owner' ? 2 : 1
-      );
-
-      const queueAgentNotification = (
-        agentId: string,
-        reason: 'mention' | 'thread_reply' | 'channel_activity',
-        role: 'owner' | 'participant',
-      ): void => {
-        const existing = pendingNotifications.get(agentId);
-        if (!existing) {
-          pendingNotifications.set(agentId, { reason, role });
-          return;
-        }
-        pendingNotifications.set(agentId, {
-          reason: reasonPriority(reason) > reasonPriority(existing.reason) ? reason : existing.reason,
-          role: rolePriority(role) > rolePriority(existing.role) ? role : existing.role,
-        });
-      };
-
-      const flushAgentNotifications = (): void => {
-        for (const [agentId, { role }] of pendingNotifications.entries()) {
-          upsertTargetParticipant(db, {
-            agentId,
-            channelId: req.params.id,
-            threadRootId: threadRootId ?? null,
-            role,
-            lastActiveAt: now,
-          });
-        }
-
-        for (const [agentId, { reason }] of pendingNotifications.entries()) {
-          if (notifiedAgentIds.has(agentId)) continue;
-          const agent = conversationManager.getAgent(agentId);
-          if (!agent) continue;
-          const conv = conversationManager.openAgentChannelThread(agentId, req.params.id, threadRootId ?? null);
-          if (!conv) continue;
-
-          const activationContext = buildTargetActivationContext(db, {
-            agentId,
-            channelId: req.params.id,
-            replyTarget: conv.replyTarget ?? historyTarget,
-            triggerSeq: seq,
-            threadRootId: threadRootId ?? null,
-          });
-
-          if (reason === 'mention') {
-            broadcastToChannel(req.params.id, {
-              type: 'channel.notice',
-              notice: {
-                message: `@${agent.name} was mentioned and notified.`,
-                createdAt: new Date(now).toISOString(),
-              },
-            });
-          }
-
-          notifiedAgentIds.add(agentId);
-          conversationManager.submitPrompt(
-            conv.id,
-            buildChannelActivationPrompt({
-              channelName: channel.name,
-              target: historyTarget,
-              replyTarget: activationContext.replyTarget,
-              senderName,
-              content,
-              reason,
-            }),
-            {
-              recordAsUserMessage: false,
-              activationContextText: buildChannelActivationContextText({
-                target: historyTarget,
-                recentMessages: activationContext.recentMessages,
-                rootMessage: activationContext.rootMessage,
-                unreadCount: activationContext.unreadCount,
-                oldestVisibleSeq: activationContext.oldestVisibleSeq,
-                participants: activationContext.participants,
-                boundTask: activationContext.boundTask,
-                openTasks: activationContext.openTasks,
-              }) || undefined,
-              replayOverlapRecentMessages: activationContext.recentMessages,
-            },
-          ).then(() => {
-            bumpAgentMessageCheckpoint(db, agentId, req.params.id, seq, threadRootId ?? null);
-          }).catch(() => {});
-        }
-      };
-
-      const notifyAgent = (
-        agentId: string,
-        reason: 'mention' | 'thread_reply' | 'channel_activity',
-        role: 'owner' | 'participant',
-      ): void => {
-        if (notifiedAgentIds.has(agentId)) return;
-        const agent = conversationManager.getAgent(agentId);
-        if (!agent) return;
-        queueAgentNotification(agentId, reason, role);
-      };
-
-      // Thread replies wake current thread participants; fall back to the root owner if needed.
-      if (threadRootId) {
-        const summary = getThreadCollaborationSummary(db, {
-          channelId: req.params.id,
-          threadRootId,
-        });
-        const participants = listRecentTargetParticipants(db, {
-          channelId: req.params.id,
-          threadRootId,
-          activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
-        });
-
-        const rootMsg = db.prepare(
-          `SELECT sender_id as senderId, sender_type as senderType
-           FROM channel_messages
-           WHERE channel_id = ? AND substr(message_id, 1, 8) = ?
-           LIMIT 1`,
-        ).get(req.params.id, threadRootId) as { senderId: string; senderType: string } | undefined;
-
-        if (summary.ownerAgentId) {
-          notifyAgent(summary.ownerAgentId, 'thread_reply', 'owner');
-        }
-
-        if (participants.length === 0 && !summary.ownerAgentId && rootMsg?.senderType === 'agent') {
-          notifyAgent(rootMsg.senderId, 'thread_reply', 'owner');
-        } else {
-          for (const participant of participants) {
-            notifyAgent(participant.agentId, 'thread_reply', participant.role);
-          }
-        }
-      }
-
-      for (const agent of mentionedAgents) {
-        notifyAgent(agent.agentId, 'mention', threadRootId ? 'participant' : 'owner');
-      }
-
-      if (!threadRootId && mentionedAgents.length === 0 && channel.collaborationMode === 'subscribed_agents') {
-        const rootParticipants = listRecentTargetParticipants(db, {
-          channelId: req.params.id,
-          threadRootId: null,
-          activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
-        });
-        const subscribedAgents = listChannelSubscriptions(db, req.params.id);
-        const agentsToWake = rootParticipants.length > 0
-          ? rootParticipants.map((participant) => ({
-              agentId: participant.agentId,
-              role: participant.role,
-            }))
-          : subscribedAgents.map((agent) => ({
-              agentId: agent.agentId,
-              role: 'participant' as const,
-            }));
-
-        for (const agent of agentsToWake) {
-          notifyAgent(agent.agentId, 'channel_activity', agent.role);
-        }
-      }
-
-      flushAgentNotifications();
+      const { messageId, seq } = postUserChannelMessage({
+        channelId: req.params.id,
+        senderName,
+        content,
+        threadRootId: replyTo ?? null,
+        attachmentIds,
+      });
 
       reply.code(201);
       return { messageId, seq };
@@ -1601,7 +1654,10 @@ export async function startServer(params: {
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const { title, description } = req.body ?? {};
-      if (!title) { reply.code(400); return { error: 'title is required' }; }
+      const normalizedTitle = normalizeRequiredText(title);
+      if (!normalizedTitle) { reply.code(400); return { error: 'title is required' }; }
+      const normalizedDescription = normalizeRequiredText(description);
+      if (!normalizedDescription) { reply.code(400); return { error: 'description is required' }; }
       const now = Date.now();
       const taskId = randomUUID();
       const messageId = randomUUID();
@@ -1616,12 +1672,12 @@ export async function startServer(params: {
         db.prepare(
           `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
            VALUES(?, ?, 'system', 'system', 'system', ?, ?, ?, ?, NULL, NULL, 'task')`,
-        ).run(messageId, req.params.id, target, title, seq, now);
+        ).run(messageId, req.params.id, target, normalizedTitle, seq, now);
 
         db.prepare(
           `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, created_at, updated_at)
            VALUES(?, ?, ?, ?, ?, 'todo', ?, ?, ?)`,
-        ).run(taskId, req.params.id, taskNumber, title, description ?? null, messageId, now, now);
+        ).run(taskId, req.params.id, taskNumber, normalizedTitle, normalizedDescription, messageId, now, now);
       })();
 
       const shortId = messageId.slice(0, 8);
@@ -1629,7 +1685,7 @@ export async function startServer(params: {
       broadcastToChannel(req.params.id, {
         type: 'channel.message',
         message: {
-          id: messageId, senderName: 'system', senderType: 'system', content: title,
+          id: messageId, senderName: 'system', senderType: 'system', content: normalizedTitle,
           createdAt: new Date(now).toISOString(), seq,
           taskNumber, taskStatus: 'todo', taskAssigneeName: null,
         },
@@ -1637,20 +1693,22 @@ export async function startServer(params: {
 
       reply.code(201);
       broadcastChannelTasksChanged(req.params.id);
-      return { taskId, channelId: req.params.id, taskNumber, title, description, status: 'todo', assigneeId: null, assigneeName: null, messageId, linkedThreadId: shortId, linkedThreadShortId: shortId, createdAt: now, updatedAt: now };
+      return { taskId, channelId: req.params.id, taskNumber, title: normalizedTitle, description: normalizedDescription, status: 'todo', assigneeId: null, assigneeName: null, messageId, linkedThreadId: shortId, linkedThreadShortId: shortId, createdAt: now, updatedAt: now };
     },
   );
 
   // POST /api/channels/:id/tasks/claim-message — promote a message to a task
-  app.post<{ Params: { id: string }; Body: { messageId: string; title?: string } }>(
+  app.post<{ Params: { id: string }; Body: { messageId: string; title?: string; description?: string } }>(
     '/api/channels/:id/tasks/claim-message',
     async (req, reply) => {
       const chanUser = requireChannelAccess(req, reply, req.params.id);
       if (!chanUser) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
-      const { messageId, title } = req.body ?? {};
+      const { messageId, title, description } = req.body ?? {};
       if (!messageId) { reply.code(400); return { error: 'messageId is required' }; }
+      const normalizedDescription = normalizeRequiredText(description);
+      if (!normalizedDescription) { reply.code(400); return { error: 'description is required' }; }
       // Check message exists and belongs to this channel
       const msg = db.prepare(
         `SELECT message_id, content, thread_root_id FROM channel_messages WHERE message_id LIKE ? AND channel_id = ?`,
@@ -1663,14 +1721,15 @@ export async function startServer(params: {
       const now = Date.now();
       const taskId = randomUUID();
       let taskNumber = 0;
-      const taskTitle = title?.trim() || msg.content.slice(0, 120);
+      const taskTitle = deriveTaskTitle(title, msg.content);
+      if (!taskTitle) { reply.code(400); return { error: 'title is required' }; }
       db.transaction(() => {
         taskNumber = allocateNextTaskNumber(db, req.params.id);
         db.prepare(
-          `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id,
+          `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
                              claimed_by_agent_id, claimed_by_name, created_at, updated_at)
-           VALUES(?, ?, ?, ?, 'in_progress', ?, NULL, ?, ?, ?)`,
-        ).run(taskId, req.params.id, taskNumber, taskTitle, msg.message_id, chanUser.username, now, now);
+           VALUES(?, ?, ?, ?, ?, 'in_progress', ?, NULL, ?, ?, ?)`,
+        ).run(taskId, req.params.id, taskNumber, taskTitle, normalizedDescription, msg.message_id, chanUser.username, now, now);
         db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.message_id);
         syncTaskThreadOwner(db, {
           taskId,
@@ -1687,8 +1746,78 @@ export async function startServer(params: {
     },
   );
 
+  // PATCH /api/channels/:id/tasks/:num — update task title/brief
+  app.patch<{ Params: { id: string; num: string }; Body: { title: string; description: string } }>(
+    '/api/channels/:id/tasks/:num',
+    async (req, reply) => {
+      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
+      const channel = conversationManager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const taskNumber = Number(req.params.num);
+      if (!Number.isFinite(taskNumber)) {
+        reply.code(400);
+        return { error: 'Invalid task number' };
+      }
+
+      const title = normalizeRequiredText(req.body?.title);
+      if (!title) {
+        reply.code(400);
+        return { error: 'title is required' };
+      }
+      const description = normalizeRequiredText(req.body?.description);
+      if (!description) {
+        reply.code(400);
+        return { error: 'description is required' };
+      }
+
+      const current = db.prepare(
+        `SELECT t.task_id as taskId,
+                t.message_id as messageId,
+                t.created_at as taskCreatedAt,
+                cm.created_at as messageCreatedAt
+         FROM tasks t
+         LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
+         WHERE t.channel_id = ? AND t.task_number = ?`,
+      ).get(req.params.id, taskNumber) as {
+        taskId: string;
+        messageId: string | null;
+        taskCreatedAt: number;
+        messageCreatedAt: number | null;
+      } | undefined;
+      if (!current) {
+        reply.code(404);
+        return { error: 'Task not found' };
+      }
+
+      const now = Date.now();
+      db.transaction(() => {
+        db.prepare(
+          `UPDATE tasks
+           SET title = ?, description = ?, updated_at = ?
+           WHERE task_id = ?`,
+        ).run(title, description, now, current.taskId);
+
+        // Dedicated task-messages are created in the same transaction timestamp as the task itself.
+        // Promoted messages predate the task and should keep their original chat content.
+        if (shouldSyncTaskRootMessageContent(current)) {
+          db.prepare(
+            `UPDATE channel_messages
+             SET content = ?
+             WHERE message_id = ?`,
+          ).run(title, current.messageId);
+        }
+      })();
+
+      broadcastChannelTasksChanged(req.params.id);
+      return getChannelTaskByNumber(db, {
+        channelId: req.params.id,
+        taskNumber,
+      });
+    },
+  );
+
   // POST /api/channels/:id/tasks/:num/claim
-  app.post<{ Params: { id: string; num: string } }>(
+  app.post<{ Params: { id: string; num: string }; Body: { agentId?: string } }>(
     '/api/channels/:id/tasks/:num/claim',
     async (req, reply) => {
       const chanUser = requireChannelAccess(req, reply, req.params.id);
@@ -1703,6 +1832,9 @@ export async function startServer(params: {
 
       const current = db.prepare(
         `SELECT task_id as taskId,
+                title,
+                description,
+                message_id as messageId,
                 status as currentStatus,
                 claimed_by_agent_id as claimedByAgentId,
                 claimed_by_name as claimedByName
@@ -1710,6 +1842,9 @@ export async function startServer(params: {
          WHERE channel_id = ? AND task_number = ?`,
       ).get(req.params.id, taskNumber) as {
         taskId: string;
+        title: string;
+        description: string | null;
+        messageId: string | null;
         currentStatus: 'todo' | 'in_progress' | 'in_review' | 'done';
         claimedByAgentId: string | null;
         claimedByName: string | null;
@@ -1722,25 +1857,81 @@ export async function startServer(params: {
         reply.code(409);
         return { error: 'Task is already done' };
       }
-      if (isTaskClaimedByOtherActor(current, chanUser)) {
-        reply.code(409);
-        return { error: 'Task is already claimed' };
-      }
+      const requestedAgentId = typeof req.body?.agentId === 'string' && req.body.agentId.trim()
+        ? req.body.agentId.trim()
+        : null;
 
       const now = Date.now();
       const nextStatus = current.currentStatus === 'todo' ? 'in_progress' : current.currentStatus;
-      db.transaction(() => {
-        db.prepare(
-          `UPDATE tasks
-           SET claimed_by_agent_id = NULL, claimed_by_name = ?, status = ?, updated_at = ?
-           WHERE task_id = ?`,
-        ).run(chanUser.username, nextStatus, now, current.taskId);
-        syncTaskThreadOwner(db, {
-          taskId: current.taskId,
-          agentId: null,
-          lastActiveAt: now,
+      if (requestedAgentId) {
+        const agent = conversationManager.getAgent(requestedAgentId);
+        if (!agent) {
+          reply.code(404);
+          return { error: 'Agent not found' };
+        }
+        const channelAgentIds = new Set(conversationManager.listAgents(req.params.id).map((item) => item.agentId));
+        if (!channelAgentIds.has(requestedAgentId)) {
+          reply.code(400);
+          return { error: 'Agent is not a member of this channel' };
+        }
+        if (!current.messageId) {
+          reply.code(409);
+          return { error: 'Task has no task thread to notify' };
+        }
+        const taskDescription = normalizeRequiredText(current.description);
+        if (!taskDescription) {
+          reply.code(409);
+          return { error: 'Task brief is required before assigning to an agent' };
+        }
+        if (!current.claimedByAgentId && current.claimedByName && current.claimedByName !== chanUser.username) {
+          reply.code(409);
+          return { error: 'Task is already claimed by another user' };
+        }
+
+        db.transaction(() => {
+          db.prepare(
+            `UPDATE tasks
+             SET claimed_by_agent_id = ?, claimed_by_name = ?, status = ?, updated_at = ?
+             WHERE task_id = ?`,
+          ).run(requestedAgentId, agent.name, nextStatus, now, current.taskId);
+          syncTaskThreadOwner(db, {
+            taskId: current.taskId,
+            agentId: requestedAgentId,
+            lastActiveAt: now,
+          });
+        })();
+
+        const threadRootId = current.messageId.slice(0, 8);
+        postUserChannelMessage({
+          channelId: req.params.id,
+          senderName: chanUser.username,
+          threadRootId,
+          content: buildAgentTaskKickoffPrompt({
+            agentName: agent.name,
+            taskNumber,
+            title: current.title,
+            description: taskDescription,
+          }),
         });
-      })();
+      } else {
+        if (isTaskClaimedByOtherActor(current, chanUser)) {
+          reply.code(409);
+          return { error: 'Task is already claimed' };
+        }
+
+        db.transaction(() => {
+          db.prepare(
+            `UPDATE tasks
+             SET claimed_by_agent_id = NULL, claimed_by_name = ?, status = ?, updated_at = ?
+             WHERE task_id = ?`,
+          ).run(chanUser.username, nextStatus, now, current.taskId);
+          syncTaskThreadOwner(db, {
+            taskId: current.taskId,
+            agentId: null,
+            lastActiveAt: now,
+          });
+        })();
+      }
 
       broadcastChannelTasksChanged(req.params.id);
       return getChannelTaskByNumber(db, {
@@ -1781,7 +1972,8 @@ export async function startServer(params: {
         reply.code(404);
         return { error: 'Task not found' };
       }
-      if (!isTaskClaimedByUser(current, chanUser)) {
+      const canUnclaimAgentTask = !!current.claimedByAgentId;
+      if (!canUnclaimAgentTask && !isTaskClaimedByUser(current, chanUser)) {
         reply.code(403);
         return { error: 'You must be the task assignee to unclaim it' };
       }

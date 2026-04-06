@@ -105,6 +105,26 @@ export function registerInternalAgentRoutes(
     });
   };
 
+  const normalizeRequiredText = (value: unknown): string | null => {
+    if (typeof value !== 'string') return null;
+    const trimmed = value.trim();
+    return trimmed ? trimmed : null;
+  };
+
+  const deriveTaskTitle = (
+    explicitTitle: unknown,
+    fallbackContent?: string | null,
+  ): string | null => {
+    const normalizedTitle = normalizeRequiredText(explicitTitle);
+    if (normalizedTitle) return normalizedTitle;
+    const fallback = normalizeRequiredText(fallbackContent);
+    return fallback ? fallback.slice(0, 120) : null;
+  };
+
+  const shouldSyncTaskRootMessageContent = (
+    task: { messageId: string | null; taskCreatedAt: number; messageCreatedAt: number | null },
+  ): boolean => !!task.messageId && task.messageCreatedAt === task.taskCreatedAt;
+
   app.addHook('onRequest', async (req, reply) => {
     if (!req.url.startsWith('/api/internal/agent/')) return;
     if (!internalAuthToken) return;
@@ -825,6 +845,17 @@ export function registerInternalAgentRoutes(
       return { error: `Cannot resolve channel: ${channel}` };
     }
 
+    const normalizedTasks: Array<{ title: string; description: string }> = [];
+    for (const task of tasks) {
+      const title = normalizeRequiredText(task?.title);
+      const description = normalizeRequiredText(task?.description);
+      if (!title || !description) {
+        reply.code(400);
+        return { error: 'Each task requires non-empty title and description' };
+      }
+      normalizedTasks.push({ title, description });
+    }
+
     const now = Date.now();
     const created: Array<{ taskId: string; taskNumber: number; title: string; messageId: string }> = [];
 
@@ -843,14 +874,14 @@ export function registerInternalAgentRoutes(
     );
 
     db.transaction(() => {
-      for (const taskDef of tasks) {
+      for (const taskDef of normalizedTasks) {
         const taskId = randomUUID();
         const messageId = randomUUID();
         const taskNumber = allocateNextTaskNumber(db, channelId);
         const seq = allocateNextChannelMessageSeq(db, channelId);
         const target = `#${channelName}`;
         insertMessage.run(messageId, channelId, agentId, agent.name, target, taskDef.title, seq, now);
-        insertTask.run(taskId, channelId, taskNumber, taskDef.title, taskDef.description ?? null, messageId, agentId, agent.name, now, now);
+        insertTask.run(taskId, channelId, taskNumber, taskDef.title, taskDef.description, messageId, agentId, agent.name, now, now);
         created.push({ taskId, taskNumber, title: taskDef.title, messageId });
         broadcastToChannel(channelId, {
           type: 'channel.message',
@@ -876,13 +907,13 @@ export function registerInternalAgentRoutes(
    */
   app.post<{
     Params: { agentId: string };
-    Body: { channel: string; message_ids: string[]; title?: string };
+    Body: { channel: string; message_ids: string[]; title?: string; description?: string };
   }>('/api/internal/agent/:agentId/tasks/claim-message', async (req, reply) => {
     const { agentId } = req.params;
     const agent = conversationManager.getAgent(agentId);
     if (!agent) { reply.code(404); return { error: 'Agent not found' }; }
 
-    const { channel, message_ids, title } = req.body ?? {};
+    const { channel, message_ids, title, description } = req.body ?? {};
     if (!channel || !Array.isArray(message_ids) || message_ids.length === 0) {
       reply.code(400);
       return { error: 'channel and non-empty message_ids array are required' };
@@ -890,6 +921,11 @@ export function registerInternalAgentRoutes(
 
     const channelId = resolveChannelFromTarget(channel, db);
     if (!channelId) { reply.code(400); return { error: `Cannot resolve channel: ${channel}` }; }
+    const normalizedDescription = normalizeRequiredText(description);
+    if (!normalizedDescription) {
+      reply.code(400);
+      return { error: 'description is required' };
+    }
 
     const now = Date.now();
     const results: Array<{ messageId: string; taskNumber?: number; success: boolean; reason?: string; context?: ContextMsg[] }> = [];
@@ -909,15 +945,19 @@ export function registerInternalAgentRoutes(
 
       const taskId = randomUUID();
       let taskNumber = 0;
-      const taskTitle = title?.trim() || msg.content.slice(0, 120);
+      const taskTitle = deriveTaskTitle(title, msg.content);
+      if (!taskTitle) {
+        results.push({ messageId: msgShortId, success: false, reason: 'title is required' });
+        continue;
+      }
       db.transaction(() => {
         taskNumber = allocateNextTaskNumber(db, channelId);
         db.prepare(
-          `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id,
+          `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
                              claimed_by_agent_id, claimed_by_name,
                              created_by_agent_id, created_by_name, created_at, updated_at)
-           VALUES(?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(taskId, channelId, taskNumber, taskTitle, msg.message_id, agentId, agent.name, agentId, agent.name, now, now);
+           VALUES(?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(taskId, channelId, taskNumber, taskTitle, normalizedDescription, msg.message_id, agentId, agent.name, agentId, agent.name, now, now);
         db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.message_id);
         syncTaskThreadOwner(db, {
           taskId,
@@ -937,6 +977,87 @@ export function registerInternalAgentRoutes(
 
     reply.code(201);
     return { results };
+  });
+
+  /**
+   * POST /api/internal/agent/:agentId/tasks/update-details
+   * Update a task's title and description.
+   * Body: { channel: string; task_number: number; title: string; description: string }
+   */
+  app.post<{
+    Params: { agentId: string };
+    Body: { channel: string; task_number: number; title: string; description: string };
+  }>('/api/internal/agent/:agentId/tasks/update-details', async (req, reply) => {
+    const { agentId } = req.params;
+    if (!conversationManager.getAgent(agentId)) {
+      reply.code(404);
+      return { error: 'Agent not found' };
+    }
+
+    const { channel, task_number, title, description } = req.body ?? {};
+    if (!channel || task_number == null) {
+      reply.code(400);
+      return { error: 'channel, task_number, title, and description are required' };
+    }
+
+    const normalizedTitle = normalizeRequiredText(title);
+    const normalizedDescription = normalizeRequiredText(description);
+    if (!normalizedTitle || !normalizedDescription) {
+      reply.code(400);
+      return { error: 'channel, task_number, title, and description are required' };
+    }
+
+    const channelId = resolveChannelFromTarget(channel, db);
+    if (!channelId) {
+      reply.code(400);
+      return { error: `Cannot resolve channel: ${channel}` };
+    }
+
+    const row = db.prepare(
+      `SELECT t.task_id as taskId,
+              t.message_id as messageId,
+              t.created_at as taskCreatedAt,
+              cm.created_at as messageCreatedAt
+       FROM tasks t
+       LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
+       WHERE t.channel_id = ? AND t.task_number = ?`,
+    ).get(channelId, task_number) as {
+      taskId: string;
+      messageId: string | null;
+      taskCreatedAt: number;
+      messageCreatedAt: number | null;
+    } | undefined;
+
+    if (!row) {
+      reply.code(404);
+      return { error: 'Task not found' };
+    }
+
+    const now = Date.now();
+    db.transaction(() => {
+      db.prepare(
+        `UPDATE tasks
+         SET title = ?, description = ?, updated_at = ?
+         WHERE task_id = ?`,
+      ).run(normalizedTitle, normalizedDescription, now, row.taskId);
+
+      if (shouldSyncTaskRootMessageContent(row)) {
+        db.prepare(
+          `UPDATE channel_messages
+           SET content = ?
+           WHERE message_id = ?`,
+        ).run(normalizedTitle, row.messageId);
+      }
+    })();
+
+    broadcastChannelTasksChanged(channelId);
+
+    return {
+      ok: true,
+      task_number,
+      title: normalizedTitle,
+      description: normalizedDescription,
+    };
   });
 
   /**

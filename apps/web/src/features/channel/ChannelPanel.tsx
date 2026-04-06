@@ -20,6 +20,7 @@ import { TasksTab } from "./TasksTab";
 import { ChatAvatar } from "@/features/chat/ChatAvatar";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { MessageSourceBadge } from "@/components/MessageSourceBadge";
+import { TaskEditorDialog, type TaskEditorValues } from "./TaskEditorDialog";
 
 type ChannelPanelInfo = ChannelInfo & {
   members?: Array<{
@@ -54,6 +55,12 @@ function formatTime(createdAt: string): string {
   } catch {
     return "";
   }
+}
+
+function deriveTaskTitleFromMessage(message: ChannelMessage): string {
+  const trimmed = message.content.trim();
+  if (trimmed) return trimmed.slice(0, 120);
+  return `Follow up on ${message.senderName}'s message`;
 }
 
 function renderContent(content: string) {
@@ -1022,6 +1029,9 @@ export function ChannelPanel({
   const [branchInspectorConversation, setBranchInspectorConversation] = useState<ConversationInfo | null>(null);
   // Local task overrides: messageId → partial fields added after claim-message
   const [taskOverrides, setTaskOverrides] = useState<Map<string, Pick<ChannelMessage, 'taskNumber' | 'taskStatus' | 'taskAssigneeName'>>>(new Map());
+  const [promoteMessage, setPromoteMessage] = useState<ChannelMessage | null>(null);
+  const [promotingTask, setPromotingTask] = useState(false);
+  const [promoteTaskError, setPromoteTaskError] = useState<string | null>(null);
   const branchInspectorAgent = useMemo(
     () => {
       if (!branchInspectorConversation?.agentId) return null;
@@ -1038,22 +1048,37 @@ export function ChannelPanel({
     setActiveTab("chat");
   }, [messages]);
 
-  const handleMakeTask = useCallback(async (message: ChannelMessage) => {
+  const handleMakeTask = useCallback((message: ChannelMessage) => {
+    setPromoteTaskError(null);
+    setPromoteMessage(message);
+  }, []);
+
+  const handlePromoteTaskSubmit = useCallback(async ({ title, description }: TaskEditorValues) => {
+    if (!promoteMessage || promotingTask) return;
+    setPromotingTask(true);
     try {
-      const task = await claimMessageAsTask(channel.channelId, message.id);
+      const task = await claimMessageAsTask(channel.channelId, promoteMessage.id, {
+        title,
+        description,
+      });
       setTaskOverrides((prev) => {
         const next = new Map(prev);
-        next.set(message.id, {
+        next.set(promoteMessage.id, {
           taskNumber: task.taskNumber,
           taskStatus: task.status,
           taskAssigneeName: task.assigneeName ?? null,
         });
         return next;
       });
+      setPromoteMessage(null);
+      setPromoteTaskError(null);
     } catch (err) {
+      setPromoteTaskError(String((err as Error)?.message ?? err));
       console.error('[make-task]', err);
+    } finally {
+      setPromotingTask(false);
     }
-  }, [channel.channelId]);
+  }, [channel.channelId, promoteMessage, promotingTask]);
 
   // Thread panel resize state
   const [threadPanelWidth, setThreadPanelWidth] = useState(320); // default 320px (w-80)
@@ -1236,6 +1261,7 @@ export function ChannelPanel({
       {activeTab === "tasks" ? (
         <TasksTab
           channelId={channel.channelId}
+          channelAgents={channelMembers}
           onOpenThread={handleOpenTaskThread}
           taskVersion={taskVersion}
         />
@@ -1355,6 +1381,25 @@ export function ChannelPanel({
           ) : null}
         </div>
       )}
+      <TaskEditorDialog
+        isOpen={promoteMessage != null}
+        dialogTitle="Promote Message To Task"
+        submitLabel="Create task"
+        initialTitle={promoteMessage ? deriveTaskTitleFromMessage(promoteMessage) : ""}
+        initialDescription=""
+        sourceMessage={promoteMessage ? {
+          senderName: promoteMessage.senderName,
+          content: promoteMessage.content,
+        } : undefined}
+        saving={promotingTask}
+        error={promoteTaskError}
+        onClose={() => {
+          if (promotingTask) return;
+          setPromoteMessage(null);
+          setPromoteTaskError(null);
+        }}
+        onSubmit={handlePromoteTaskSubmit}
+      />
     </div>
   );
 }

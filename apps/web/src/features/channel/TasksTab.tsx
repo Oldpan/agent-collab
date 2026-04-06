@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { TaskInfo } from "@agent-collab/protocol";
+import type { AgentInfo, TaskInfo } from "@agent-collab/protocol";
 import { Button } from "@/components/ui/button";
 import {
   claimChannelTask,
@@ -7,14 +7,18 @@ import {
   deleteChannelTask,
   getChannelTasks,
   unclaimChannelTask,
+  updateChannelTaskDetails,
   updateTaskStatus,
   type ChannelTask,
 } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
+import { TaskEditorDialog, type TaskEditorValues } from "./TaskEditorDialog";
+import { TaskAgentClaimDialog } from "./TaskAgentClaimDialog";
 
 type TasksTabProps = {
   channelId: string;
+  channelAgents: Pick<AgentInfo, "agentId" | "name">[];
   onOpenThread?: (threadShortId: string) => void;
   taskVersion?: number;
 };
@@ -57,7 +61,11 @@ function sameUserName(a?: string | null, b?: string | null): boolean {
   return a === b;
 }
 
-export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabProps) {
+function hasTaskBrief(description?: string | null): boolean {
+  return Boolean(description?.trim());
+}
+
+export function TasksTab({ channelId, channelAgents, onOpenThread, taskVersion = 0 }: TasksTabProps) {
   const { user } = useAuth();
   const [tasks, setTasks] = useState<ChannelTask[]>([]);
   const [loading, setLoading] = useState(true);
@@ -70,6 +78,11 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
   const [updatingTaskNumber, setUpdatingTaskNumber] = useState<number | null>(null);
   const [deletingTaskNumber, setDeletingTaskNumber] = useState<number | null>(null);
   const [showDone, setShowDone] = useState(false);
+  const [editingTask, setEditingTask] = useState<ChannelTask | null>(null);
+  const [editing, setEditing] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [assigningTask, setAssigningTask] = useState<ChannelTask | null>(null);
+  const [assignError, setAssignError] = useState<string | null>(null);
 
   const loadTasks = useCallback(async () => {
     setLoading(true);
@@ -111,12 +124,13 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
   }, [grouped, tasks.length]);
 
   const handleCreate = useCallback(async () => {
-    const trimmed = title.trim();
-    if (!trimmed || creating) return;
+    const trimmedTitle = title.trim();
+    const trimmedDescription = description.trim();
+    if (!trimmedTitle || !trimmedDescription || creating) return;
     setCreating(true);
     setError(null);
     try {
-      const created = await createChannelTask(channelId, trimmed, description.trim() || undefined);
+      const created = await createChannelTask(channelId, trimmedTitle, trimmedDescription);
       setTasks((prev) => [...prev, created]);
       setTitle("");
       setDescription("");
@@ -126,6 +140,21 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
       setCreating(false);
     }
   }, [channelId, creating, description, title]);
+
+  const handleEditSubmit = useCallback(async ({ title: nextTitle, description: nextDescription }: TaskEditorValues) => {
+    if (!editingTask || editing) return;
+    setEditing(true);
+    setEditError(null);
+    try {
+      const updated = await updateChannelTaskDetails(channelId, editingTask.taskNumber, nextTitle, nextDescription);
+      setTasks((prev) => prev.map((item) => (item.taskId === updated.taskId ? updated : item)));
+      setEditingTask(null);
+    } catch (err) {
+      setEditError(String((err as Error)?.message ?? err));
+    } finally {
+      setEditing(false);
+    }
+  }, [channelId, editing, editingTask]);
 
   const handleAdvance = useCallback(async (task: TaskInfo) => {
     if (task.status === "done" || updatingTaskNumber === task.taskNumber) return;
@@ -141,7 +170,7 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
     }
   }, [channelId, updatingTaskNumber]);
 
-  const handleClaim = useCallback(async (task: ChannelTask) => {
+  const handleClaimSelf = useCallback(async (task: ChannelTask) => {
     if (claimingTaskNumber === task.taskNumber) return;
     setClaimingTaskNumber(task.taskNumber);
     setError(null);
@@ -154,6 +183,22 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
       setClaimingTaskNumber(null);
     }
   }, [channelId, claimingTaskNumber]);
+
+  const handleAssignAgent = useCallback(async (agentId: string) => {
+    if (!assigningTask || claimingTaskNumber === assigningTask.taskNumber) return;
+    setClaimingTaskNumber(assigningTask.taskNumber);
+    setAssignError(null);
+    setError(null);
+    try {
+      const updated = await claimChannelTask(channelId, assigningTask.taskNumber, agentId);
+      setTasks((prev) => prev.map((item) => (item.taskId === updated.taskId ? updated : item)));
+      setAssigningTask(null);
+    } catch (err) {
+      setAssignError(String((err as Error)?.message ?? err));
+    } finally {
+      setClaimingTaskNumber(null);
+    }
+  }, [assigningTask, channelId, claimingTaskNumber]);
 
   const handleUnclaim = useCallback(async (task: ChannelTask) => {
     if (unclaimingTaskNumber === task.taskNumber) return;
@@ -218,7 +263,7 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
           <Button
             size="sm"
             onClick={() => void handleCreate()}
-            disabled={creating || !title.trim()}
+            disabled={creating || !title.trim() || !description.trim()}
             className="h-9 rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
           >
             Create task
@@ -227,7 +272,7 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
         <textarea
           value={description}
           onChange={(e) => setDescription(e.target.value)}
-          placeholder="Description (optional)"
+          placeholder="Task brief / goal / done criteria"
           rows={2}
           className="mt-1 w-full resize-none rounded-sm border-2 border-zinc-900 bg-white px-3 py-1.5 text-sm text-zinc-900 placeholder:text-zinc-400"
           disabled={creating}
@@ -238,7 +283,7 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
           </div>
         )}
         <div className="mt-3 rounded-sm border border-zinc-900/10 bg-white/60 px-3 py-2 text-xs text-zinc-600">
-          New tasks create task root messages and default threads in Chat. Click a task thread link to open it.
+          New tasks need a clear brief. The brief should state the goal, constraints, expected output, and what counts as done.
         </div>
       </div>
 
@@ -296,9 +341,17 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
                   ) : (
                     <div className="space-y-2">
                       {items.map((task) => {
-                        const isCurrentUserAssignee = sameUserName(task.assigneeName, user?.username);
-                        const canClaim = !task.assigneeName && task.status !== "done";
-                        const canUnclaim = isCurrentUserAssignee && task.status !== "done";
+                        const isAgentAssignee = Boolean(task.assigneeId);
+                        const isCurrentUserAssignee = !task.assigneeId && sameUserName(task.assigneeName, user?.username);
+                        const canClaimSelf = !task.assigneeName && task.status !== "done";
+                        const canAssignAgent = (
+                          channelAgents.length > 0
+                          && Boolean(task.linkedThreadShortId)
+                          && hasTaskBrief(task.description)
+                          && task.status !== "done"
+                          && (!task.assigneeName || isCurrentUserAssignee || isAgentAssignee)
+                        );
+                        const canUnclaim = task.status !== "done" && (isCurrentUserAssignee || isAgentAssignee);
                         const canAdvance = isCurrentUserAssignee && task.status !== "done";
                         return (
                         <div
@@ -310,14 +363,18 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
                               <div className="text-sm font-medium text-zinc-900">
                                 #{task.taskNumber} {task.title}
                               </div>
-                              {task.description && (
+                              {hasTaskBrief(task.description) ? (
                                 <div className="mt-1 whitespace-pre-wrap text-xs text-zinc-500">
                                   {task.description}
+                                </div>
+                              ) : (
+                                <div className="mt-1 rounded-sm border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+                                  Task brief missing. Add the goal and done criteria before starting.
                                 </div>
                               )}
                               {task.assigneeName && (
                                 <div className="mt-2 inline-flex rounded-full border border-zinc-300 bg-[#fff8d8] px-2 py-0.5 text-[11px] text-zinc-600">
-                                  @{task.assigneeName}
+                                  @{task.assigneeName}{task.assigneeId ? " · agent" : ""}
                                 </div>
                               )}
                               <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
@@ -366,14 +423,31 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
                                   {formatStatus(task.status)}
                                 </span>
                               )}
-                              {canClaim ? (
+                              {canAssignAgent ? (
                                 <Button
                                   size="sm"
                                   disabled={claimingTaskNumber === task.taskNumber}
-                                  onClick={() => void handleClaim(task)}
+                                  onClick={() => {
+                                    setAssigningTask(task);
+                                    setAssignError(null);
+                                  }}
                                   className="h-8 rounded-sm border-2 border-zinc-900 bg-[#d8f8c8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#b8f0a8]"
                                 >
-                                  {claimingTaskNumber === task.taskNumber ? "Claiming..." : "Claim"}
+                                  {claimingTaskNumber === task.taskNumber
+                                    ? "Assigning..."
+                                    : task.assigneeId
+                                      ? "Reassign"
+                                      : "Claim"}
+                                </Button>
+                              ) : null}
+                              {canClaimSelf ? (
+                                <Button
+                                  size="sm"
+                                  disabled={claimingTaskNumber === task.taskNumber}
+                                  onClick={() => void handleClaimSelf(task)}
+                                  className="h-8 rounded-sm border-2 border-zinc-900 bg-[#fff9d8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff1a9]"
+                                >
+                                  {claimingTaskNumber === task.taskNumber ? "Claiming..." : "Claim self"}
                                 </Button>
                               ) : canUnclaim ? (
                                 <Button
@@ -382,9 +456,21 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
                                   onClick={() => void handleUnclaim(task)}
                                   className="h-8 rounded-sm border-2 border-zinc-900 bg-[#fff0d0] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#ffe4b0]"
                                 >
-                                  {unclaimingTaskNumber === task.taskNumber ? "Unclaiming..." : "Unclaim"}
+                                  {unclaimingTaskNumber === task.taskNumber
+                                    ? (task.assigneeId ? "Releasing..." : "Unclaiming...")
+                                    : (task.assigneeId ? "Release" : "Unclaim")}
                                 </Button>
                               ) : null}
+                              <Button
+                                size="sm"
+                                onClick={() => {
+                                  setEditingTask(task);
+                                  setEditError(null);
+                                }}
+                                className="h-8 rounded-sm border-2 border-zinc-900 bg-[#d8efff] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#b8e0ff]"
+                              >
+                                Edit
+                              </Button>
                               <Button
                                 size="sm"
                                 disabled={deletingTaskNumber === task.taskNumber}
@@ -406,6 +492,37 @@ export function TasksTab({ channelId, onOpenThread, taskVersion = 0 }: TasksTabP
           </div>
         )}
       </div>
+      <TaskEditorDialog
+        isOpen={editingTask != null}
+        dialogTitle={editingTask ? `Edit Task #${editingTask.taskNumber}` : "Edit task"}
+        submitLabel="Save changes"
+        initialTitle={editingTask?.title ?? ""}
+        initialDescription={editingTask?.description ?? ""}
+        saving={editing}
+        error={editError}
+        onClose={() => {
+          if (editing) return;
+          setEditingTask(null);
+          setEditError(null);
+        }}
+        onSubmit={handleEditSubmit}
+      />
+      <TaskAgentClaimDialog
+        isOpen={assigningTask != null}
+        taskNumber={assigningTask?.taskNumber}
+        taskTitle={assigningTask?.title}
+        taskDescription={assigningTask?.description}
+        currentAgentId={assigningTask?.assigneeId ?? null}
+        agents={channelAgents}
+        submitting={assigningTask != null && claimingTaskNumber === assigningTask.taskNumber}
+        error={assignError}
+        onClose={() => {
+          if (assigningTask && claimingTaskNumber === assigningTask.taskNumber) return;
+          setAssigningTask(null);
+          setAssignError(null);
+        }}
+        onSubmit={handleAssignAgent}
+      />
     </div>
   );
 }

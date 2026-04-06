@@ -35,6 +35,45 @@ type TestTaskClaimRow = {
   claimedByName: string | null;
 };
 
+type TestTaskAssignmentRow = TestTaskClaimRow & {
+  title: string;
+  description: string | null;
+  messageId: string | null;
+};
+
+function normalizeRequiredText(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : null;
+}
+
+function deriveTaskTitle(title: unknown, fallbackContent: string): string | null {
+  const explicit = normalizeRequiredText(title);
+  if (explicit) return explicit;
+  const fallback = fallbackContent.trim();
+  return fallback ? fallback.slice(0, 120) : null;
+}
+
+function shouldSyncTaskRootMessageContent(taskCreatedAt: number, messageId: string | null, messageCreatedAt: number | null): boolean {
+  return !!messageId && messageCreatedAt != null && taskCreatedAt === messageCreatedAt;
+}
+
+function buildAgentTaskKickoffPrompt(params: {
+  agentName: string;
+  taskNumber: number;
+  title: string;
+  description: string;
+}): string {
+  return [
+    `@${params.agentName} you have been assigned task #${params.taskNumber}: ${params.title}`,
+    "",
+    "Task brief / goal / done criteria:",
+    params.description,
+    "",
+    "Please start working from this thread, post progress updates here, and move the task to in_review when the implementation is ready.",
+  ].join("\n");
+}
+
 function getTaskUserName(req: { headers: Record<string, unknown> }): string {
   const header = req.headers['x-user-name'];
   return typeof header === 'string' && header.trim() ? header.trim() : 'User';
@@ -489,13 +528,48 @@ beforeAll(async () => {
     },
   );
 
-  app.post<{ Params: { id: string }; Body: { messageId: string; title?: string } }>(
+  app.post<{ Params: { id: string }; Body: { title?: string; description?: string } }>(
+    '/api/channels/:id/tasks',
+    async (req, reply) => {
+      const channel = manager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+
+      const title = normalizeRequiredText(req.body?.title);
+      const description = normalizeRequiredText(req.body?.description);
+      if (!title) { reply.code(400); return { error: 'title is required' }; }
+      if (!description) { reply.code(400); return { error: 'description is required' }; }
+
+      const now = Date.now();
+      const taskId = randomUUID();
+      const taskNumber = allocateNextTaskNumber(db, req.params.id);
+      const messageId = randomUUID();
+      const seq = allocateNextChannelMessageSeq(db, req.params.id);
+
+      db.transaction(() => {
+        db.prepare(
+          `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+           VALUES(?, ?, 'system', 'system', 'system', ?, ?, ?, ?, 'task')`,
+        ).run(messageId, req.params.id, `#${channel.name}`, title, seq, now);
+        db.prepare(
+          `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, created_at, updated_at)
+           VALUES(?, ?, ?, ?, ?, 'todo', ?, ?, ?)`,
+        ).run(taskId, req.params.id, taskNumber, title, description, messageId, now, now);
+      })();
+
+      reply.code(201);
+      return getChannelTaskByNumber(db, { channelId: req.params.id, taskNumber });
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { messageId: string; title?: string; description?: string } }>(
     '/api/channels/:id/tasks/claim-message',
     async (req, reply) => {
       const channel = manager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
-      const { messageId, title } = req.body ?? {};
+      const { messageId, title, description: rawDescription } = req.body ?? {};
       if (!messageId) { reply.code(400); return { error: 'messageId is required' }; }
+      const description = normalizeRequiredText(rawDescription);
+      if (!description) { reply.code(400); return { error: 'description is required' }; }
 
       const message = db.prepare(
         `SELECT message_id as messageId, content, thread_root_id as threadRootId
@@ -517,15 +591,16 @@ beforeAll(async () => {
       const now = Date.now();
       const taskId = randomUUID();
       const taskNumber = allocateNextTaskNumber(db, req.params.id);
-      const taskTitle = title?.trim() || message.content.slice(0, 120);
+      const taskTitle = deriveTaskTitle(title, message.content);
+      if (!taskTitle) { reply.code(400); return { error: 'title is required' }; }
       const userName = getTaskUserName(req);
 
       db.transaction(() => {
         db.prepare(
-          `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id,
+          `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
                              claimed_by_agent_id, claimed_by_name, created_at, updated_at)
-           VALUES(?, ?, ?, ?, 'in_progress', ?, NULL, ?, ?, ?)`,
-        ).run(taskId, req.params.id, taskNumber, taskTitle, message.messageId, userName, now, now);
+           VALUES(?, ?, ?, ?, ?, 'in_progress', ?, NULL, ?, ?, ?)`,
+        ).run(taskId, req.params.id, taskNumber, taskTitle, description, message.messageId, userName, now, now);
         db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(message.messageId);
         syncTaskThreadOwner(db, { taskId, agentId: null, lastActiveAt: now });
       })();
@@ -535,7 +610,49 @@ beforeAll(async () => {
     },
   );
 
-  app.post<{ Params: { id: string; num: string } }>(
+  app.patch<{ Params: { id: string; num: string }; Body: { title?: string; description?: string } }>(
+    '/api/channels/:id/tasks/:num',
+    async (req, reply) => {
+      const channel = manager.getChannel(req.params.id);
+      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
+      const taskNumber = Number(req.params.num);
+      if (!Number.isFinite(taskNumber)) { reply.code(400); return { error: 'Invalid task number' }; }
+      const title = normalizeRequiredText(req.body?.title);
+      const description = normalizeRequiredText(req.body?.description);
+      if (!title) { reply.code(400); return { error: 'title is required' }; }
+      if (!description) { reply.code(400); return { error: 'description is required' }; }
+
+      const current = db.prepare(
+        `SELECT t.task_id as taskId,
+                t.message_id as messageId,
+                t.created_at as taskCreatedAt,
+                m.created_at as messageCreatedAt
+         FROM tasks t
+         LEFT JOIN channel_messages m ON m.message_id = t.message_id
+         WHERE t.channel_id = ? AND t.task_number = ?`,
+      ).get(req.params.id, taskNumber) as {
+        taskId: string;
+        messageId: string | null;
+        taskCreatedAt: number;
+        messageCreatedAt: number | null;
+      } | undefined;
+      if (!current) { reply.code(404); return { error: 'Task not found' }; }
+
+      const now = Date.now();
+      db.transaction(() => {
+        db.prepare(
+          `UPDATE tasks SET title = ?, description = ?, updated_at = ? WHERE task_id = ?`,
+        ).run(title, description, now, current.taskId);
+        if (shouldSyncTaskRootMessageContent(current.taskCreatedAt, current.messageId, current.messageCreatedAt)) {
+          db.prepare(`UPDATE channel_messages SET content = ? WHERE message_id = ?`).run(title, current.messageId);
+        }
+      })();
+
+      return getChannelTaskByNumber(db, { channelId: req.params.id, taskNumber });
+    },
+  );
+
+  app.post<{ Params: { id: string; num: string }; Body: { agentId?: string } }>(
     '/api/channels/:id/tasks/:num/claim',
     async (req, reply) => {
       const channel = manager.getChannel(req.params.id);
@@ -545,31 +662,89 @@ beforeAll(async () => {
 
       const current = db.prepare(
         `SELECT task_id as taskId,
+                title,
+                description,
+                message_id as messageId,
                 status as currentStatus,
                 claimed_by_agent_id as claimedByAgentId,
                 claimed_by_name as claimedByName
          FROM tasks
          WHERE channel_id = ? AND task_number = ?`,
-      ).get(req.params.id, taskNumber) as TestTaskClaimRow | undefined;
+      ).get(req.params.id, taskNumber) as TestTaskAssignmentRow | undefined;
       if (!current) { reply.code(404); return { error: 'Task not found' }; }
       if (current.currentStatus === 'done') { reply.code(409); return { error: 'Task is already done' }; }
-
+      const requestedAgentId = typeof req.body?.agentId === 'string' && req.body.agentId.trim()
+        ? req.body.agentId.trim()
+        : null;
       const userName = getTaskUserName(req);
-      if (isTaskClaimedByOtherUserName(current, userName)) {
-        reply.code(409);
-        return { error: 'Task is already claimed' };
-      }
 
       const now = Date.now();
       const nextStatus = current.currentStatus === 'todo' ? 'in_progress' : current.currentStatus;
-      db.transaction(() => {
-        db.prepare(
-          `UPDATE tasks
-           SET claimed_by_agent_id = NULL, claimed_by_name = ?, status = ?, updated_at = ?
-           WHERE task_id = ?`,
-        ).run(userName, nextStatus, now, current.taskId);
-        syncTaskThreadOwner(db, { taskId: current.taskId, agentId: null, lastActiveAt: now });
-      })();
+      if (requestedAgentId) {
+        const agent = manager.getAgent(requestedAgentId);
+        if (!agent) { reply.code(404); return { error: 'Agent not found' }; }
+        if (!(agent.channelIds ?? []).includes(req.params.id)) {
+          reply.code(400);
+          return { error: 'Agent is not a member of this channel' };
+        }
+        if (!current.messageId) {
+          reply.code(409);
+          return { error: 'Task has no task thread to notify' };
+        }
+        const description = normalizeRequiredText(current.description);
+        if (!description) {
+          reply.code(409);
+          return { error: 'Task brief is required before assigning to an agent' };
+        }
+        if (!current.claimedByAgentId && current.claimedByName && current.claimedByName !== userName) {
+          reply.code(409);
+          return { error: 'Task is already claimed by another user' };
+        }
+
+        const threadRootId = current.messageId.slice(0, 8);
+        const kickoffSeq = allocateNextChannelMessageSeq(db, req.params.id);
+        db.transaction(() => {
+          db.prepare(
+            `UPDATE tasks
+             SET claimed_by_agent_id = ?, claimed_by_name = ?, status = ?, updated_at = ?
+             WHERE task_id = ?`,
+          ).run(agent.agentId, agent.name, nextStatus, now, current.taskId);
+          syncTaskThreadOwner(db, { taskId: current.taskId, agentId: agent.agentId, lastActiveAt: now });
+          db.prepare(
+            `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+             VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, ?)`,
+          ).run(
+            randomUUID(),
+            req.params.id,
+            userName,
+            `#${channel.name}:${threadRootId}`,
+            buildAgentTaskKickoffPrompt({
+              agentName: agent.name,
+              taskNumber,
+              title: current.title,
+              description,
+            }),
+            kickoffSeq,
+            now,
+            threadRootId,
+          );
+        })();
+        manager.openAgentChannelThread(agent.agentId, req.params.id, threadRootId);
+      } else {
+        if (isTaskClaimedByOtherUserName(current, userName)) {
+          reply.code(409);
+          return { error: 'Task is already claimed' };
+        }
+
+        db.transaction(() => {
+          db.prepare(
+            `UPDATE tasks
+             SET claimed_by_agent_id = NULL, claimed_by_name = ?, status = ?, updated_at = ?
+             WHERE task_id = ?`,
+          ).run(userName, nextStatus, now, current.taskId);
+          syncTaskThreadOwner(db, { taskId: current.taskId, agentId: null, lastActiveAt: now });
+        })();
+      }
 
       return getChannelTaskByNumber(db, { channelId: req.params.id, taskNumber });
     },
@@ -594,7 +769,8 @@ beforeAll(async () => {
       if (!current) { reply.code(404); return { error: 'Task not found' }; }
 
       const userName = getTaskUserName(req);
-      if (!isTaskClaimedByUserName(current, userName)) {
+      const canUnclaimAgentTask = !!current.claimedByAgentId;
+      if (!canUnclaimAgentTask && !isTaskClaimedByUserName(current, userName)) {
         reply.code(403);
         return { error: 'You must be the task assignee to unclaim it' };
       }
@@ -1459,13 +1635,17 @@ describe('REST API', () => {
         'Content-Type': 'application/json',
         'x-user-name': 'Alice',
       },
-      body: JSON.stringify({ messageId: 'claimfeed' }),
+      body: JSON.stringify({
+        messageId: 'claimfeed',
+        description: 'Goal: turn this into a tracked task. Done when the work is picked up and reviewed.',
+      }),
     });
 
     expect(status).toBe(201);
     expect(body.status).toBe('in_progress');
     expect(body.assigneeName).toBe('Alice');
     expect(body.linkedThreadShortId).toBe('claimfee');
+    expect(body.description).toContain('Goal: turn this into a tracked task');
 
     const messageRow = db.prepare(
       `SELECT message_kind as messageKind FROM channel_messages WHERE message_id = 'claimfeed-0000-0000-0000-000000000000'`,
@@ -1473,14 +1653,133 @@ describe('REST API', () => {
     expect(messageRow.messageKind).toBe('task');
   });
 
+  it('POST /api/channels/:id/tasks 应要求 description，且创建 dedicated task message', async () => {
+    const missingDescription = await fetchJson('/api/channels/default/tasks', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': 'Alice',
+      },
+      body: JSON.stringify({ title: 'Missing brief' }),
+    });
+    expect(missingDescription.status).toBe(400);
+    expect(missingDescription.body.error).toBe('description is required');
+
+    const created = await fetchJson('/api/channels/default/tasks', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': 'Alice',
+      },
+      body: JSON.stringify({
+        title: 'Create dedicated task',
+        description: 'Goal: verify new tasks require a brief. Done when the task stores the brief.',
+      }),
+    });
+    expect(created.status).toBe(201);
+    expect(created.body.title).toBe('Create dedicated task');
+    expect(created.body.description).toContain('verify new tasks require a brief');
+
+    const messageRow = db.prepare(
+      `SELECT sender_type as senderType, message_kind as messageKind, content
+       FROM channel_messages
+       WHERE message_id = ?`,
+    ).get(created.body.messageId) as { senderType: string; messageKind: string | null; content: string };
+    expect(messageRow.senderType).toBe('system');
+    expect(messageRow.messageKind).toBe('task');
+    expect(messageRow.content).toBe('Create dedicated task');
+  });
+
+  it('POST /api/channels/:id/tasks/claim-message 应要求 description', async () => {
+    const seq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('nodebrief-0000-0000-0000-000000000000', 'default', 'user', 'User', 'user', '#default', 'Needs a task brief', ?, ?)`,
+    ).run(seq, Date.now() - 1000);
+
+    const result = await fetchJson('/api/channels/default/tasks/claim-message', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': 'Alice',
+      },
+      body: JSON.stringify({ messageId: 'nodebrief' }),
+    });
+
+    expect(result.status).toBe(400);
+    expect(result.body.error).toBe('description is required');
+  });
+
+  it('PATCH /api/channels/:id/tasks/:num 应更新 task brief，并仅同步 dedicated task root 标题', async () => {
+    const dedicatedNow = Date.now() - 5000;
+    const dedicatedSeq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('editroot0-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Old dedicated title', ?, ?, 'task')`,
+    ).run(dedicatedSeq, dedicatedNow);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, created_at, updated_at)
+       VALUES('task-edit-dedicated', 'default', 120, 'Old dedicated title', 'Old brief', 'todo', 'editroot0-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(dedicatedNow, dedicatedNow);
+
+    const promotedSeq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('editroot1-0000-0000-0000-000000000000', 'default', 'user', 'User', 'user', '#default', 'Original promoted content', ?, ?, 'task')`,
+    ).run(promotedSeq, dedicatedNow - 2000);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, created_at, updated_at)
+       VALUES('task-edit-promoted', 'default', 121, 'Promoted task title', 'Old promoted brief', 'in_progress', 'editroot1-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(dedicatedNow, dedicatedNow);
+
+    const dedicatedUpdate = await fetchJson('/api/channels/default/tasks/120', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': 'Alice',
+      },
+      body: JSON.stringify({
+        title: 'Updated dedicated title',
+        description: 'Goal: update the dedicated task brief. Done when both title and brief change.',
+      }),
+    });
+    expect(dedicatedUpdate.status).toBe(200);
+    expect(dedicatedUpdate.body.title).toBe('Updated dedicated title');
+    expect(dedicatedUpdate.body.description).toContain('both title and brief change');
+
+    const dedicatedMessage = db.prepare(
+      `SELECT content FROM channel_messages WHERE message_id = 'editroot0-0000-0000-0000-000000000000'`,
+    ).get() as { content: string };
+    expect(dedicatedMessage.content).toBe('Updated dedicated title');
+
+    const promotedUpdate = await fetchJson('/api/channels/default/tasks/121', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': 'Alice',
+      },
+      body: JSON.stringify({
+        title: 'Updated promoted title',
+        description: 'Goal: clarify the promoted task without rewriting the original message.',
+      }),
+    });
+    expect(promotedUpdate.status).toBe(200);
+    expect(promotedUpdate.body.title).toBe('Updated promoted title');
+
+    const promotedMessage = db.prepare(
+      `SELECT content FROM channel_messages WHERE message_id = 'editroot1-0000-0000-0000-000000000000'`,
+    ).get() as { content: string };
+    expect(promotedMessage.content).toBe('Original promoted content');
+  });
+
   it('POST /api/channels/:id/tasks/:num/claim 与 /unclaim 应维护 assignee 与状态', async () => {
     const now = Date.now();
     db.prepare(
       `INSERT INTO tasks(task_id, channel_id, task_number, title, status, created_at, updated_at)
-       VALUES('task-claim-cycle', 'default', 93, 'Claim cycle', 'todo', ?, ?)`,
+       VALUES('task-claim-cycle', 'default', 193, 'Claim cycle', 'todo', ?, ?)`,
     ).run(now, now);
 
-    const claimed = await fetchJson('/api/channels/default/tasks/93/claim', {
+    const claimed = await fetchJson('/api/channels/default/tasks/193/claim', {
       method: 'POST',
       headers: { 'x-user-name': 'Alice' },
     });
@@ -1488,13 +1787,130 @@ describe('REST API', () => {
     expect(claimed.body.status).toBe('in_progress');
     expect(claimed.body.assigneeName).toBe('Alice');
 
-    const unclaimed = await fetchJson('/api/channels/default/tasks/93/unclaim', {
+    const unclaimed = await fetchJson('/api/channels/default/tasks/193/unclaim', {
       method: 'POST',
       headers: { 'x-user-name': 'Alice' },
     });
     expect(unclaimed.status).toBe(200);
     expect(unclaimed.body.status).toBe('todo');
     expect(unclaimed.body.assigneeName).toBeNull();
+  });
+
+  it('POST /api/channels/:id/tasks/:num/claim 传 agentId 时应指派 agent 并写入 kickoff thread reply', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'AssignMe',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/assign-me',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    const seq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('assignfeed-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Assigned task root', ?, ?, 'task')`,
+    ).run(seq, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, created_at, updated_at)
+       VALUES('task-agent-claim', 'default', 194, 'Assigned task', 'Goal: have the agent start from the task thread. Done when kickoff prompt is posted.', 'todo', 'assignfeed-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(now, now);
+
+    const claimed = await fetchJson('/api/channels/default/tasks/194/claim', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': 'Alice',
+      },
+      body: JSON.stringify({ agentId: agent.agentId }),
+    });
+
+    expect(claimed.status).toBe(200);
+    expect(claimed.body.status).toBe('in_progress');
+    expect(claimed.body.assigneeId).toBe(agent.agentId);
+    expect(claimed.body.assigneeName).toBe(agent.name);
+
+    const owner = db.prepare(
+      `SELECT role FROM target_participants
+       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'assignfe'`,
+    ).get(agent.agentId) as { role: string } | undefined;
+    expect(owner?.role).toBe('owner');
+
+    const kickoff = db.prepare(
+      `SELECT sender_name as senderName, content, thread_root_id as threadRootId
+       FROM channel_messages
+       WHERE channel_id = 'default' AND thread_root_id = 'assignfe'
+       ORDER BY seq DESC
+       LIMIT 1`,
+    ).get() as { senderName: string; content: string; threadRootId: string };
+    expect(kickoff.senderName).toBe('Alice');
+    expect(kickoff.threadRootId).toBe('assignfe');
+    expect(kickoff.content).toContain('@AssignMe');
+    expect(kickoff.content).toContain('Task brief / goal / done criteria:');
+    expect(kickoff.content).toContain('Goal: have the agent start from the task thread.');
+
+    const branch = manager.listConversations().find((conversation) =>
+      conversation.agentId === agent.agentId && conversation.channelId === 'default' && conversation.threadRootId === 'assignfe');
+    expect(branch).toBeTruthy();
+  });
+
+  it('POST /api/channels/:id/tasks/:num/claim 指派 agent 时要求 task brief', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'NoBriefAgent',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/no-brief-agent',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    const seq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('nobrief0-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'No brief task root', ?, ?, 'task')`,
+    ).run(seq, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
+       VALUES('task-agent-no-brief', 'default', 195, 'No brief task', 'todo', 'nobrief0-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(now, now);
+
+    const claimed = await fetchJson('/api/channels/default/tasks/195/claim', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': 'Alice',
+      },
+      body: JSON.stringify({ agentId: agent.agentId }),
+    });
+
+    expect(claimed.status).toBe(409);
+    expect(claimed.body.error).toBe('Task brief is required before assigning to an agent');
+  });
+
+  it('POST /api/channels/:id/tasks/:num/unclaim 应允许释放 agent claim', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'ReleaseMe',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/release-me',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, created_at, updated_at)
+       VALUES('task-release-agent', 'default', 196, 'Release task', 'Goal: unassign the agent.', 'in_progress', ?, ?, ?, ?)`,
+    ).run(agent.agentId, agent.name, now, now);
+
+    const released = await fetchJson('/api/channels/default/tasks/196/unclaim', {
+      method: 'POST',
+      headers: { 'x-user-name': 'Alice' },
+    });
+
+    expect(released.status).toBe(200);
+    expect(released.body.status).toBe('todo');
+    expect(released.body.assigneeId).toBeNull();
+    expect(released.body.assigneeName).toBeNull();
   });
 
   it('PATCH /api/channels/:id/tasks/:num/status 应限制非 assignee 推进状态，但允许 review 完成', async () => {
@@ -1548,7 +1964,7 @@ describe('REST API', () => {
     ).run(seq, now);
     db.prepare(
       `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
-       VALUES('task-delete-root', 'default', 195, 'Delete me', 'todo', 'deadbeef-0000-0000-0000-000000000000', ?, ?)`,
+       VALUES('task-delete-root', 'default', 197, 'Delete me', 'todo', 'deadbeef-0000-0000-0000-000000000000', ?, ?)`,
     ).run(now, now);
     db.prepare(
       `INSERT INTO thread_task_bindings(channel_id, thread_root_id, task_id, bound_at)
@@ -1566,7 +1982,7 @@ describe('REST API', () => {
        VALUES(?, 'default', 'deadbeef', 3)`,
     ).run(agent.agentId);
 
-    const { status, body } = await fetchJson('/api/channels/default/tasks/195', {
+    const { status, body } = await fetchJson('/api/channels/default/tasks/197', {
       method: 'DELETE',
     });
 

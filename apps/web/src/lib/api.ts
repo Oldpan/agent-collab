@@ -352,14 +352,17 @@ export async function getChannelTasks(
 export async function createChannelTask(
   channelId: string,
   title: string,
-  description?: string,
+  description: string,
 ): Promise<ChannelTask> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks`, {
     method: "POST",
     headers: withAuthHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ title, ...(description ? { description } : {}) }),
+    body: JSON.stringify({ title, description }),
   });
-  if (!res.ok) throw new Error(`Failed to create channel task: ${res.statusText}`);
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Failed to create channel task: ${res.statusText}`);
+  }
   return res.json();
 }
 
@@ -381,12 +384,16 @@ export async function deleteChannelTask(
 export async function claimMessageAsTask(
   channelId: string,
   messageId: string,
-  title?: string,
+  params: { title?: string; description: string },
 ): Promise<ChannelTask> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks/claim-message`, {
     method: "POST",
     headers: withAuthHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ messageId, ...(title ? { title } : {}) }),
+    body: JSON.stringify({
+      messageId,
+      description: params.description,
+      ...(params.title ? { title: params.title } : {}),
+    }),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({})) as { error?: string };
@@ -395,13 +402,33 @@ export async function claimMessageAsTask(
   return res.json();
 }
 
+export async function updateChannelTaskDetails(
+  channelId: string,
+  taskNumber: number,
+  title: string,
+  description: string,
+): Promise<ChannelTask> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks/${taskNumber}`, {
+    method: "PATCH",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ title, description }),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { error?: string };
+    throw new Error(err.error ?? `Failed to update task details: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function claimChannelTask(
   channelId: string,
   taskNumber: number,
+  agentId?: string,
 ): Promise<ChannelTask> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/tasks/${taskNumber}/claim`, {
     method: "POST",
-    headers: withAuthHeaders(),
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(agentId ? { agentId } : {}),
   });
   if (!res.ok) {
     const err = await res.json().catch(() => ({})) as { error?: string };

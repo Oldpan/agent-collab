@@ -19,7 +19,13 @@ type ChannelActivationContextParams = {
   unreadCount?: number;
   oldestVisibleSeq?: number;
   participants?: TargetParticipant[];
-  boundTask?: { taskNumber: number; title: string; status: string; claimedByName: string | null };
+  boundTask?: {
+    taskNumber: number;
+    title: string;
+    description?: string | null;
+    status: string;
+    claimedByName: string | null;
+  };
   openTasks?: Array<{ taskNumber: number; title: string; status: string; claimedByName: string | null }>;
 };
 
@@ -83,8 +89,11 @@ export function buildChannelActivationContextText(params: ChannelActivationConte
 
   if (params.boundTask) {
     const assignee = params.boundTask.claimedByName ? ` @${params.boundTask.claimedByName}` : ' unassigned';
+    const brief = params.boundTask.description?.trim()
+      ? `\nTask brief / goal / done criteria:\n${params.boundTask.description.trim()}`
+      : '\nTask brief / goal / done criteria: missing';
     parts.push(
-      `[Bound task-message for this thread]\n#${params.boundTask.taskNumber} [${params.boundTask.status}]${assignee} — ${params.boundTask.title}\nThis thread is the shared work surface for that task-message. If you are not the owner/assignee, default to coordination and discussion unless you explicitly claim or are asked to take over.`,
+      `[Bound task-message for this thread]\n#${params.boundTask.taskNumber} [${params.boundTask.status}]${assignee} — ${params.boundTask.title}${brief}\nThis thread is the shared work surface for that task-message. If you are not the owner/assignee, default to coordination and discussion unless you explicitly claim or are asked to take over.`,
     );
   }
 

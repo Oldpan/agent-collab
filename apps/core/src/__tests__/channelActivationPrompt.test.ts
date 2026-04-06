@@ -34,4 +34,22 @@ describe('buildChannelActivationContextText', () => {
     expect(text).toContain('[Unread summary]\n3 older unread messages on this exact target were not included above. Use read_history(channel="#default", before=4) if you need them.');
     expect(text).toContain('\n\n---\n\n');
   });
+
+  it('应在 bound task 上下注入任务 brief', () => {
+    const text = buildChannelActivationContextText({
+      target: '#default:deadbeef',
+      boundTask: {
+        taskNumber: 4,
+        title: 'Clarify the rollout',
+        description: 'Goal: define the task brief flow. Done when create, promote, and edit all require a brief.',
+        status: 'in_progress',
+        claimedByName: 'kimi',
+      },
+    });
+
+    expect(text).toContain('[Bound task-message for this thread]');
+    expect(text).toContain('#4 [in_progress] @kimi — Clarify the rollout');
+    expect(text).toContain('Task brief / goal / done criteria:');
+    expect(text).toContain('Goal: define the task brief flow.');
+  });
 });

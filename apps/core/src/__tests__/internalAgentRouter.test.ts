@@ -1233,6 +1233,7 @@ describe('internalAgentRouter', () => {
       body: JSON.stringify({
         channel: '#default',
         message_ids: ['c0ffee00'],
+        description: 'Goal: promote this message into a real task. Done when the task is owned and the thread becomes the work surface.',
       }),
     });
 
@@ -1250,6 +1251,85 @@ describe('internalAgentRouter', () => {
        WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'c0ffee00'`,
     ).get(agent.agentId) as { role: string } | undefined;
     expect(participant?.role).toBe('owner');
+  });
+
+  it('claim_message 缺少 description 时应拒绝', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'ClaimMsgNoBrief',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/claim-msg-nobrief',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    const seq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('briefless-0000-0000-0000-000000000000', 'default', 'user', 'User', 'user', '#default', 'Promote me without a brief', ?, ?)`,
+    ).run(seq, now);
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim-message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: '#default',
+        message_ids: ['briefles'],
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error?: string };
+    expect(body.error).toBe('description is required');
+  });
+
+  it('update-details 应更新 task 标题和 brief，并同步 dedicated task root message', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'TaskEditBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/task-edit-bob',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    const seq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('taskedit0-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Original title', ?, ?, 'task')`,
+    ).run(seq, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, created_at, updated_at)
+       VALUES('task-edit-agent', 'default', 41, 'Original title', 'Old brief', 'todo', 'taskedit0-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(now, now);
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/update-details`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: '#default',
+        task_number: 41,
+        title: 'Updated title',
+        description: 'Goal: update task details through the internal API. Done when prompt context can see the new brief.',
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as { ok: boolean; title: string; description: string };
+    expect(body.ok).toBe(true);
+    expect(body.title).toBe('Updated title');
+    expect(body.description).toContain('internal API');
+
+    const taskRow = db.prepare(
+      `SELECT title, description FROM tasks WHERE task_id = 'task-edit-agent'`,
+    ).get() as { title: string; description: string };
+    expect(taskRow.title).toBe('Updated title');
+    expect(taskRow.description).toContain('prompt context can see the new brief');
+
+    const messageRow = db.prepare(
+      `SELECT content FROM channel_messages WHERE message_id = 'taskedit0-0000-0000-0000-000000000000'`,
+    ).get() as { content: string };
+    expect(messageRow.content).toBe('Updated title');
   });
 
   it('agent 不应允许非法状态流转 todo → done', async () => {

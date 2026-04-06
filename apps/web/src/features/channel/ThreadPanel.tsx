@@ -6,6 +6,7 @@ import type { AgentInfo } from "@agent-collab/protocol";
 import {
   type ChannelMessage,
   type ThreadCollaborationSummary,
+  updateChannelTaskDetails,
 } from "@/lib/api";
 import { useThreadStream } from "@/hooks/useThreadStream";
 import { Streamdown } from "streamdown";
@@ -17,6 +18,7 @@ import {
   escapeHtmlOutsideCodeBlocks,
 } from "@/components/ai-elements/streamdown";
 import { MessageSourceBadge } from "@/components/MessageSourceBadge";
+import { TaskEditorDialog, type TaskEditorValues } from "./TaskEditorDialog";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
   month: "2-digit",
@@ -36,6 +38,10 @@ function renderContent(content: string) {
       <span key={i} className="rounded px-0.5 font-semibold text-purple-700">{part}</span>
     ) : part,
   );
+}
+
+function hasTaskBrief(description?: string | null): boolean {
+  return Boolean(description?.trim());
 }
 
 function ThreadMessage({
@@ -114,20 +120,44 @@ function ThreadMessage({
 
 function ThreadSummaryCard({
   summary,
+  onEditTask,
 }: {
   summary?: ThreadCollaborationSummary | null;
+  onEditTask?: () => void;
 }) {
   const participants = summary?.participants ?? [];
   const hasBoundTask = Boolean(summary?.boundTask);
+  const brief = summary?.boundTask?.description?.trim();
 
   return (
     <div className="shrink-0 max-h-48 overflow-y-auto border-b-2 border-zinc-300 bg-[#fff7cc] px-4 py-3">
       <div className="grid gap-2 md:grid-cols-3">
         <div className="rounded-md border-2 border-zinc-900 bg-[#fffdf4] px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
-          <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Bound task-message</div>
+          <div className="flex items-start justify-between gap-2">
+            <div className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">Bound task-message</div>
+            {hasBoundTask && onEditTask && (
+              <Button
+                size="sm"
+                className="h-6 rounded-sm border-2 border-zinc-900 bg-[#d8efff] px-2 text-[10px] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#b8e0ff]"
+                onClick={onEditTask}
+              >
+                Edit
+              </Button>
+            )}
+          </div>
           <div className="mt-1 text-sm font-medium text-zinc-900">
             {hasBoundTask ? `#${summary?.boundTask?.taskNumber} ${summary?.boundTask?.title}` : "Not a task thread"}
           </div>
+          {hasBoundTask && (
+            <div className={cn(
+              "mt-2 rounded-sm border px-2 py-1.5 text-[11px]",
+              hasTaskBrief(summary?.boundTask?.description)
+                ? "border-zinc-300 bg-white text-zinc-700"
+                : "border-amber-300 bg-amber-50 text-amber-800",
+            )}>
+              {brief ?? "Task brief missing. Add the goal and done criteria so this thread has a concrete target."}
+            </div>
+          )}
           <div className="mt-1 text-[11px] text-zinc-500">
             {summary?.boundTask?.linkedThreadShortId
               ? `Task thread ${summary.boundTask.linkedThreadShortId}`
@@ -326,15 +356,49 @@ export function ThreadPanel({
   );
   const [showSummary, setShowSummary] = useState(false);
   const [summaryState, setSummaryState] = useState<ThreadCollaborationSummary | null>(null);
+  const [isEditingTask, setIsEditingTask] = useState(false);
+  const [editingTaskError, setEditingTaskError] = useState<string | null>(null);
+  const [savingTaskDetails, setSavingTaskDetails] = useState(false);
 
   useEffect(() => {
     setSummaryState(summary);
   }, [summary]);
 
   useEffect(() => {
+    if (summaryState?.boundTask) return;
+    setIsEditingTask(false);
+    setEditingTaskError(null);
+  }, [summaryState?.boundTask]);
+
+  useEffect(() => {
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
   }, [messages]);
+
+  const handleTaskEditSubmit = useCallback(async ({ title, description }: TaskEditorValues) => {
+    const boundTask = summaryState?.boundTask;
+    if (!boundTask || savingTaskDetails) return;
+    setSavingTaskDetails(true);
+    setEditingTaskError(null);
+    try {
+      const updated = await updateChannelTaskDetails(channelId, boundTask.taskNumber, title, description);
+      setSummaryState((prev) => {
+        if (!prev?.boundTask) return prev;
+        return {
+          ...prev,
+          boundTask: {
+            ...prev.boundTask,
+            ...updated,
+          },
+        };
+      });
+      setIsEditingTask(false);
+    } catch (err) {
+      setEditingTaskError(String((err as Error)?.message ?? err));
+    } finally {
+      setSavingTaskDetails(false);
+    }
+  }, [channelId, savingTaskDetails, summaryState?.boundTask]);
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col border-l-2 border-zinc-900 bg-[#fefce8]", className)}>
@@ -428,6 +492,10 @@ export function ThreadPanel({
       {showSummary && (
         <ThreadSummaryCard
           summary={summaryState}
+          onEditTask={summaryState?.boundTask ? () => {
+            setEditingTaskError(null);
+            setIsEditingTask(true);
+          } : undefined}
         />
       )}
 
@@ -465,6 +533,21 @@ export function ThreadPanel({
       </div>
 
       <ThreadComposer onSend={sendMessage} channelMembers={channelMembers} />
+      <TaskEditorDialog
+        isOpen={isEditingTask && Boolean(summaryState?.boundTask)}
+        dialogTitle={summaryState?.boundTask ? `Edit Task #${summaryState.boundTask.taskNumber}` : "Edit task"}
+        submitLabel="Save changes"
+        initialTitle={summaryState?.boundTask?.title ?? ""}
+        initialDescription={summaryState?.boundTask?.description ?? ""}
+        saving={savingTaskDetails}
+        error={editingTaskError}
+        onClose={() => {
+          if (savingTaskDetails) return;
+          setIsEditingTask(false);
+          setEditingTaskError(null);
+        }}
+        onSubmit={handleTaskEditSubmit}
+      />
     </div>
   );
 }

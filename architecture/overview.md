@@ -194,12 +194,14 @@ agent 详情中的基础信息集中在 `Profile`：
 - `Tasks` tab 已支持：
   - 任务列表
   - 按状态分组
-  - 新建任务
-  - claim / unclaim
+  - 新建任务（要求填写 task brief）
+  - 编辑 task title / brief
+  - claim self / assign-to-agent / release / reassign
   - 推进状态
   - 删除任务
-- chat 中普通 channel 根消息可直接 `Promote to task`
+- chat 中普通 channel 根消息可直接 `Promote to task`，并先补全 brief
 - 被提升或新建的 task 都会绑定到自己的 task thread
+- task 可直接指派给已加入该 channel 的 agent，并自动在 task thread 中发起 kickoff prompt
 - `clear-chat` 会同时清空该 channel 的 task board，避免悬空 task
 - DM Thread UI 已按当前产品模型暂缓，不在 direct chat 中继续扩展 thread
 

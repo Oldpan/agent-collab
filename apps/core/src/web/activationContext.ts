@@ -23,7 +23,7 @@ export type TargetActivationContext = {
   unreadCount: number;
   oldestVisibleSeq?: number;
   participants: TargetParticipant[];
-  boundTask?: { taskNumber: number; title: string; status: string; claimedByName: string | null };
+  boundTask?: { taskNumber: number; title: string; description?: string | null; status: string; claimedByName: string | null };
   openTasks: Array<{ taskNumber: number; title: string; status: string; claimedByName: string | null }>;
   rootMessage?: ActivationContextMessage;
 };
@@ -99,6 +99,7 @@ export function buildTargetActivationContext(
     ? {
         taskNumber: boundTaskRow.taskNumber,
         title: boundTaskRow.title,
+        description: boundTaskRow.description ?? null,
         status: boundTaskRow.status,
         claimedByName: boundTaskRow.assigneeName,
       }
