@@ -245,13 +245,14 @@ export function getThreadCollaborationSummary(
     activeSince: Date.now() - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
   });
   const ownerParticipant = participants.find((participant) => participant.role === 'owner');
+  const suppressOwner = boundTask?.status === 'done';
   const taskOwner = boundTask && boundTask.status !== 'done' && boundTask.assigneeName
     ? { ownerAgentId: boundTask.assigneeId ?? null, ownerName: boundTask.assigneeName }
     : null;
   return {
     ...(boundTask ? { boundTask } : {}),
-    ownerAgentId: taskOwner?.ownerAgentId ?? ownerParticipant?.agentId ?? null,
-    ownerName: taskOwner?.ownerName ?? ownerParticipant?.name ?? null,
+    ownerAgentId: suppressOwner ? null : taskOwner?.ownerAgentId ?? ownerParticipant?.agentId ?? null,
+    ownerName: suppressOwner ? null : taskOwner?.ownerName ?? ownerParticipant?.name ?? null,
     participants: participants.map((participant) => participant.name),
   };
 }

@@ -104,8 +104,39 @@ describe('threadTaskBindings', () => {
 
     const summary = getThreadCollaborationSummary(db, { channelId: 'default', threadRootId: 'plain1234' });
     expect(summary.boundTask).toBeUndefined();
+    expect(summary.ownerAgentId).toBeNull();
     expect(summary.ownerName).toBeNull();
     expect(summary.participants).toEqual(['FreshAlice']);
+
+    db.close();
+  });
+
+  it('done task thread 即使残留 owner participant 也不应继续暴露 owner', () => {
+    const db = createTestDb();
+    const now = Date.now();
+    db.prepare(`INSERT INTO agents(agent_id, name, agent_type, created_at, updated_at, channel_id) VALUES(?, ?, 'claude_acp', ?, ?, 'default')`)
+      .run('agent-1', 'Bob', now, now);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('donebeef-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Done task', 1, ?)`,
+    ).run(now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
+       VALUES(?, 'default', 9, 'Done task', 'done', 'agent-1', 'Bob', 'donebeef-0000-0000-0000-000000000000', ?, ?)`,
+    ).run('task-done', now, now);
+    upsertTargetParticipant(db, {
+      agentId: 'agent-1',
+      channelId: 'default',
+      threadRootId: 'donebeef',
+      role: 'owner',
+      lastActiveAt: now,
+    });
+
+    const summary = getThreadCollaborationSummary(db, { channelId: 'default', threadRootId: 'donebeef' });
+    expect(summary.boundTask?.taskNumber).toBe(9);
+    expect(summary.ownerAgentId).toBeNull();
+    expect(summary.ownerName).toBeNull();
+    expect(summary.participants).toEqual(['Bob']);
 
     db.close();
   });
@@ -131,6 +162,32 @@ describe('threadTaskBindings', () => {
        WHERE agent_id = 'agent-1' AND channel_id = 'default' AND thread_root_id = 'abc12345'`,
     ).get() as { role: string } | undefined;
     expect(owner?.role).toBe('owner');
+
+    db.close();
+  });
+
+  it('syncTaskThreadOwner 在 agentId 为空时应清空 owner 角色', () => {
+    const db = createTestDb();
+    const now = Date.now();
+    db.prepare(`INSERT INTO agents(agent_id, name, agent_type, created_at, updated_at, channel_id) VALUES(?, ?, 'claude_acp', ?, ?, 'default')`)
+      .run('agent-1', 'Bob', now, now);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('deadbeef-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Task root', 1, ?)`,
+    ).run(now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
+       VALUES('task-clear-owner', 'default', 11, 'Task root', 'in_progress', 'deadbeef-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(now, now);
+
+    syncTaskThreadOwner(db, { taskId: 'task-clear-owner', agentId: 'agent-1', lastActiveAt: now });
+    syncTaskThreadOwner(db, { taskId: 'task-clear-owner', agentId: null, lastActiveAt: now + 1 });
+
+    const participant = db.prepare(
+      `SELECT role FROM target_participants
+       WHERE agent_id = 'agent-1' AND channel_id = 'default' AND thread_root_id = 'deadbeef'`,
+    ).get() as { role: string } | undefined;
+    expect(participant?.role).toBe('participant');
 
     db.close();
   });

@@ -562,6 +562,77 @@ describe('internalAgentRouter', () => {
     expect(participant?.role).toBe('participant');
   });
 
+  it('同批被 @mention 唤醒的多个 agent 应看到一致的 active participants', async () => {
+    const tab = manager.createAgent({
+      name: 'BatchTab',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/batch-tab-router',
+      channelId: 'default',
+    });
+    const bob = manager.createAgent({
+      name: 'BatchBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/batch-bob-router',
+      channelId: 'default',
+    });
+    const carol = manager.createAgent({
+      name: 'BatchCarol',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/batch-carol-router',
+      channelId: 'default',
+    });
+    manager.joinChannel(tab.agentId, 'default');
+    manager.joinChannel(bob.agentId, 'default');
+    manager.joinChannel(carol.agentId, 'default');
+
+    const conv = manager.openAgentChannelThread(tab.agentId, 'default', null);
+    if (!conv) throw new Error('missing batch root conversation');
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-agent-mention-batch',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'wake both helpers',
+    });
+
+    dispatches.length = 0;
+    const res = await fetch(`${baseUrl}/api/internal/agent/${tab.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target: '#default',
+        content: 'Need both of you here, @BatchBob and @BatchCarol.',
+        kind: 'progress',
+        conversationId: conv.id,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await expectDispatchCount(2);
+
+    const bobConv = manager.openAgentChannelThread(bob.agentId, 'default', null);
+    const carolConv = manager.openAgentChannelThread(carol.agentId, 'default', null);
+    if (!bobConv || !carolConv) throw new Error('missing batch target conversations');
+
+    const runDispatches = dispatches.filter((msg): msg is Extract<CoreToNode, { type: 'run.dispatch' }> => msg.type === 'run.dispatch');
+    const bobDispatch = runDispatches.find((msg) => msg.conversationId === bobConv.id);
+    const carolDispatch = runDispatches.find((msg) => msg.conversationId === carolConv.id);
+    const extractParticipants = (text?: string) => (
+      /\[Active participants on this target\]\n([\s\S]*?)(?:\n\n\[|$)/.exec(text ?? '')?.[1]?.trim() ?? ''
+    );
+
+    expect(extractParticipants(bobDispatch?.contextText)).toBe(
+      '@BatchBob (participant)\n@BatchCarol (participant)\n@BatchTab (participant)',
+    );
+    expect(extractParticipants(carolDispatch?.contextText)).toBe(
+      '@BatchBob (participant)\n@BatchCarol (participant)\n@BatchTab (participant)',
+    );
+  });
+
   it('agent 在线程正式 @ 另一个 agent 时应唤醒同一 thread 的 conversation', async () => {
     const tab = manager.createAgent({
       name: 'ThreadTab',
@@ -679,6 +750,85 @@ describe('internalAgentRouter', () => {
     ).get(bobSession.sessionKey) as { promptText: string } | undefined;
     expect(runRow?.promptText).toContain('Your collaborative thread in #default received a reply from RecentAlice.');
     expect(runRow?.promptText).toContain('#default:recent123');
+  });
+
+  it('task thread 普通回复应优先唤醒 assignee，并在 prompt 中注入 bound task 上下文', async () => {
+    const alice = manager.createAgent({
+      name: 'TaskRootAlice',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/task-root-alice-router',
+      channelId: 'default',
+    });
+    const bob = manager.createAgent({
+      name: 'TaskOwnerBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/task-owner-bob-router',
+      channelId: 'default',
+    });
+    manager.joinChannel(alice.agentId, 'default');
+    manager.joinChannel(bob.agentId, 'default');
+
+    const threadRootId = 'taskc123';
+    const aliceConv = manager.openAgentChannelThread(alice.agentId, 'default', threadRootId);
+    const bobConv = manager.openAgentChannelThread(bob.agentId, 'default', threadRootId);
+    if (!aliceConv || !bobConv) throw new Error('missing task thread conversations');
+
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES(?, 'default', ?, ?, 'agent', '#default', ?, 1, ?)`,
+    ).run('taskc123-0000-0000-0000-000000000000', alice.agentId, alice.name, 'Task root', now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
+       VALUES(?, 'default', 12, 'Investigate rollout', 'Goal: reproduce the issue. Done when root cause and fix are posted in this thread.', 'in_progress', ?, ?, ?, ?, ?)`,
+    ).run(
+      'task-thread-owner',
+      bob.agentId,
+      bob.name,
+      'taskc123-0000-0000-0000-000000000000',
+      now,
+      now,
+    );
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, created_at, updated_at)
+       VALUES('task-other-open', 'default', 13, 'Other open task', 'todo', ?, ?)`,
+    ).run(now, now);
+
+    const aliceSession = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(aliceConv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-task-thread-owner',
+      sessionKey: aliceSession.sessionKey,
+      promptText: 'continue task thread',
+    });
+
+    dispatches.length = 0;
+    const res = await fetch(`${baseUrl}/api/internal/agent/${alice.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target: `#default:${threadRootId}`,
+        content: 'Posting a normal progress update inside the task thread.',
+        kind: 'progress',
+        conversationId: aliceConv.id,
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    await expectDispatchCount(1);
+
+    const taskDispatch = dispatches
+      .filter((msg): msg is Extract<CoreToNode, { type: 'run.dispatch' }> => msg.type === 'run.dispatch')
+      .find((msg) => msg.conversationId === bobConv.id);
+    expect(taskDispatch?.prompt).toContain('Your collaborative thread in #default received a reply from TaskRootAlice.');
+    expect(taskDispatch?.contextText).toContain('[Bound task-message for this thread]');
+    expect(taskDispatch?.contextText).toContain('#12 [in_progress] @TaskOwnerBob — Investigate rollout');
+    expect(taskDispatch?.contextText).toContain('Goal: reproduce the issue. Done when root cause and fix are posted in this thread.');
+    expect(taskDispatch?.contextText).toContain('@TaskOwnerBob (owner)');
+    expect(taskDispatch?.contextText).toContain('@TaskRootAlice (participant)');
+    expect(taskDispatch?.contextText).not.toContain('[Task-message board summary]');
   });
 
   it('agent mention 只对正式 channel/thread 消息生效，并受 cooldown 限制', async () => {

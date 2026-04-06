@@ -84,7 +84,7 @@ export function buildTargetActivationContext(
     ).get(params.channelId, normalizedThreadRootId) as ActivationContextMessage | undefined
     : undefined;
 
-  const participants = listRecentTargetParticipants(db, {
+  const recentParticipants = listRecentTargetParticipants(db, {
     channelId: params.channelId,
     threadRootId: normalizedThreadRootId,
     activeSince: Date.now() - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
@@ -104,6 +104,12 @@ export function buildTargetActivationContext(
         claimedByName: boundTaskRow.assigneeName,
       }
     : undefined;
+  const participants = boundTaskRow?.status === 'done'
+    ? recentParticipants.map((participant) => ({
+        ...participant,
+        role: 'participant' as const,
+      }))
+    : recentParticipants;
 
   const openTasks = db.prepare(
     `SELECT task_number as taskNumber,

@@ -168,6 +168,9 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.systemPromptText).toContain('prefer `mcp__chat__send_message(content="...")` with no target');
     expect(dispatch.systemPromptText).toContain('Do **not** convert a main-channel message');
     expect(dispatch.systemPromptText).toContain('Do **not** quote or repeat that metadata block back to the user');
+    expect(dispatch.systemPromptText).toContain('Treat the current `reply_target` as the shared work surface for that conversation.');
+    expect(dispatch.systemPromptText).toContain('If you need another agent\'s help in a channel or thread, explicitly `@mention` them');
+    expect(dispatch.systemPromptText).toContain('If you are not the owner of a thread-bound task, default to coordination, review, or support');
     expect(dispatch.systemPromptText).toContain('Maintain memory carefully');
     expect(dispatch.systemPromptText).not.toContain('put to sleep when idle');
     expect(dispatch.systemPromptText).not.toContain('stdin prompt');
@@ -738,6 +741,161 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.contextText ?? '').toContain('当前机器显存状态如下：显存几乎完全可用。');
     expect(dispatch.contextText ?? '').toContain('当前机器内存状态如下：可用内存很充裕。');
     expect(dispatch.contextText ?? '').not.toContain('Context (previous messages, for continuity after restart):');
+  });
+
+  it('channel root restore 时应只裁掉 recent overlap，并保留更早的 continuity', async () => {
+    manager.close();
+    db.close();
+    db = createTestDb();
+    sent.length = 0;
+    manager = new ConversationManager({
+      db,
+      config: createTestConfig({ contextReplayEnabled: true, contextReplayRuns: 16 }),
+      nodeRegistry: fakeRegistry as any,
+    });
+    manager.start();
+
+    const channel = manager.createChannel({ name: 'prompt-root-room' });
+    const agent = manager.createAgent({
+      name: 'PromptRootBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/prompt-root-bob',
+      channelId: channel.channelId,
+    });
+    manager.joinChannel(agent.agentId, channel.channelId);
+    const conv = manager.openAgentChannelThread(agent.agentId, channel.channelId, null);
+    if (!conv) throw new Error('missing root conversation');
+
+    const target = '#prompt-root-room';
+    const baseTime = Date.now();
+    const sessionRow = db.prepare(
+      'SELECT session_key as sessionKey FROM conversations WHERE id = ?',
+    ).get(conv.id) as { sessionKey: string };
+
+    const firstRunId = randomUUID();
+    db.prepare(
+      `INSERT INTO runs(run_id, session_key, prompt_text, started_at, ended_at, stop_reason)
+       VALUES(?, ?, ?, ?, ?, ?)`,
+    ).run(
+      firstRunId,
+      sessionRow.sessionKey,
+      buildChannelActivationPrompt({
+        channelName: 'prompt-root-room',
+        target,
+        replyTarget: target,
+        senderName: 'yanzong',
+        content: '@PromptRootBob 帮我看下当前机器的显存状态',
+        reason: 'mention',
+      }),
+      1000,
+      1100,
+      'end_turn',
+    );
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'rootrun01-agent',
+      channel.channelId,
+      agent.agentId,
+      agent.name,
+      target,
+      '当前机器显存状态如下：显存基本空闲。',
+      2,
+      baseTime + 2,
+      firstRunId,
+      'final',
+    );
+
+    const secondRunId = randomUUID();
+    db.prepare(
+      `INSERT INTO runs(run_id, session_key, prompt_text, started_at, ended_at, stop_reason)
+       VALUES(?, ?, ?, ?, ?, ?)`,
+    ).run(
+      secondRunId,
+      sessionRow.sessionKey,
+      buildChannelActivationPrompt({
+        channelName: 'prompt-root-room',
+        target,
+        replyTarget: target,
+        senderName: 'yanzong',
+        content: '@PromptRootBob 再看下机器的内存状态',
+        reason: 'mention',
+      }),
+      1200,
+      1300,
+      'end_turn',
+    );
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'rootrun02-agent',
+      channel.channelId,
+      agent.agentId,
+      agent.name,
+      target,
+      '当前机器内存状态如下：可用内存很充足。',
+      4,
+      baseTime + 4,
+      secondRunId,
+      'final',
+    );
+
+    const recentMessages = [
+      {
+        messageId: 'user-root-2',
+        seq: 3,
+        target,
+        senderName: 'yanzong',
+        senderType: 'user' as const,
+        content: '@PromptRootBob 再看下机器的内存状态',
+        createdAt: baseTime + 3,
+      },
+      {
+        messageId: 'rootrun02',
+        seq: 4,
+        target,
+        senderName: 'PromptRootBob',
+        senderType: 'agent' as const,
+        content: '当前机器内存状态如下：可用内存很充足。',
+        createdAt: baseTime + 4,
+      },
+    ];
+
+    await manager.submitPrompt(
+      conv.id,
+      buildChannelActivationPrompt({
+        channelName: 'prompt-root-room',
+        target,
+        replyTarget: target,
+        senderName: 'yanzong',
+        content: '@PromptRootBob 你刚才都看了什么',
+        reason: 'mention',
+      }),
+      {
+        recordAsUserMessage: false,
+        activationContextText: buildChannelActivationContextText({
+          target,
+          recentMessages,
+          oldestVisibleSeq: 3,
+        }),
+        replayOverlapRecentMessages: recentMessages,
+      },
+    );
+
+    const dispatch = sent[0]?.msg;
+    if (!dispatch || dispatch.type !== 'run.dispatch') throw new Error('missing dispatch');
+    expect(dispatch.dispatchMode).toBe('resume');
+    expect(dispatch.contextText ?? '').toContain('Context (previous messages, for continuity after restart):');
+    expect(dispatch.contextText ?? '').toContain('User: @PromptRootBob 帮我看下当前机器的显存状态');
+    expect(dispatch.contextText ?? '').toContain('PromptRootBob: 当前机器显存状态如下：显存基本空闲。');
+    expect(dispatch.contextText ?? '').toContain('[Recent messages on this exact target]');
+    expect(dispatch.contextText ?? '').toContain('@PromptRootBob 再看下机器的内存状态');
+    expect(dispatch.contextText ?? '').toContain('当前机器内存状态如下：可用内存很充足。');
+    expect(dispatch.contextText ?? '').not.toContain('User: @PromptRootBob 再看下机器的内存状态');
+    expect(dispatch.contextText ?? '').not.toContain('PromptRootBob: 当前机器内存状态如下：可用内存很充足。');
   });
 
   it('cancelConversationRun 应发送 run.cancel 到节点', () => {

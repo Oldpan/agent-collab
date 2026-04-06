@@ -330,10 +330,7 @@ export function registerInternalAgentRoutes(
         queueAgentNotification(mentionedAgent.agentId, 'agent_mention', 'participant');
       }
 
-      for (const [targetAgentId, { reason, role }] of pendingNotifications.entries()) {
-        const conv = conversationManager.openAgentChannelThread(targetAgentId, channelId, threadRootId ?? null);
-        if (!conv || !channel) continue;
-
+      for (const [targetAgentId, { role }] of pendingNotifications.entries()) {
         upsertTargetParticipant(db, {
           agentId: targetAgentId,
           channelId,
@@ -341,6 +338,11 @@ export function registerInternalAgentRoutes(
           role,
           lastActiveAt: now,
         });
+      }
+
+      for (const [targetAgentId, { reason }] of pendingNotifications.entries()) {
+        const conv = conversationManager.openAgentChannelThread(targetAgentId, channelId, threadRootId ?? null);
+        if (!conv || !channel) continue;
 
         const activationContext = buildTargetActivationContext(db, {
           agentId: targetAgentId,

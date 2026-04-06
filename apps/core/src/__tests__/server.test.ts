@@ -7,7 +7,7 @@ import type { Db } from '@agent-collab/runtime-acp';
 import { createRun } from '@agent-collab/runtime-acp';
 import WebSocket from 'ws';
 import { findMentionedAgents } from '../web/channelMentions.js';
-import { buildChannelActivationPrompt } from '../web/channelActivationPrompt.js';
+import { buildChannelActivationPrompt, buildChannelActivationContextText } from '../web/channelActivationPrompt.js';
 import { buildTargetActivationContext } from '../web/activationContext.js';
 import { bumpAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
 import { listChannelSubscriptions } from '../web/channelSubscriptions.js';
@@ -386,34 +386,55 @@ beforeAll(async () => {
           role: rolePriority(role) > rolePriority(existing.role) ? role : existing.role,
         });
       };
+      const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
+      const flushAgentNotifications = () => {
+        for (const [agentId, { role }] of pendingNotifications.entries()) {
+          upsertTargetParticipant(db, {
+            agentId,
+            channelId: req.params.id,
+            threadRootId: threadRootId ?? null,
+            role,
+            lastActiveAt: now,
+          });
+        }
 
-      const notifyAgent = (
-        agentId: string,
-        reason: 'mention' | 'thread_reply' | 'channel_activity',
-        role: 'owner' | 'participant',
-      ) => {
-        const conv = manager.openAgentChannelThread(agentId, req.params.id, threadRootId ?? null);
-        if (!conv) return;
-        const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
-        upsertTargetParticipant(db, {
-          agentId,
-          channelId: req.params.id,
-          threadRootId: threadRootId ?? null,
-          role,
-          lastActiveAt: now,
-        });
-        bumpAgentMessageCheckpoint(db, agentId, req.params.id, seq, threadRootId ?? null);
-        void manager.submitPrompt(
-          conv.id,
-          buildChannelActivationPrompt({
-            channelName: channel.name,
-            target: historyTarget,
-            senderName,
-            content,
-            reason,
-          }),
-          { recordAsUserMessage: false },
-        ).catch(() => {});
+        for (const [agentId, { reason }] of pendingNotifications.entries()) {
+          const conv = manager.openAgentChannelThread(agentId, req.params.id, threadRootId ?? null);
+          if (!conv) continue;
+          const activationContext = buildTargetActivationContext(db, {
+            agentId,
+            channelId: req.params.id,
+            replyTarget: conv.replyTarget ?? historyTarget,
+            triggerSeq: seq,
+            threadRootId: threadRootId ?? null,
+          });
+          bumpAgentMessageCheckpoint(db, agentId, req.params.id, seq, threadRootId ?? null);
+          void manager.submitPrompt(
+            conv.id,
+            buildChannelActivationPrompt({
+              channelName: channel.name,
+              target: historyTarget,
+              replyTarget: activationContext.replyTarget,
+              senderName,
+              content,
+              reason,
+            }),
+            {
+              recordAsUserMessage: false,
+              activationContextText: buildChannelActivationContextText({
+                target: historyTarget,
+                recentMessages: activationContext.recentMessages,
+                rootMessage: activationContext.rootMessage,
+                unreadCount: activationContext.unreadCount,
+                oldestVisibleSeq: activationContext.oldestVisibleSeq,
+                participants: activationContext.participants,
+                boundTask: activationContext.boundTask,
+                openTasks: activationContext.openTasks,
+              }) || undefined,
+              replayOverlapRecentMessages: activationContext.recentMessages,
+            },
+          ).catch(() => {});
+        }
       };
 
       if (threadRootId) {
@@ -471,9 +492,7 @@ beforeAll(async () => {
         }
       }
 
-      for (const [agentId, { reason, role }] of pendingNotifications.entries()) {
-        notifyAgent(agentId, reason, role);
-      }
+      flushAgentNotifications();
 
       reply.code(201);
       return { messageId, seq };
@@ -1334,6 +1353,68 @@ describe('REST API', () => {
     expect(freshRunCount.count).toBe(1);
   });
 
+  it('POST /api/channels/:id/messages 在主频道一次 @ 多个 agent 时，每个 agent 都应看到一致的 active participants', async () => {
+    const channel = manager.createChannel({ name: 'mention-batch-room' });
+    const bob = manager.createAgent({
+      name: 'PromptBatchBob',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/prompt-batch-bob',
+    });
+    const carol = manager.createAgent({
+      name: 'PromptBatchCarol',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/prompt-batch-carol',
+    });
+    manager.joinChannel(bob.agentId, channel.channelId);
+    manager.joinChannel(carol.agentId, channel.channelId);
+
+    const response = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: '@PromptBatchBob @PromptBatchCarol 一起看下这个问题',
+        senderName: 'User',
+      }),
+    });
+
+    expect(response.status).toBe(201);
+
+    const bobConv = manager.openAgentChannelThread(bob.agentId, channel.channelId, null);
+    const carolConv = manager.openAgentChannelThread(carol.agentId, channel.channelId, null);
+    expect(bobConv).not.toBeNull();
+    expect(carolConv).not.toBeNull();
+
+    const bobDebug = db.prepare(
+      `SELECT prompt_text as promptText, context_text as contextText
+       FROM run_debug_inputs
+       WHERE conversation_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(bobConv?.id) as { promptText: string; contextText: string | null } | undefined;
+    const carolDebug = db.prepare(
+      `SELECT prompt_text as promptText, context_text as contextText
+       FROM run_debug_inputs
+       WHERE conversation_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(carolConv?.id) as { promptText: string; contextText: string | null } | undefined;
+
+    expect(bobDebug?.promptText).toContain('[System: You were @mentioned in #mention-batch-room by User.]');
+    expect(carolDebug?.promptText).toContain('[System: You were @mentioned in #mention-batch-room by User.]');
+
+    const extractParticipants = (text?: string | null) => (
+      /\[Active participants on this target\]\n([\s\S]*?)(?:\n\n\[|$)/.exec(text ?? '')?.[1]?.trim() ?? ''
+    );
+    const bobParticipants = extractParticipants(bobDebug?.contextText);
+    const carolParticipants = extractParticipants(carolDebug?.contextText);
+
+    expect(bobParticipants).toBe(carolParticipants);
+    expect(bobParticipants).toContain('@PromptBatchBob');
+    expect(bobParticipants).toContain('@PromptBatchCarol');
+  });
+
   it('POST /api/channels/:id/messages 在线程中显式 @agent 时应优先保留 mention reason', async () => {
     const channel = manager.createChannel({ name: 'thread-mention-priority' });
     const bob = manager.createAgent({
@@ -1474,6 +1555,96 @@ describe('REST API', () => {
     expect(runRow?.promptText).toContain(`target: #default:${rootMessageId.slice(0, 8)}`);
     expect(runRow?.promptText).toContain('我在 thread 里回复你');
     expect(runRow?.promptText).not.toContain('Call check_messages to read unread messages');
+  });
+
+  it('POST /api/channels/:id/messages 在 bound task thread reply 时应给多 agent 注入一致的协作上下文', async () => {
+    const now = Date.now();
+    const owner = manager.createAgent({
+      name: 'TaskOwnerPrompt',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/task-owner-prompt',
+    });
+    const reviewer = manager.createAgent({
+      name: 'TaskReviewerPrompt',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/task-reviewer-prompt',
+    });
+    manager.joinChannel(owner.agentId, 'default');
+    manager.joinChannel(reviewer.agentId, 'default');
+
+    const rootSeq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('prmpt208-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Investigate rollout regression', ?, ?, 'task')`,
+    ).run(rootSeq, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
+       VALUES('task-prompt-thread', 'default', 208, 'Investigate rollout regression', 'Goal: confirm prompt context exposes task ownership, reviewer presence, and the thread root. Done when both owner and reviewer get identical collaboration context.', 'in_progress', ?, ?, 'prmpt208-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(owner.agentId, owner.name, now, now);
+
+    syncTaskThreadOwner(db, {
+      taskId: 'task-prompt-thread',
+      agentId: owner.agentId,
+      lastActiveAt: now,
+    });
+    upsertTargetParticipant(db, {
+      agentId: reviewer.agentId,
+      channelId: 'default',
+      threadRootId: 'prmpt208',
+      role: 'participant',
+      lastActiveAt: now,
+    });
+
+    const response = await fetchJson('/api/channels/default/messages', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: '请同步下这个 task thread 的当前分工',
+        senderName: 'User',
+        replyTo: 'prmpt208',
+      }),
+    });
+
+    expect(response.status).toBe(201);
+
+    const ownerConv = manager.openAgentChannelThread(owner.agentId, 'default', 'prmpt208');
+    const reviewerConv = manager.openAgentChannelThread(reviewer.agentId, 'default', 'prmpt208');
+    expect(ownerConv).not.toBeNull();
+    expect(reviewerConv).not.toBeNull();
+
+    const ownerDebug = db.prepare(
+      `SELECT prompt_text as promptText, context_text as contextText
+       FROM run_debug_inputs
+       WHERE conversation_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(ownerConv?.id) as { promptText: string; contextText: string | null } | undefined;
+    const reviewerDebug = db.prepare(
+      `SELECT prompt_text as promptText, context_text as contextText
+       FROM run_debug_inputs
+       WHERE conversation_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(reviewerConv?.id) as { promptText: string; contextText: string | null } | undefined;
+
+    expect(ownerDebug?.promptText).toContain('[System: Your collaborative thread in #default received a reply from User.]');
+    expect(reviewerDebug?.promptText).toContain('[System: Your collaborative thread in #default received a reply from User.]');
+
+    for (const debugRow of [ownerDebug, reviewerDebug]) {
+      expect(debugRow?.contextText).toContain('[Thread root message]');
+      expect(debugRow?.contextText).toContain('Investigate rollout regression');
+      expect(debugRow?.contextText).toContain('[Active participants on this target]');
+      expect(debugRow?.contextText).toContain('@TaskOwnerPrompt (owner)');
+      expect(debugRow?.contextText).toContain('@TaskReviewerPrompt (participant)');
+      expect(debugRow?.contextText).toContain('[Bound task-message for this thread]');
+      expect(debugRow?.contextText).toContain('#208 [in_progress] @TaskOwnerPrompt — Investigate rollout regression');
+      expect(debugRow?.contextText).toContain('Task brief / goal / done criteria:');
+      expect(debugRow?.contextText).toContain('confirm prompt context exposes task ownership');
+      expect(debugRow?.contextText).toContain('shared work surface for that task-message');
+      expect(debugRow?.contextText).not.toContain('[Task-message board summary]');
+    }
   });
 
   it('GET /api/conversations 应列出已创建的会话', async () => {

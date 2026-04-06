@@ -1,0 +1,196 @@
+import { describe, expect, it } from 'vitest';
+import { createTestDb } from './helpers.js';
+import { buildTargetActivationContext } from '../web/activationContext.js';
+import { buildChannelActivationContextText } from '../web/channelActivationPrompt.js';
+import { upsertTargetParticipant } from '../web/targetParticipants.js';
+
+describe('activationContext', () => {
+  it('channel root prompt context 应按协同优先级展示 open task board，并忽略 done task', () => {
+    const db = createTestDb();
+    const now = Date.now();
+
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, claimed_by_name, created_at, updated_at)
+       VALUES
+       ('task-1', 'default', 1, 'Backlog follow-up', 'todo', NULL, ?, ?),
+       ('task-2', 'default', 2, 'Hotfix rollout', 'in_progress', 'Bob', ?, ?),
+       ('task-3', 'default', 3, 'Already done', 'done', 'Alice', ?, ?),
+       ('task-4', 'default', 4, 'Need review', 'in_review', 'Alice', ?, ?),
+       ('task-5', 'default', 5, 'Document edge cases', 'todo', NULL, ?, ?),
+       ('task-6', 'default', 6, 'Refactor prompt builder', 'in_progress', NULL, ?, ?),
+       ('task-7', 'default', 7, 'Overflow item', 'todo', NULL, ?, ?)`,
+    ).run(now, now, now, now, now, now, now, now, now, now, now, now, now, now);
+
+    const context = buildTargetActivationContext(db, {
+      agentId: 'agent-board-reader',
+      channelId: 'default',
+      replyTarget: '#default',
+      triggerSeq: 999,
+      threadRootId: null,
+    });
+    const text = buildChannelActivationContextText({
+      target: '#default',
+      recentMessages: context.recentMessages,
+      unreadCount: context.unreadCount,
+      oldestVisibleSeq: context.oldestVisibleSeq,
+      participants: context.participants,
+      boundTask: context.boundTask,
+      openTasks: context.openTasks,
+    });
+
+    expect(text).toContain('[Task-message board summary]');
+    expect(text).toContain('#2 [in_progress] @Bob — Hotfix rollout');
+    expect(text).toContain('#6 [in_progress] unassigned — Refactor prompt builder');
+    expect(text).toContain('#4 [in_review] @Alice — Need review');
+    expect(text).toContain('#1 [todo] unassigned — Backlog follow-up');
+    expect(text).toContain('#5 [todo] unassigned — Document edge cases');
+    expect(text).not.toContain('#3 [done]');
+    expect(text).not.toContain('Overflow item');
+
+    const hotfixIndex = text.indexOf('#2 [in_progress] @Bob — Hotfix rollout');
+    const refactorIndex = text.indexOf('#6 [in_progress] unassigned — Refactor prompt builder');
+    const reviewIndex = text.indexOf('#4 [in_review] @Alice — Need review');
+    const backlogIndex = text.indexOf('#1 [todo] unassigned — Backlog follow-up');
+    const docsIndex = text.indexOf('#5 [todo] unassigned — Document edge cases');
+    expect(hotfixIndex).toBeGreaterThanOrEqual(0);
+    expect(refactorIndex).toBeGreaterThan(hotfixIndex);
+    expect(reviewIndex).toBeGreaterThan(refactorIndex);
+    expect(backlogIndex).toBeGreaterThan(reviewIndex);
+    expect(docsIndex).toBeGreaterThan(backlogIndex);
+
+    db.close();
+  });
+
+  it('task thread prompt context 应同时包含 root、recent history、participants 和 task brief，并抑制 task board summary', () => {
+    const db = createTestDb();
+    const now = Date.now();
+    const threadRootId = 'feedbeef';
+    const rootMessageId = 'feedbeef-0000-0000-0000-000000000000';
+
+    db.prepare(
+      `INSERT INTO agents(agent_id, name, agent_type, channel_id, created_at, updated_at)
+       VALUES
+       ('agent-owner', 'TaskOwner', 'claude_acp', 'default', ?, ?),
+       ('agent-helper', 'TaskHelper', 'claude_acp', 'default', ?, ?)`,
+    ).run(now, now, now, now);
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES
+       (?, 'default', 'agent-owner', 'TaskOwner', 'agent', '#default', 'Root task kickoff', 1, ?, NULL),
+       ('thread-msg-1', 'default', 'user', 'User', 'user', '#default:feedbeef', 'Can you both take a look?', 2, ?, 'feedbeef'),
+       ('thread-msg-2', 'default', 'agent-helper', 'TaskHelper', 'agent', '#default:feedbeef', 'I checked the failing branch already.', 3, ?, 'feedbeef')`,
+    ).run(rootMessageId, now, now + 1, now + 2);
+
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
+       VALUES('task-feedbeef', 'default', 9, 'Investigate rollout failure', 'Goal: find the regression cause. Done when the failing path is explained and next steps are proposed.', 'in_progress', 'agent-owner', 'TaskOwner', ?, ?, ?)`,
+    ).run(rootMessageId, now, now);
+
+    upsertTargetParticipant(db, {
+      agentId: 'agent-owner',
+      channelId: 'default',
+      threadRootId,
+      role: 'owner',
+      lastActiveAt: now,
+    });
+    upsertTargetParticipant(db, {
+      agentId: 'agent-helper',
+      channelId: 'default',
+      threadRootId,
+      role: 'participant',
+      lastActiveAt: now,
+    });
+
+    const context = buildTargetActivationContext(db, {
+      agentId: 'agent-owner',
+      channelId: 'default',
+      replyTarget: '#default:feedbeef',
+      triggerSeq: 4,
+      threadRootId,
+    });
+    const text = buildChannelActivationContextText({
+      target: '#default:feedbeef',
+      recentMessages: context.recentMessages,
+      rootMessage: context.rootMessage,
+      unreadCount: context.unreadCount,
+      oldestVisibleSeq: context.oldestVisibleSeq,
+      participants: context.participants,
+      boundTask: context.boundTask,
+      openTasks: context.openTasks,
+    });
+
+    expect(text).toContain('[Thread root message]');
+    expect(text).toContain('Root task kickoff');
+    expect(text).toContain('[Recent messages on this exact target]');
+    expect(text).toContain('Can you both take a look?');
+    expect(text).toContain('I checked the failing branch already.');
+    expect(text).toContain('[Active participants on this target]');
+    expect(text).toContain('@TaskOwner (owner)');
+    expect(text).toContain('@TaskHelper (participant)');
+    expect(text).toContain('[Bound task-message for this thread]');
+    expect(text).toContain('#9 [in_progress] @TaskOwner — Investigate rollout failure');
+    expect(text).toContain('Goal: find the regression cause.');
+    expect(text).not.toContain('[Task-message board summary]');
+
+    db.close();
+  });
+
+  it('done task thread 即使残留 owner participant，prompt participants 里也不应继续显示 owner', () => {
+    const db = createTestDb();
+    const now = Date.now();
+    const rootMessageId = 'deadbeef-0000-0000-0000-000000000000';
+
+    db.prepare(
+      `INSERT INTO agents(agent_id, name, agent_type, channel_id, created_at, updated_at)
+       VALUES('agent-owner', 'TaskOwner', 'claude_acp', 'default', ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES(?, 'default', 'agent-owner', 'TaskOwner', 'agent', '#default', 'Done task root', 1, ?, NULL)`,
+    ).run(rootMessageId, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
+       VALUES('task-done-thread', 'default', 18, 'Done thread task', 'done', 'agent-owner', 'TaskOwner', ?, ?, ?)`,
+    ).run(rootMessageId, now, now);
+    upsertTargetParticipant(db, {
+      agentId: 'agent-owner',
+      channelId: 'default',
+      threadRootId: 'deadbeef',
+      role: 'owner',
+      lastActiveAt: now,
+    });
+
+    const context = buildTargetActivationContext(db, {
+      agentId: 'agent-owner',
+      channelId: 'default',
+      replyTarget: '#default:deadbeef',
+      triggerSeq: 2,
+      threadRootId: 'deadbeef',
+    });
+    const text = buildChannelActivationContextText({
+      target: '#default:deadbeef',
+      recentMessages: context.recentMessages,
+      rootMessage: context.rootMessage,
+      unreadCount: context.unreadCount,
+      oldestVisibleSeq: context.oldestVisibleSeq,
+      participants: context.participants,
+      boundTask: context.boundTask,
+      openTasks: context.openTasks,
+    });
+
+    expect(context.boundTask?.status).toBe('done');
+    expect(context.participants).toEqual([
+      expect.objectContaining({
+        name: 'TaskOwner',
+        role: 'participant',
+      }),
+    ]);
+    expect(text).toContain('[Bound task-message for this thread]');
+    expect(text).toContain('#18 [done] @TaskOwner — Done thread task');
+    expect(text).toContain('@TaskOwner (participant)');
+    expect(text).not.toContain('@TaskOwner (owner)');
+
+    db.close();
+  });
+});
