@@ -409,6 +409,12 @@ export async function startServer(params: {
         threadRootId,
         activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
       });
+      const normalizedParticipants = summary.boundTask?.status === 'done'
+        ? participants.map((participant) => ({
+            ...participant,
+            role: 'participant' as const,
+          }))
+        : participants;
 
       const rootMsg = db.prepare(
         `SELECT sender_id as senderId, sender_type as senderType
@@ -421,10 +427,10 @@ export async function startServer(params: {
         notifyAgent(summary.ownerAgentId, 'thread_reply', 'owner');
       }
 
-      if (participants.length === 0 && !summary.ownerAgentId && rootMsg?.senderType === 'agent') {
+      if (normalizedParticipants.length === 0 && !summary.ownerAgentId && rootMsg?.senderType === 'agent') {
         notifyAgent(rootMsg.senderId, 'thread_reply', 'owner');
       } else {
-        for (const participant of participants) {
+        for (const participant of normalizedParticipants) {
           notifyAgent(participant.agentId, 'thread_reply', participant.role);
         }
       }

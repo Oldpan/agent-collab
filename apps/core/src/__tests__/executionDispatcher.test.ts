@@ -7,6 +7,7 @@ import { createTestConfig, createTestDb } from './helpers.js';
 import { ConversationManager } from '../web/conversationManager.js';
 import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
 import { buildChannelActivationContextText, buildChannelActivationPrompt } from '../web/channelActivationPrompt.js';
+import { upsertTargetParticipant } from '../web/targetParticipants.js';
 
 describe('ExecutionDispatcher', () => {
   let db: Db;
@@ -1077,5 +1078,445 @@ describe('ExecutionDispatcher', () => {
     const secondDispatch = sent[1]?.msg;
     if (!secondDispatch || secondDispatch.type !== 'run.dispatch') throw new Error('missing second dispatch');
     expect(secondDispatch.contextText).toContain('[Thread root message]\nhello root');
+  });
+
+  it('排队的 thread prompt 在重新派发时应保留 activationContextText，且多 agent 尾部 activity 不应阻断 replay overlap 裁剪', async () => {
+    manager.close();
+    db.close();
+    db = createTestDb();
+    sent.length = 0;
+    manager = new ConversationManager({
+      db,
+      config: createTestConfig({ contextReplayEnabled: true, contextReplayRuns: 16 }),
+      nodeRegistry: fakeRegistry as any,
+    });
+    manager.start();
+
+    const channel = manager.createChannel({ name: 'queue-thread-room' });
+    const owner = manager.createAgent({
+      name: 'QueueOwner',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/queue-thread-owner',
+      channelId: channel.channelId,
+    });
+    const helper = manager.createAgent({
+      name: 'QueueHelper',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/queue-thread-helper',
+      channelId: channel.channelId,
+    });
+    manager.joinChannel(owner.agentId, channel.channelId);
+    manager.joinChannel(helper.agentId, channel.channelId);
+
+    const threadRootId = 'q123abcd';
+    const target = `#${channel.name}:${threadRootId}`;
+    const ownerConv = manager.openAgentChannelThread(owner.agentId, channel.channelId, threadRootId);
+    if (!ownerConv) throw new Error('missing owner thread conversation');
+
+    const baseTime = Date.now();
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`,
+    ).run(
+      `${threadRootId}-0000-0000-0000-000000000000`,
+      channel.channelId,
+      owner.agentId,
+      owner.name,
+      `#${channel.name}`,
+      '线程 root',
+      1,
+      baseTime,
+      threadRootId,
+    );
+    upsertTargetParticipant(db, {
+      agentId: owner.agentId,
+      channelId: channel.channelId,
+      threadRootId,
+      role: 'owner',
+      lastActiveAt: baseTime,
+    });
+    upsertTargetParticipant(db, {
+      agentId: helper.agentId,
+      channelId: channel.channelId,
+      threadRootId,
+      role: 'participant',
+      lastActiveAt: baseTime,
+    });
+
+    await manager.submitPrompt(
+      ownerConv.id,
+      buildChannelActivationPrompt({
+        channelName: channel.name,
+        target,
+        replyTarget: target,
+        senderName: 'yanzong',
+        content: '帮我看下当前机器的显存状态',
+        reason: 'thread_reply',
+      }),
+      { recordAsUserMessage: false },
+    );
+
+    const firstDispatch = sent[0]?.msg;
+    if (!firstDispatch || firstDispatch.type !== 'run.dispatch') throw new Error('missing first dispatch');
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'queue-thread-reply-1',
+      channel.channelId,
+      owner.agentId,
+      owner.name,
+      target,
+      '当前机器显存状态如下：显存几乎完全可用。',
+      2,
+      baseTime + 1,
+      firstDispatch.runId,
+      threadRootId,
+      'final',
+    );
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`,
+    ).run(
+      'queue-thread-helper-1',
+      channel.channelId,
+      helper.agentId,
+      helper.name,
+      target,
+      '我也看了日志，缓存还很高。',
+      3,
+      baseTime + 2,
+      threadRootId,
+    );
+
+    const recentMessages = [
+      {
+        messageId: 'queue-thread-user-1',
+        seq: 2,
+        target,
+        senderName: 'yanzong',
+        senderType: 'user' as const,
+        content: '帮我看下当前机器的显存状态',
+        createdAt: baseTime + 1,
+      },
+      {
+        messageId: 'queue-thread-reply-1',
+        seq: 2,
+        target,
+        senderName: owner.name,
+        senderType: 'agent' as const,
+        content: '当前机器显存状态如下：显存几乎完全可用。',
+        createdAt: baseTime + 1,
+      },
+      {
+        messageId: 'queue-thread-helper-1',
+        seq: 3,
+        target,
+        senderName: helper.name,
+        senderType: 'agent' as const,
+        content: '我也看了日志，缓存还很高。',
+        createdAt: baseTime + 2,
+      },
+    ];
+
+    const queued = await manager.submitPrompt(
+      ownerConv.id,
+      buildChannelActivationPrompt({
+        channelName: channel.name,
+        target,
+        replyTarget: target,
+        senderName: 'yanzong',
+        content: '你刚才干了什么',
+        reason: 'thread_reply',
+      }),
+      {
+        recordAsUserMessage: false,
+        activationContextText: buildChannelActivationContextText({
+          target,
+          rootMessage: {
+            messageId: `${threadRootId}-root`,
+            seq: 1,
+            target: `#${channel.name}`,
+            senderName: owner.name,
+            senderType: 'agent',
+            content: '线程 root',
+            createdAt: baseTime,
+          },
+          recentMessages,
+          participants: [
+            {
+              agentId: owner.agentId,
+              name: owner.name,
+              role: 'owner',
+              joinedAt: baseTime,
+              lastActiveAt: baseTime,
+            },
+            {
+              agentId: helper.agentId,
+              name: helper.name,
+              role: 'participant',
+              joinedAt: baseTime,
+              lastActiveAt: baseTime,
+            },
+          ],
+          oldestVisibleSeq: 2,
+        }),
+        replayOverlapRecentMessages: recentMessages,
+      },
+    );
+
+    expect(queued.queued).toBe(true);
+
+    const queueEntry = db.prepare(
+      `SELECT activation_context_text as activationContextText,
+              replay_overlap_recent_messages_json as replayOverlapRecentMessagesJson
+       FROM conversation_prompt_queue
+       WHERE conversation_id = ?`
+    ).get(ownerConv.id) as {
+      activationContextText: string | null;
+      replayOverlapRecentMessagesJson: string | null;
+    } | undefined;
+    expect(queueEntry?.activationContextText).toContain('[Active participants on this target]');
+    expect(queueEntry?.activationContextText).toContain('@QueueOwner (owner)');
+    expect(queueEntry?.activationContextText).toContain('@QueueHelper (participant)');
+    expect(queueEntry?.replayOverlapRecentMessagesJson).toContain('queue-thread-helper-1');
+
+    finishRun(db, { runId: firstDispatch.runId, stopReason: 'end_turn' });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', ownerConv.id);
+    await manager.onConversationSettled(ownerConv.id);
+
+    const secondDispatch = sent[1]?.msg;
+    if (!secondDispatch || secondDispatch.type !== 'run.dispatch') throw new Error('missing second dispatch');
+    expect(secondDispatch.dispatchMode).toBe('resume');
+    expect(secondDispatch.contextText ?? '').toContain('[Active participants on this target]');
+    expect(secondDispatch.contextText ?? '').toContain('@QueueOwner (owner)');
+    expect(secondDispatch.contextText ?? '').toContain('@QueueHelper (participant)');
+    expect(secondDispatch.contextText ?? '').toContain('我也看了日志，缓存还很高。');
+    expect(secondDispatch.contextText ?? '').toContain('[Thread root message]');
+    expect(secondDispatch.contextText ?? '').not.toContain('Context (previous messages, for continuity after restart):');
+  });
+  it('mixed channel-root/thread queued prompts 应各自保留 activationContextText，且同一 conversation 的多条 queued prompt 应按顺序恢复', async () => {
+    manager.close();
+    db.close();
+    db = createTestDb();
+    sent.length = 0;
+    manager = new ConversationManager({
+      db,
+      config: createTestConfig({ contextReplayEnabled: true, contextReplayRuns: 16 }),
+      nodeRegistry: fakeRegistry as any,
+    });
+    manager.start();
+
+    const channel = manager.createChannel({ name: 'mixed-queue-room' });
+    const agent = manager.createAgent({
+      name: 'MixedQueueBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/mixed-queue-bob',
+      channelId: channel.channelId,
+    });
+    manager.joinChannel(agent.agentId, channel.channelId);
+
+    const threadRootId = 'mixq1234';
+    const rootConv = manager.openAgentChannelThread(agent.agentId, channel.channelId, null);
+    const threadConv = manager.openAgentChannelThread(agent.agentId, channel.channelId, threadRootId);
+    if (!rootConv || !threadConv) throw new Error('missing mixed queue conversations');
+
+    const rootTarget = `#${channel.name}`;
+    const threadTarget = `#${channel.name}:${threadRootId}`;
+    const baseTime = Date.now();
+
+    const rootFirst = await manager.submitPrompt(rootConv.id, 'root first');
+    const threadFirst = await manager.submitPrompt(threadConv.id, 'thread first');
+    expect(rootFirst.queued).toBe(false);
+    expect(threadFirst.queued).toBe(false);
+
+    const rootFirstDispatch = sent.find((entry): entry is { nodeId: string; msg: Extract<CoreToNode, { type: 'run.dispatch' }> } => entry.msg.type === 'run.dispatch' && entry.msg.conversationId === rootConv.id)?.msg;
+    const threadFirstDispatch = sent.find((entry): entry is { nodeId: string; msg: Extract<CoreToNode, { type: 'run.dispatch' }> } => entry.msg.type === 'run.dispatch' && entry.msg.conversationId === threadConv.id)?.msg;
+    if (!rootFirstDispatch || !threadFirstDispatch) throw new Error('missing initial dispatches');
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'mixq-root-final-1',
+      channel.channelId,
+      agent.agentId,
+      agent.name,
+      rootTarget,
+      'root reply one',
+      allocateNextChannelMessageSeq(db, channel.channelId),
+      baseTime + 1,
+      rootFirstDispatch.runId,
+      'final',
+    );
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'mixq-thread-final-1',
+      channel.channelId,
+      agent.agentId,
+      agent.name,
+      threadTarget,
+      'thread reply one',
+      allocateNextChannelMessageSeq(db, channel.channelId),
+      baseTime + 2,
+      threadFirstDispatch.runId,
+      threadRootId,
+      'final',
+    );
+
+    const rootOverlap = [
+      {
+        messageId: 'mixq-root-user-1',
+        seq: 1,
+        target: rootTarget,
+        senderName: 'yanzong',
+        senderType: 'user' as const,
+        content: 'root first',
+        createdAt: baseTime + 1,
+      },
+      {
+        messageId: 'mixq-root-final-1',
+        seq: 2,
+        target: rootTarget,
+        senderName: agent.name,
+        senderType: 'agent' as const,
+        content: 'root reply one',
+        createdAt: baseTime + 2,
+      },
+    ];
+    const threadOverlap = [
+      {
+        messageId: 'mixq-thread-user-1',
+        seq: 1,
+        target: threadTarget,
+        senderName: 'yanzong',
+        senderType: 'user' as const,
+        content: 'thread first',
+        createdAt: baseTime + 1,
+      },
+      {
+        messageId: 'mixq-thread-final-1',
+        seq: 2,
+        target: threadTarget,
+        senderName: agent.name,
+        senderType: 'agent' as const,
+        content: 'thread reply one',
+        createdAt: baseTime + 2,
+      },
+    ];
+
+    const rootQueuedSecond = await manager.submitPrompt(rootConv.id, 'root second', {
+      recordAsUserMessage: false,
+      activationContextText: '[Root queued context]\nalpha',
+      replayOverlapRecentMessages: rootOverlap,
+    });
+    const rootQueuedThird = await manager.submitPrompt(rootConv.id, 'root third', {
+      recordAsUserMessage: false,
+      activationContextText: '[Root queued context]\nbeta',
+      replayOverlapRecentMessages: rootOverlap,
+    });
+    const threadQueuedSecond = await manager.submitPrompt(threadConv.id, 'thread second', {
+      recordAsUserMessage: false,
+      activationContextText: '[Thread queued context]\none',
+      replayOverlapRecentMessages: threadOverlap,
+    });
+
+    expect(rootQueuedSecond.queued).toBe(true);
+    expect(rootQueuedThird.queued).toBe(true);
+    expect(threadQueuedSecond.queued).toBe(true);
+
+    const queueRows = db.prepare(
+      `SELECT conversation_id as conversationId,
+              prompt_text as promptText,
+              activation_context_text as activationContextText,
+              replay_overlap_recent_messages_json as replayOverlapRecentMessagesJson
+       FROM conversation_prompt_queue
+       ORDER BY queue_id ASC`,
+    ).all() as Array<{
+      conversationId: string;
+      promptText: string;
+      activationContextText: string | null;
+      replayOverlapRecentMessagesJson: string | null;
+    }>;
+    expect(queueRows).toEqual([
+      {
+        conversationId: rootConv.id,
+        promptText: 'root second',
+        activationContextText: '[Root queued context]\nalpha',
+        replayOverlapRecentMessagesJson: JSON.stringify(rootOverlap),
+      },
+      {
+        conversationId: rootConv.id,
+        promptText: 'root third',
+        activationContextText: '[Root queued context]\nbeta',
+        replayOverlapRecentMessagesJson: JSON.stringify(rootOverlap),
+      },
+      {
+        conversationId: threadConv.id,
+        promptText: 'thread second',
+        activationContextText: '[Thread queued context]\none',
+        replayOverlapRecentMessagesJson: JSON.stringify(threadOverlap),
+      },
+    ]);
+
+    finishRun(db, { runId: rootFirstDispatch.runId, stopReason: 'end_turn' });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', rootConv.id);
+    await manager.onConversationSettled(rootConv.id);
+
+    const rootDispatchesAfterFirstSettle = sent.filter((entry): entry is { nodeId: string; msg: Extract<CoreToNode, { type: 'run.dispatch' }> } => entry.msg.type === 'run.dispatch' && entry.msg.conversationId === rootConv.id);
+    const rootSecondDispatch = rootDispatchesAfterFirstSettle[1]?.msg;
+    if (!rootSecondDispatch) throw new Error('missing root second dispatch');
+
+    const rootSecondDebug = db.prepare(
+      `SELECT dispatch_mode as dispatchMode, context_text as contextText, prompt_text as promptText
+       FROM run_debug_inputs
+       WHERE run_id = ?`,
+    ).get(rootSecondDispatch.runId) as { dispatchMode: string; contextText: string | null; promptText: string } | undefined;
+    expect(rootSecondDebug?.dispatchMode).toBe('resume');
+    expect(rootSecondDebug?.promptText).toBe('root second');
+    expect(rootSecondDebug?.contextText).toContain('[Root queued context]\nalpha');
+    expect(rootSecondDebug?.contextText ?? '').not.toContain('[Thread queued context]');
+
+    finishRun(db, { runId: threadFirstDispatch.runId, stopReason: 'end_turn' });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', threadConv.id);
+    await manager.onConversationSettled(threadConv.id);
+
+    const threadDispatchesAfterSettle = sent.filter((entry): entry is { nodeId: string; msg: Extract<CoreToNode, { type: 'run.dispatch' }> } => entry.msg.type === 'run.dispatch' && entry.msg.conversationId === threadConv.id);
+    const threadSecondDispatch = threadDispatchesAfterSettle[1]?.msg;
+    if (!threadSecondDispatch) throw new Error('missing thread second dispatch');
+
+    const threadSecondDebug = db.prepare(
+      `SELECT dispatch_mode as dispatchMode, context_text as contextText, prompt_text as promptText
+       FROM run_debug_inputs
+       WHERE run_id = ?`,
+    ).get(threadSecondDispatch.runId) as { dispatchMode: string; contextText: string | null; promptText: string } | undefined;
+    expect(threadSecondDebug?.dispatchMode).toBe('resume');
+    expect(threadSecondDebug?.promptText).toBe('thread second');
+    expect(threadSecondDebug?.contextText).toContain('[Thread queued context]\none');
+    expect(threadSecondDebug?.contextText ?? '').not.toContain('[Root queued context]');
+
+    finishRun(db, { runId: rootSecondDispatch.runId, stopReason: 'end_turn' });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', rootConv.id);
+    await manager.onConversationSettled(rootConv.id);
+
+    const rootDispatchesAfterSecondSettle = sent.filter((entry): entry is { nodeId: string; msg: Extract<CoreToNode, { type: 'run.dispatch' }> } => entry.msg.type === 'run.dispatch' && entry.msg.conversationId === rootConv.id);
+    const rootThirdDispatch = rootDispatchesAfterSecondSettle[2]?.msg;
+    if (!rootThirdDispatch) throw new Error('missing root third dispatch');
+
+    const rootThirdDebug = db.prepare(
+      `SELECT dispatch_mode as dispatchMode, context_text as contextText, prompt_text as promptText
+       FROM run_debug_inputs
+       WHERE run_id = ?`,
+    ).get(rootThirdDispatch.runId) as { dispatchMode: string; contextText: string | null; promptText: string } | undefined;
+    expect(rootThirdDebug?.dispatchMode).toBe('resume');
+    expect(rootThirdDebug?.promptText).toBe('root third');
+    expect(rootThirdDebug?.contextText).toContain('[Root queued context]\nbeta');
+    expect(rootThirdDebug?.contextText ?? '').not.toContain('[Thread queued context]');
   });
 });

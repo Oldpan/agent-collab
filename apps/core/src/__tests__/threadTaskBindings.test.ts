@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb } from './helpers.js';
 import {
   getBoundTaskForThread,
@@ -7,9 +7,13 @@ import {
   getThreadCollaborationSummary,
   syncTaskThreadOwner,
 } from '../web/threadTaskBindings.js';
-import { upsertTargetParticipant } from '../web/targetParticipants.js';
+import { TARGET_PARTICIPANT_ACTIVE_WINDOW_MS, upsertTargetParticipant } from '../web/targetParticipants.js';
 
 describe('threadTaskBindings', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('只应把 task root thread 识别为 task thread', () => {
     const db = createTestDb();
     const now = Date.now();
@@ -107,6 +111,39 @@ describe('threadTaskBindings', () => {
     expect(summary.ownerAgentId).toBeNull();
     expect(summary.ownerName).toBeNull();
     expect(summary.participants).toEqual(['FreshAlice']);
+
+    db.close();
+  });
+
+  it('summary 应在 TTL 边界包含刚好命中的 participant，并排除越界 1ms 的 participant', () => {
+    const db = createTestDb();
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+
+    db.prepare(`INSERT INTO agents(agent_id, name, agent_type, created_at, updated_at, channel_id) VALUES(?, ?, 'claude_acp', ?, ?, 'default')`)
+      .run('agent-boundary', 'BoundaryBob', now, now);
+    db.prepare(`INSERT INTO agents(agent_id, name, agent_type, created_at, updated_at, channel_id) VALUES(?, ?, 'claude_acp', ?, ?, 'default')`)
+      .run('agent-expired', 'ExpiredAlice', now, now);
+
+    upsertTargetParticipant(db, {
+      agentId: 'agent-boundary',
+      channelId: 'default',
+      threadRootId: 'plain1234',
+      role: 'owner',
+      lastActiveAt: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
+    });
+    upsertTargetParticipant(db, {
+      agentId: 'agent-expired',
+      channelId: 'default',
+      threadRootId: 'plain1234',
+      role: 'participant',
+      lastActiveAt: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS - 1,
+    });
+
+    const summary = getThreadCollaborationSummary(db, { channelId: 'default', threadRootId: 'plain1234' });
+    expect(summary.ownerAgentId).toBe('agent-boundary');
+    expect(summary.ownerName).toBe('BoundaryBob');
+    expect(summary.participants).toEqual(['BoundaryBob']);
 
     db.close();
   });

@@ -695,14 +695,19 @@ function trimReplayBlocksAgainstRecentMessages(
 
   let replayIndex = replayBlocks.length - 1;
   let recentIndex = recentReplayBlocks.length - 1;
+  let matchedCount = 0;
 
   while (replayIndex >= 0 && recentIndex >= 0) {
-    if (replayBlocks[replayIndex] !== recentReplayBlocks[recentIndex]) break;
-    replayIndex -= 1;
+    if (replayBlocks[replayIndex] === recentReplayBlocks[recentIndex]) {
+      matchedCount += 1;
+      replayIndex -= 1;
+      recentIndex -= 1;
+      continue;
+    }
+
     recentIndex -= 1;
   }
 
-  const matchedCount = recentReplayBlocks.length - 1 - recentIndex;
   if (matchedCount <= 0) return replayBlocks;
   return replayBlocks.slice(0, replayBlocks.length - matchedCount);
 }

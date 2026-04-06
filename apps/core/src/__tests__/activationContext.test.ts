@@ -1,10 +1,14 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb } from './helpers.js';
 import { buildTargetActivationContext } from '../web/activationContext.js';
 import { buildChannelActivationContextText } from '../web/channelActivationPrompt.js';
-import { upsertTargetParticipant } from '../web/targetParticipants.js';
+import { TARGET_PARTICIPANT_ACTIVE_WINDOW_MS, upsertTargetParticipant } from '../web/targetParticipants.js';
 
 describe('activationContext', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it('channel root prompt context 应按协同优先级展示 open task board，并忽略 done task', () => {
     const db = createTestDb();
     const now = Date.now();
@@ -132,6 +136,104 @@ describe('activationContext', () => {
     expect(text).toContain('#9 [in_progress] @TaskOwner — Investigate rollout failure');
     expect(text).toContain('Goal: find the regression cause.');
     expect(text).not.toContain('[Task-message board summary]');
+
+    db.close();
+  });
+
+  it('task thread prompt context 在没有 recent agent owner 时应显示用户 owner 的 task brief，但不伪造 active owner participant', () => {
+    const db = createTestDb();
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('userbeef-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'User task root', 1, ?)`,
+    ).run(now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_name, message_id, created_at, updated_at)
+       VALUES('task-user-owned', 'default', 11, 'User owned task', 'Goal: keep the owner human, not agent-owned. Done when the prompt shows the human owner clearly.', 'in_progress', 'oldpan', 'userbeef-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(now, now);
+
+    const context = buildTargetActivationContext(db, {
+      agentId: 'agent-reader',
+      channelId: 'default',
+      replyTarget: '#default:userbeef',
+      triggerSeq: 2,
+      threadRootId: 'userbeef',
+    });
+    const text = buildChannelActivationContextText({
+      target: '#default:userbeef',
+      recentMessages: context.recentMessages,
+      rootMessage: context.rootMessage,
+      unreadCount: context.unreadCount,
+      oldestVisibleSeq: context.oldestVisibleSeq,
+      participants: context.participants,
+      boundTask: context.boundTask,
+      openTasks: context.openTasks,
+    });
+
+    expect(context.boundTask?.claimedByName).toBe('oldpan');
+    expect(context.participants).toEqual([]);
+    expect(text).toContain('[Bound task-message for this thread]');
+    expect(text).toContain('#11 [in_progress] @oldpan — User owned task');
+    expect(text).toContain('Goal: keep the owner human, not agent-owned.');
+    expect(text).not.toContain('[Active participants on this target]');
+    expect(text).not.toContain('@oldpan (owner)');
+
+    db.close();
+  });
+
+  it('active participants prompt 应在 TTL 边界包含刚好命中的 participant，并排除越界 1ms 的 participant', () => {
+    const db = createTestDb();
+    const now = Date.now();
+    vi.spyOn(Date, 'now').mockReturnValue(now);
+
+    db.prepare(`INSERT INTO agents(agent_id, name, agent_type, created_at, updated_at, channel_id) VALUES(?, ?, 'claude_acp', ?, ?, 'default')`)
+      .run('agent-boundary', 'BoundaryBob', now, now);
+    db.prepare(`INSERT INTO agents(agent_id, name, agent_type, created_at, updated_at, channel_id) VALUES(?, ?, 'claude_acp', ?, ?, 'default')`)
+      .run('agent-expired', 'ExpiredAlice', now, now);
+
+    upsertTargetParticipant(db, {
+      agentId: 'agent-boundary',
+      channelId: 'default',
+      threadRootId: null,
+      role: 'owner',
+      lastActiveAt: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
+    });
+    upsertTargetParticipant(db, {
+      agentId: 'agent-expired',
+      channelId: 'default',
+      threadRootId: null,
+      role: 'participant',
+      lastActiveAt: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS - 1,
+    });
+
+    const context = buildTargetActivationContext(db, {
+      agentId: 'agent-reader',
+      channelId: 'default',
+      replyTarget: '#default',
+      triggerSeq: 2,
+      threadRootId: null,
+    });
+    const text = buildChannelActivationContextText({
+      target: '#default',
+      recentMessages: context.recentMessages,
+      unreadCount: context.unreadCount,
+      oldestVisibleSeq: context.oldestVisibleSeq,
+      participants: context.participants,
+      boundTask: context.boundTask,
+      openTasks: context.openTasks,
+    });
+
+    expect(context.participants).toEqual([
+      expect.objectContaining({
+        name: 'BoundaryBob',
+        role: 'owner',
+      }),
+    ]);
+    expect(text).toContain('[Active participants on this target]');
+    expect(text).toContain('@BoundaryBob (owner)');
+    expect(text).not.toContain('@ExpiredAlice');
 
     db.close();
   });

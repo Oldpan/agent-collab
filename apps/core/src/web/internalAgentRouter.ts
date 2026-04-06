@@ -294,12 +294,18 @@ export function registerInternalAgentRoutes(
           threadRootId,
           activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
         });
+        const normalizedRecentParticipants = summary.boundTask?.status === 'done'
+          ? recentParticipants.map((participant) => ({
+              ...participant,
+              role: 'participant' as const,
+            }))
+          : recentParticipants;
 
         if (summary.ownerAgentId) {
           queueAgentNotification(summary.ownerAgentId, 'thread_reply', 'owner');
         }
 
-        if (recentParticipants.length === 0 && !summary.ownerAgentId) {
+        if (normalizedRecentParticipants.length === 0 && !summary.ownerAgentId) {
           const rootMsg = db.prepare(
             `SELECT sender_id as senderId, sender_type as senderType
              FROM channel_messages
@@ -310,7 +316,7 @@ export function registerInternalAgentRoutes(
             queueAgentNotification(rootMsg.senderId, 'thread_reply', 'owner');
           }
         } else {
-          for (const participant of recentParticipants) {
+          for (const participant of normalizedRecentParticipants) {
             queueAgentNotification(participant.agentId, 'thread_reply', participant.role);
           }
         }
