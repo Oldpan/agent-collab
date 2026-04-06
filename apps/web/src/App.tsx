@@ -9,6 +9,7 @@ import { Sidebar } from "@/features/sidebar/Sidebar";
 import { ChatPanel } from "@/features/chat/ChatPanel";
 import { ChannelPanel } from "@/features/channel/ChannelPanel";
 import { SessionManagerPanel } from "@/features/sessions/SessionManagerPanel";
+import { SearchPanel } from "@/features/search/SearchPanel";
 import { LoginPanel } from "@/features/auth/LoginPanel";
 import { SetupPanel } from "@/features/auth/SetupPanel";
 import {
@@ -21,7 +22,15 @@ import type {
   UpdateAgentRequest,
 } from "@agent-collab/protocol";
 import * as api from "@/lib/api";
+import type { SearchMessageHit } from "@/lib/api";
 import { cn } from "@/lib/utils";
+
+type SearchFocusTarget = {
+  channelId: string;
+  messageId: string;
+  threadRootId: string | null;
+  requestId: number;
+};
 
 function useIsMobile() {
   const [isMobile, setIsMobile] = useState(
@@ -46,7 +55,7 @@ function getInviteTokenFromUrl(): string {
 export function App() {
   const isMobile = useIsMobile();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<"chat" | "sessions">("chat");
+  const [viewMode, setViewMode] = useState<"chat" | "sessions" | "search">("chat");
   const { user, isAuthenticated, isLoading, hasAdmin, checkAuth, checkSetupStatus, doLogout } = useAuth();
 
   // On mount: check setup status and auth token
@@ -71,6 +80,7 @@ export function App() {
   const { machines, createMachine, deleteMachine } = useMachines();
   const { channels, createChannel, updateChannel: updateChannelInStore } = useChannels();
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
+  const [searchFocusTarget, setSearchFocusTarget] = useState<SearchFocusTarget | null>(null);
 
   const visibleConversations = useMemo(() => {
     const agentIds = new Set(agents.map((agent) => agent.agentId));
@@ -151,6 +161,7 @@ export function App() {
     (agentId: string) => {
       openAgentThread(agentId);
       setSelectedChannelId(null);
+      setSearchFocusTarget(null);
       setViewMode("chat");
     },
     [openAgentThread],
@@ -162,6 +173,7 @@ export function App() {
       const conversation = await openAgentChannelSession(agentId, channelId, threadRootId);
       selectConversation(previousSelectedId);
       setSelectedChannelId(channelId);
+      setSearchFocusTarget(null);
       setViewMode("chat");
       return conversation;
     },
@@ -172,6 +184,7 @@ export function App() {
     (id: string) => {
       selectConversation(id);
       setSelectedChannelId(null);
+      setSearchFocusTarget(null);
       setViewMode("chat");
     },
     [selectConversation],
@@ -181,14 +194,33 @@ export function App() {
     (channelId: string) => {
       setSelectedChannelId(channelId);
       selectConversation(null);
+      setSearchFocusTarget(null);
       setViewMode("chat");
     },
     [selectConversation],
   );
 
+  const handleOpenSearch = useCallback(() => {
+    setViewMode("search");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const handleOpenSessions = useCallback(() => {
     setViewMode("sessions");
   }, []);
+
+  const handleOpenSearchResult = useCallback((result: SearchMessageHit) => {
+    setSearchFocusTarget({
+      channelId: result.channelId,
+      messageId: result.messageId,
+      threadRootId: result.threadRootId ?? null,
+      requestId: Date.now(),
+    });
+    setSelectedChannelId(result.channelId);
+    selectConversation(null);
+    setViewMode("chat");
+    setMobileSidebarOpen(false);
+  }, [selectConversation]);
 
   const selectedChannel = useMemo(
     () => channels.find((c) => c.channelId === selectedChannelId) ?? null,
@@ -240,6 +272,7 @@ export function App() {
     selectedChannelId,
     selectedView: viewMode,
     currentUser: user,
+    onOpenSearch: handleOpenSearch,
     onOpenSessions: handleOpenSessions,
     onCreateMachine: createMachine,
     onDeleteMachine: deleteMachine,
@@ -319,6 +352,12 @@ export function App() {
               onOpenSession={handleSelectConversation}
               onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
             />
+          ) : viewMode === "search" ? (
+            <SearchPanel
+              onOpenResult={handleOpenSearchResult}
+              onClose={() => setViewMode("chat")}
+              onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
+            />
           ) : selectedChannel ? (
             <ChannelPanel
               channel={selectedChannel}
@@ -331,6 +370,9 @@ export function App() {
               onSeenSeq={handleChannelSeenSeq}
               onChannelUpdated={updateChannelInStore}
               onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
+              focusMessageId={searchFocusTarget?.channelId === selectedChannel.channelId ? searchFocusTarget.messageId : null}
+              focusRequestId={searchFocusTarget?.channelId === selectedChannel.channelId ? searchFocusTarget.requestId : null}
+              initialThreadRootId={searchFocusTarget?.channelId === selectedChannel.channelId ? searchFocusTarget.threadRootId : null}
             />
           ) : selectedConversation ? (
             <ChatPanel

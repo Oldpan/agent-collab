@@ -40,6 +40,9 @@ type ChannelPanelProps = {
   onOpenSidebar?: () => void;
   onSeenSeq?: (seq: number) => void;
   onChannelUpdated?: (channel: ChannelPanelInfo) => void;
+  focusMessageId?: string | null;
+  focusRequestId?: number | null;
+  initialThreadRootId?: string | null;
 };
 
 const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -121,11 +124,13 @@ function MessageRow({
   onReply,
   onMakeTask,
   agents,
+  highlighted = false,
 }: {
   message: ChannelMessage;
   onReply: (message: ChannelMessage) => void;
   onMakeTask?: (message: ChannelMessage) => void;
   agents: AgentInfo[];
+  highlighted?: boolean;
 }) {
   const isSystem = message.senderType === "system";
   const isUser = message.senderType === "user";
@@ -199,9 +204,11 @@ function MessageRow({
 
   return (
     <div
+      data-message-id={message.id}
       className={cn(
-        "group relative flex gap-2.5 px-4 py-2",
+        "group relative flex gap-2.5 px-4 py-2 transition-colors",
         isUser ? "flex-row-reverse" : "flex-row",
+        highlighted && "bg-[#fff1a9]",
       )}
     >
       {/* Avatar - use ChatAvatar for agents, initials for user */}
@@ -1008,11 +1015,17 @@ export function ChannelPanel({
   onOpenSidebar,
   onSeenSeq,
   onChannelUpdated,
+  focusMessageId,
+  focusRequestId,
+  initialThreadRootId,
 }: ChannelPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "members" | "settings">("chat");
+  const channelFocusAnchor = initialThreadRootId ?? focusMessageId ?? null;
   const { messages, notices, sendMessage, loadMore, hasMore, resetVersion, taskVersion, resetHistory } = useChannelStream({
     channelId: channel.channelId,
     onSeenSeq,
+    aroundMessageId: channelFocusAnchor,
+    aroundRequestId: focusRequestId,
   });
   const scrollRef = useRef<HTMLDivElement>(null);
   const channelMemberIds = useMemo(
@@ -1032,6 +1045,9 @@ export function ChannelPanel({
   const [promoteMessage, setPromoteMessage] = useState<ChannelMessage | null>(null);
   const [promotingTask, setPromotingTask] = useState(false);
   const [promoteTaskError, setPromoteTaskError] = useState<string | null>(null);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [consumedMainFocusRequestId, setConsumedMainFocusRequestId] = useState<number | null>(null);
+  const [consumedThreadOpenRequestId, setConsumedThreadOpenRequestId] = useState<number | null>(null);
   const branchInspectorAgent = useMemo(
     () => {
       if (!branchInspectorConversation?.agentId) return null;
@@ -1120,10 +1136,10 @@ export function ChannelPanel({
 
   // Auto-scroll main channel to bottom
   useEffect(() => {
-    if (activeTab !== "chat" || openThread) return;
+    if (activeTab !== "chat" || openThread || (focusRequestId != null && focusRequestId !== consumedMainFocusRequestId)) return;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages, activeTab, openThread]);
+  }, [activeTab, consumedMainFocusRequestId, focusRequestId, messages, openThread]);
 
   // Reset tabs/thread on channel change
   useEffect(() => {
@@ -1147,6 +1163,32 @@ export function ChannelPanel({
   useEffect(() => {
     setTaskOverrides(new Map());
   }, [taskVersion]);
+
+  useEffect(() => {
+    if (!initialThreadRootId || focusRequestId == null || focusRequestId === consumedThreadOpenRequestId) return;
+    const nextRoot = messages.find((message) => message.id.startsWith(initialThreadRootId));
+    if (!nextRoot) return;
+    setActiveTab("chat");
+    setOpenThread(nextRoot);
+    setBranchInspectorConversation(null);
+    setConsumedThreadOpenRequestId(focusRequestId);
+  }, [consumedThreadOpenRequestId, focusRequestId, initialThreadRootId, messages]);
+
+  useEffect(() => {
+    if (!focusMessageId || initialThreadRootId || focusRequestId == null || focusRequestId === consumedMainFocusRequestId) return;
+    const container = scrollRef.current;
+    if (!container) return;
+    const node = container.querySelector<HTMLElement>(`[data-message-id="${focusMessageId}"]`);
+    if (!node) return;
+    setActiveTab("chat");
+    node.scrollIntoView({ block: "center", behavior: "smooth" });
+    setHighlightedMessageId(focusMessageId);
+    setConsumedMainFocusRequestId(focusRequestId);
+    const timer = window.setTimeout(() => {
+      setHighlightedMessageId((current) => (current === focusMessageId ? null : current));
+    }, 1800);
+    return () => window.clearTimeout(timer);
+  }, [consumedMainFocusRequestId, focusMessageId, focusRequestId, initialThreadRootId, messages]);
 
   const handleClearChat = useCallback(async () => {
     const result = await clearChannelChat(channel.channelId);
@@ -1320,6 +1362,7 @@ export function ChannelPanel({
                         onReply={setOpenThread}
                         onMakeTask={handleMakeTask}
                         agents={channelMembers}
+                        highlighted={highlightedMessageId === merged.id}
                       />
                     );
                   })}
@@ -1372,6 +1415,8 @@ export function ChannelPanel({
                   rootMessage={openThread}
                   channelMembers={channelMembers}
                   taskVersion={taskVersion}
+                  focusMessageId={initialThreadRootId ? focusMessageId : null}
+                  focusRequestId={initialThreadRootId ? focusRequestId : null}
                   onOpenAgentSession={handleOpenBranchInspector}
                   onClose={() => setOpenThread(null)}
                   className="border-l-0"

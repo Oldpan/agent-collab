@@ -18,6 +18,8 @@ function readUserName(): string {
 type UseChannelStreamOptions = {
   channelId: string | null;
   onSeenSeq?: (seq: number) => void;
+  aroundMessageId?: string | null;
+  aroundRequestId?: number | null;
 };
 
 export type ChannelNotice = { message: string; createdAt: string };
@@ -32,7 +34,7 @@ export function useChannelStream(options: UseChannelStreamOptions): {
   taskVersion: number;
   resetHistory: () => Promise<void>;
 } {
-  const { channelId, onSeenSeq } = options;
+  const { channelId, onSeenSeq, aroundMessageId, aroundRequestId } = options;
   const [messages, setMessages] = useState<ChannelMessage[]>([]);
   const [notices, setNotices] = useState<ChannelNotice[]>([]);
   const [hasMore, setHasMore] = useState(true);
@@ -47,14 +49,14 @@ export function useChannelStream(options: UseChannelStreamOptions): {
 
   const loadInitialMessages = useCallback(async (activeChannelId: string | null) => {
     if (!activeChannelId) return;
-    const data = await api.getChannelMessages(activeChannelId, 100);
+    const data = await api.getChannelMessages(activeChannelId, 100, undefined, aroundMessageId ?? undefined);
     setMessages(data.messages);
-    setHasMore(data.messages.length >= 100);
+    setHasMore(aroundMessageId ? Boolean(data.hasOlder) : data.messages.length >= 100);
     const latestSeq = data.messages.reduce((max, message) => Math.max(max, Number(message.seq ?? 0)), 0);
     if (latestSeq > 0 && canMarkSeen()) {
       onSeenSeqRef.current?.(latestSeq);
     }
-  }, []);
+  }, [aroundMessageId]);
 
   const resetHistory = useCallback(async () => {
     setMessages([]);
@@ -175,7 +177,7 @@ export function useChannelStream(options: UseChannelStreamOptions): {
         wsRef.current = null;
       }
     };
-  }, [channelId, loadInitialMessages, resetHistory]);
+  }, [aroundRequestId, channelId, loadInitialMessages, resetHistory]);
 
   const loadMore = useCallback(async () => {
     if (!channelId || !hasMore) return;

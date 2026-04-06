@@ -49,18 +49,27 @@ function ThreadMessage({
   agent,
   channelId,
   threadRootId,
+  highlighted = false,
   onOpenAgentSession,
 }: {
   message: ChannelMessage;
   agent?: AgentInfo;
   channelId: string;
   threadRootId: string;
+  highlighted?: boolean;
   onOpenAgentSession?: (agentId: string, channelId: string, threadRootId?: string | null) => Promise<void> | void;
 }) {
   const isUser = message.senderType === "user";
   const showFallbackBadge = message.messageSource === "delta_fallback" && !isUser;
   return (
-    <div className={cn("flex gap-2.5 px-4 py-2", isUser ? "flex-row-reverse" : "flex-row")}>
+    <div
+      data-message-id={message.id}
+      className={cn(
+        "flex gap-2.5 px-4 py-2 transition-colors",
+        isUser ? "flex-row-reverse" : "flex-row",
+        highlighted && "bg-[#fff1a9]",
+      )}
+    >
       <div
         className={cn(
           "flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-zinc-900 text-[10px] font-bold shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
@@ -331,6 +340,8 @@ type ThreadPanelProps = {
   rootMessage: ChannelMessage;
   channelMembers: AgentInfo[];
   taskVersion?: number;
+  focusMessageId?: string | null;
+  focusRequestId?: number | null;
   onOpenAgentSession?: (agentId: string, channelId: string, threadRootId?: string | null) => Promise<void> | void;
   onClose: () => void;
   className?: string;
@@ -342,12 +353,20 @@ export function ThreadPanel({
   rootMessage,
   channelMembers,
   taskVersion = 0,
+  focusMessageId,
+  focusRequestId,
   onOpenAgentSession,
   onClose,
   className,
 }: ThreadPanelProps) {
   const threadRootId = rootMessage.id.slice(0, 8);
-  const { messages, summary, sendMessage, loadMore, hasMore } = useThreadStream(channelId, threadRootId, taskVersion);
+  const { messages, summary, sendMessage, loadMore, hasMore } = useThreadStream(
+    channelId,
+    threadRootId,
+    focusMessageId,
+    focusRequestId,
+    taskVersion,
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const isRootUser = rootMessage.senderType === "user";
   const rootAgent = useMemo(
@@ -359,6 +378,8 @@ export function ThreadPanel({
   const [isEditingTask, setIsEditingTask] = useState(false);
   const [editingTaskError, setEditingTaskError] = useState<string | null>(null);
   const [savingTaskDetails, setSavingTaskDetails] = useState(false);
+  const [highlightedMessageId, setHighlightedMessageId] = useState<string | null>(null);
+  const [consumedFocusRequestId, setConsumedFocusRequestId] = useState<number | null>(null);
 
   useEffect(() => {
     setSummaryState(summary);
@@ -371,9 +392,25 @@ export function ThreadPanel({
   }, [summaryState?.boundTask]);
 
   useEffect(() => {
+    if (focusMessageId && focusRequestId != null && focusRequestId !== consumedFocusRequestId) return;
     const el = scrollRef.current;
     if (el) el.scrollTop = el.scrollHeight;
-  }, [messages]);
+  }, [consumedFocusRequestId, focusMessageId, focusRequestId, messages]);
+
+  useEffect(() => {
+    if (!focusMessageId || focusRequestId == null || focusRequestId === consumedFocusRequestId) return;
+    const container = scrollRef.current;
+    if (!container) return;
+    const node = container.querySelector<HTMLElement>(`[data-message-id="${focusMessageId}"]`);
+    if (!node) return;
+    node.scrollIntoView({ block: "center", behavior: "smooth" });
+    setHighlightedMessageId(focusMessageId);
+    setConsumedFocusRequestId(focusRequestId);
+    const timer = window.setTimeout(() => {
+      setHighlightedMessageId((current) => (current === focusMessageId ? null : current));
+    }, 1800);
+    return () => window.clearTimeout(timer);
+  }, [consumedFocusRequestId, focusMessageId, focusRequestId, messages]);
 
   const handleTaskEditSubmit = useCallback(async ({ title, description }: TaskEditorValues) => {
     const boundTask = summaryState?.boundTask;
@@ -525,6 +562,7 @@ export function ThreadPanel({
                 agent={channelMembers.find((agent) => agent.name === msg.senderName)}
                 channelId={channelId}
                 threadRootId={threadRootId}
+                highlighted={highlightedMessageId === msg.id}
                 onOpenAgentSession={onOpenAgentSession}
               />
             ))}

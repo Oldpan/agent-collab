@@ -4,7 +4,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CreateDialog } from "@/components/ui/create-dialog";
 import { cn } from "@/lib/utils";
 import {
-  PlusIcon, TrashIcon, ChevronRightIcon, ChevronDownIcon, Rows3Icon, HashIcon, LogOutIcon, LinkIcon, SettingsIcon, UserIcon, ShieldIcon,
+  PlusIcon, TrashIcon, ChevronRightIcon, ChevronDownIcon, Rows3Icon, HashIcon, LogOutIcon, LinkIcon, SettingsIcon, UserIcon, ShieldIcon, SearchIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type {
@@ -51,13 +51,14 @@ type SidebarProps = {
   channelUnreadCounts: Record<string, number>;
   selectedId: string | null;
   selectedChannelId: string | null;
-  selectedView: "chat" | "sessions";
+  selectedView: "chat" | "sessions" | "search";
   currentUser?: User | null;
   onOpenSessions: () => void;
   onCreateMachine: (req: CreateMachineRequest) => Promise<MachineInfo>;
   onDeleteMachine: (id: string) => void;
   onCreateAgent: (req: CreateAgentRequest) => void;
   onDeleteAgent: (id: string) => void;
+  onOpenSearch: () => void;
   onOpenAgentThread: (agentId: string) => void;
   onSelectChannel: (channelId: string) => void;
   onCreateChannel: (req: { name: string; description?: string; agentIds?: string[]; workspacePath?: string }) => Promise<ChannelInfo>;
@@ -128,6 +129,7 @@ export function Sidebar({
   selectedView,
   currentUser,
   onCreateMachine, onDeleteMachine,
+  onOpenSearch,
   onOpenSessions,
   onCreateAgent, onDeleteAgent,
   onOpenAgentThread,
@@ -251,6 +253,20 @@ export function Sidebar({
           Machines &amp; Agents
         </h1>
         <div className="flex items-center gap-1">
+          <Button
+            size="icon-xs"
+            variant="outline"
+            className={cn(
+              "rounded-sm border-2 border-zinc-900 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+              selectedView === "search"
+                ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]"
+                : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+            )}
+            title="Search messages"
+            onClick={onOpenSearch}
+          >
+            <SearchIcon className="size-3" />
+          </Button>
           <Button
             size="icon-xs"
             variant="outline"

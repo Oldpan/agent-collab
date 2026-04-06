@@ -18,6 +18,8 @@ function readUserName(): string {
 export function useThreadStream(
   channelId: string | null,
   threadRootId: string | null,
+  aroundMessageId?: string | null,
+  aroundRequestId?: number | null,
   taskVersion = 0,
 ): {
   messages: ChannelMessage[];
@@ -48,11 +50,11 @@ export function useThreadStream(
     };
 
     api
-      .getThreadMessages(channelId, threadRootId, 100)
+      .getThreadMessages(channelId, threadRootId, 100, undefined, aroundMessageId ?? undefined)
       .then((d) => {
         if (!cancelled) {
           setMessages(d.messages);
-          if (d.messages.length < 100) setHasMore(false);
+          setHasMore(aroundMessageId ? Boolean(d.hasOlder) : d.messages.length >= 100);
         }
       })
       .catch(() => {});
@@ -89,7 +91,7 @@ export function useThreadStream(
       ws.close();
       if (wsRef.current === ws) wsRef.current = null;
     };
-  }, [channelId, threadRootId]);
+  }, [aroundMessageId, aroundRequestId, channelId, threadRootId]);
 
   useEffect(() => {
     if (!channelId || !threadRootId) return;

@@ -239,6 +239,61 @@ describe('migrations', () => {
     db.close();
   });
 
+  it('schema_version 已是 53 但 FTS 缺失时，应自愈重建 channel_messages_fts', () => {
+    const dbPath = join(tmpdir(), `migration-v53-repair-${randomUUID()}.db`);
+    const db = openDb(dbPath);
+
+    db.exec(`
+      CREATE TABLE schema_version(version INTEGER NOT NULL);
+      INSERT INTO schema_version(version) VALUES(53);
+
+      CREATE TABLE channel_messages (
+        message_id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        sender_name TEXT NOT NULL,
+        sender_type TEXT NOT NULL,
+        target TEXT NOT NULL,
+        content TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        run_id TEXT,
+        thread_root_id TEXT,
+        message_kind TEXT,
+        message_source TEXT,
+        attachment_ids TEXT
+      );
+
+      INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+      VALUES
+        ('repair-root', 'default', 'user', 'User', 'user', '#default', 'repair root searchable text', 1, 1000, NULL),
+        ('repair-thread', 'default', 'user', 'User', 'user', '#default:repai123', 'repair thread searchable text', 2, 1001, 'repai123');
+    `);
+
+    migrate(db);
+
+    const rows = db
+      .prepare(`SELECT message_id as messageId FROM channel_messages_fts WHERE channel_messages_fts MATCH ? ORDER BY message_id`)
+      .all('"repair"') as Array<{ messageId: string }>;
+    expect(rows.map((row) => row.messageId)).toEqual(['repair-root', 'repair-thread']);
+
+    const artifactRows = db
+      .prepare(`SELECT name FROM sqlite_master WHERE name LIKE 'channel_messages_fts%' ORDER BY name`)
+      .all() as Array<{ name: string }>;
+    expect(artifactRows.map((row) => row.name)).toEqual(
+      expect.arrayContaining([
+        'channel_messages_fts',
+        'channel_messages_fts_after_delete',
+        'channel_messages_fts_after_insert',
+        'channel_messages_fts_after_update',
+      ]),
+    );
+
+    const versionRow = db.prepare('SELECT version FROM schema_version').get() as { version: number };
+    expect(versionRow.version).toBe(53);
+    db.close();
+  });
+
   it('tasks 表应包含 message_id 与 thread_unbound 列', () => {
     const db = createTestDb();
     const cols = db.prepare("PRAGMA table_info('tasks')").all() as Array<{ name: string }>;

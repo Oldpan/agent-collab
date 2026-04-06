@@ -224,6 +224,25 @@ export type ChannelMessage = {
   attachmentIds?: string[];
 };
 
+export type ChannelMessagesResult = {
+  messages: ChannelMessage[];
+  hasOlder?: boolean;
+  hasNewer?: boolean;
+};
+
+export type SearchMessageHit = {
+  messageId: string;
+  channelId: string;
+  channelName: string;
+  threadRootId?: string;
+  senderName: string;
+  senderType: 'user' | 'agent' | 'system';
+  content: string;
+  snippet: string;
+  seq: number;
+  createdAt: string;
+};
+
 export type ChannelTask = TaskInfo & {
   linkedThreadId?: string;
   linkedThreadShortId?: string;
@@ -489,9 +508,11 @@ export async function getChannelMessages(
   channelId: string,
   limit = 50,
   before?: number,
-): Promise<{ messages: ChannelMessage[] }> {
+  around?: string,
+): Promise<ChannelMessagesResult> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (before !== undefined) params.set('before', String(before));
+  if (around) params.set('around', around);
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/messages?${params}`, {
     headers: withAuthHeaders(),
   });
@@ -540,14 +561,36 @@ export async function getThreadMessages(
   shortId: string,
   limit = 100,
   before?: number,
-): Promise<{ messages: ChannelMessage[] }> {
+  around?: string,
+): Promise<ChannelMessagesResult> {
   const params = new URLSearchParams({ limit: String(limit) });
   if (before !== undefined) params.set('before', String(before));
+  if (around) params.set('around', around);
   const res = await fetch(
     `${API_BASE}/channels/${encodeURIComponent(channelId)}/threads/${encodeURIComponent(shortId)}/messages?${params}`,
     { headers: withAuthHeaders() },
   );
   if (!res.ok) throw new Error(`Failed to get thread messages: ${res.statusText}`);
+  return res.json();
+}
+
+export async function searchMessages(
+  query: string,
+  limit = 20,
+  signal?: AbortSignal,
+): Promise<{ results: SearchMessageHit[] }> {
+  const params = new URLSearchParams({
+    q: query,
+    limit: String(limit),
+  });
+  const res = await fetch(`${API_BASE}/search/messages?${params}`, {
+    headers: withAuthHeaders(),
+    signal,
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string; message?: string };
+    throw new Error(err.error ?? err.message ?? `Failed to search messages: ${res.statusText}`);
+  }
   return res.json();
 }
 

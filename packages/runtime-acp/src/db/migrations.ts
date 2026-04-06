@@ -968,7 +968,38 @@ export function migrate(db: Db): void {
     db.exec(`UPDATE schema_version SET version = 52;`);
   }
 
-  if (current < 53) {
+  const ftsArtifacts = db.prepare(
+    `SELECT name FROM sqlite_master
+     WHERE name IN (
+       'channel_messages_fts',
+       'channel_messages_fts_after_insert',
+       'channel_messages_fts_after_delete',
+       'channel_messages_fts_after_update'
+     )`,
+  ).all() as Array<{ name: string }>;
+  const hasAllChannelMessageFtsArtifacts = [
+    'channel_messages_fts',
+    'channel_messages_fts_after_insert',
+    'channel_messages_fts_after_delete',
+    'channel_messages_fts_after_update',
+  ].every((name) => ftsArtifacts.some((artifact) => artifact.name === name));
+  const channelMessagesTableExists = !!db.prepare(
+    `SELECT 1 FROM sqlite_master
+     WHERE type = 'table' AND name = 'channel_messages'
+     LIMIT 1`,
+  ).get();
+  const channelMessageColumns = channelMessagesTableExists
+    ? db.prepare(`PRAGMA table_info('channel_messages')`).all() as Array<{ name: string }>
+    : [];
+  const canBuildChannelMessagesFts = [
+    'message_id',
+    'channel_id',
+    'target',
+    'content',
+    'thread_root_id',
+  ].every((name) => channelMessageColumns.some((column) => column.name === name));
+
+  if ((current < 53 || !hasAllChannelMessageFtsArtifacts) && canBuildChannelMessagesFts) {
     db.exec(`
       CREATE VIRTUAL TABLE IF NOT EXISTS channel_messages_fts USING fts5(
         message_id UNINDEXED,
@@ -976,7 +1007,7 @@ export function migrate(db: Db): void {
         thread_root_id UNINDEXED,
         target UNINDEXED,
         content,
-        tokenize = 'unicode61 porter'
+        tokenize = 'porter unicode61'
       );
 
       DELETE FROM channel_messages_fts;
@@ -1026,6 +1057,8 @@ export function migrate(db: Db): void {
         );
       END;
     `);
-    db.exec(`UPDATE schema_version SET version = 53;`);
+    if (current < 53) {
+      db.exec(`UPDATE schema_version SET version = 53;`);
+    }
   }
 }

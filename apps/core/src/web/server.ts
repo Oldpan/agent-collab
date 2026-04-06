@@ -3,6 +3,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import Fastify from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import fastifyCors from '@fastify/cors';
 import fastifyWebSocket from '@fastify/websocket';
 import fastifyStatic from '@fastify/static';
@@ -73,7 +74,7 @@ export async function startServer(params: {
   nodeRegistry?: NodeRegistry;
   workspaceBroker?: AgentWorkspaceBroker;
   skillsBroker?: AgentSkillsBroker;
-}): Promise<void> {
+}): Promise<FastifyInstance> {
   const { port, host, conversationManager, db } = params;
   const config = conversationManager.getConfig();
   // Attachment storage: sibling directory next to the DB file
@@ -1103,6 +1104,137 @@ export async function startServer(params: {
     return conversationManager.listChannels().filter((c) => allowed.includes(c.channelId));
   });
 
+  function buildPublicFtsMatchQuery(rawQuery: string): string | null {
+    const tokens = rawQuery
+      .trim()
+      .split(/\s+/)
+      .map((token) => token.replace(/[^\p{L}\p{N}_-]+/gu, ''))
+      .filter(Boolean);
+    if (tokens.length === 0) return null;
+    return tokens.map((token) => `${token}*`).join(' AND ');
+  }
+
+  type PublicChannelRow = {
+    id: string;
+    senderName: string;
+    senderType: string;
+    content: string;
+    createdAt: number;
+    seq: number;
+    replyCount: number;
+    messageSource: string | null;
+    attachmentIds: string | null;
+    taskNumber: number | null;
+    taskStatus: string | null;
+    taskAssigneeName: string | null;
+  };
+
+  type PublicThreadRow = {
+    id: string;
+    senderName: string;
+    senderType: string;
+    content: string;
+    createdAt: number;
+    seq: number;
+    messageSource: string | null;
+    attachmentIds: string | null;
+  };
+
+  const mapPublicChannelMessage = (row: PublicChannelRow) => ({
+    id: row.id,
+    senderName: row.senderName,
+    senderType: row.senderType as 'user' | 'agent' | 'system',
+    content: row.content,
+    createdAt: new Date(row.createdAt).toISOString(),
+    seq: row.seq,
+    replyCount: row.replyCount,
+    ...(row.messageSource ? { messageSource: row.messageSource } : {}),
+    ...(row.attachmentIds ? { attachmentIds: JSON.parse(row.attachmentIds) as string[] } : {}),
+    ...(row.taskNumber != null ? { taskNumber: row.taskNumber, taskStatus: row.taskStatus, taskAssigneeName: row.taskAssigneeName } : {}),
+  });
+
+  const mapPublicThreadMessage = (row: PublicThreadRow, threadRootId: string) => ({
+    id: row.id,
+    senderName: row.senderName,
+    senderType: row.senderType as 'user' | 'agent' | 'system',
+    content: row.content,
+    createdAt: new Date(row.createdAt).toISOString(),
+    seq: row.seq,
+    threadRootId,
+    ...(row.messageSource ? { messageSource: row.messageSource } : {}),
+    ...(row.attachmentIds ? { attachmentIds: JSON.parse(row.attachmentIds) as string[] } : {}),
+  });
+
+  app.get<{ Querystring: { q?: string; limit?: string } }>(
+    '/api/search/messages',
+    async (req, reply) => {
+      const user = requireUser(req, reply);
+      if (!user) return { error: 'Unauthorized' };
+      const trimmed = String(req.query.q ?? '').trim();
+      if (!trimmed) {
+        reply.code(400);
+        return { error: 'q is required' };
+      }
+
+      const visibleChannels = user.isAdmin
+        ? conversationManager.listChannels()
+        : conversationManager.listChannels().filter((channel) => getUserChannelAccess(db, user.id).includes(channel.channelId));
+      if (visibleChannels.length === 0) return { results: [] };
+
+      const matchQuery = buildPublicFtsMatchQuery(trimmed);
+      if (!matchQuery) {
+        reply.code(400);
+        return { error: 'q is required' };
+      }
+
+      const channelNameById = new Map(visibleChannels.map((channel) => [channel.channelId, channel.name]));
+      const limit = Math.min(Math.max(Number(req.query.limit ?? 20) || 20, 1), 20);
+      const placeholders = visibleChannels.map(() => '?').join(', ');
+      const rows = db.prepare(
+        `SELECT cm.message_id as messageId,
+                cm.channel_id as channelId,
+                cm.thread_root_id as threadRootId,
+                cm.sender_name as senderName,
+                cm.sender_type as senderType,
+                cm.content,
+                cm.seq,
+                cm.created_at as createdAt,
+                snippet(channel_messages_fts, 4, '[[', ']]', ' … ', 18) as snippet
+         FROM channel_messages_fts
+         JOIN channel_messages cm ON cm.message_id = channel_messages_fts.message_id
+         WHERE channel_messages_fts MATCH ?
+           AND cm.channel_id IN (${placeholders})
+         ORDER BY bm25(channel_messages_fts), cm.created_at DESC
+         LIMIT ?`,
+      ).all(matchQuery, ...visibleChannels.map((channel) => channel.channelId), limit) as Array<{
+        messageId: string;
+        channelId: string;
+        threadRootId: string | null;
+        senderName: string;
+        senderType: string;
+        content: string;
+        seq: number;
+        createdAt: number;
+        snippet: string | null;
+      }>;
+
+      return {
+        results: rows.map((row) => ({
+          messageId: row.messageId,
+          channelId: row.channelId,
+          channelName: channelNameById.get(row.channelId) ?? row.channelId,
+          ...(row.threadRootId ? { threadRootId: row.threadRootId } : {}),
+          senderName: row.senderName,
+          senderType: row.senderType as 'user' | 'agent' | 'system',
+          content: row.content,
+          snippet: row.snippet ?? row.content,
+          seq: row.seq,
+          createdAt: new Date(row.createdAt).toISOString(),
+        })),
+      };
+    },
+  );
+
   // Create channel
   app.post<{ Body: CreateChannelRequest }>('/api/channels', async (req, reply) => {
     if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
@@ -1358,7 +1490,7 @@ export async function startServer(params: {
   });
 
   // Get channel message history (top-level only; thread replies excluded)
-  app.get<{ Params: { id: string }; Querystring: { limit?: string; before?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { limit?: string; before?: string; around?: string } }>(
     '/api/channels/:id/messages',
     async (req, reply) => {
       if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
@@ -1366,6 +1498,70 @@ export async function startServer(params: {
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const limit = Math.min(Number(req.query.limit ?? 50), 200);
       const before = req.query.before != null ? Number(req.query.before) : null;
+      const around = typeof req.query.around === 'string' && req.query.around.trim() ? req.query.around.trim() : null;
+      const selectChannelRows = (
+        extraWhere = '',
+        orderBy = 'cm.seq DESC',
+        rowLimit = limit,
+        extraParams: Array<string | number> = [],
+      ) => db.prepare(
+        `SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
+                cm.content, cm.created_at as createdAt, cm.seq, cm.message_source as messageSource,
+                cm.attachment_ids as attachmentIds,
+                COUNT(replies.message_id) as replyCount,
+                t.task_number as taskNumber, t.status as taskStatus,
+                t.claimed_by_name as taskAssigneeName
+         FROM channel_messages cm
+         LEFT JOIN channel_messages replies
+           ON replies.channel_id = cm.channel_id
+           AND replies.thread_root_id = SUBSTR(cm.message_id, 1, 8)
+         LEFT JOIN tasks t ON t.message_id = cm.message_id
+         WHERE cm.channel_id = ? AND cm.thread_root_id IS NULL${extraWhere}
+         GROUP BY cm.message_id
+         ORDER BY ${orderBy} LIMIT ?`,
+      ).all(req.params.id, ...extraParams, rowLimit) as PublicChannelRow[];
+
+      if (around) {
+        const anchor = (/^\d+$/.test(around)
+          ? selectChannelRows(' AND cm.seq = ?', 'cm.seq ASC', 1, [Number(around)])[0]
+          : selectChannelRows(' AND cm.message_id LIKE ?', 'cm.seq DESC', 1, [`${around}%`])[0]) ?? null;
+        if (!anchor) {
+          reply.code(404);
+          return { error: 'Message not found' };
+        }
+
+        const beforeTarget = Math.floor((limit - 1) / 2);
+        const afterTarget = Math.max(0, limit - beforeTarget - 1);
+        let olderDesc = selectChannelRows(' AND cm.seq < ?', 'cm.seq DESC', beforeTarget, [anchor.seq]);
+        let newerAsc = selectChannelRows(' AND cm.seq > ?', 'cm.seq ASC', afterTarget, [anchor.seq]);
+
+        if (olderDesc.length < beforeTarget) {
+          newerAsc = selectChannelRows(' AND cm.seq > ?', 'cm.seq ASC', afterTarget + (beforeTarget - olderDesc.length), [anchor.seq]);
+        } else if (newerAsc.length < afterTarget) {
+          olderDesc = selectChannelRows(' AND cm.seq < ?', 'cm.seq DESC', beforeTarget + (afterTarget - newerAsc.length), [anchor.seq]);
+        }
+
+        const rows = [...olderDesc.reverse(), anchor, ...newerAsc];
+        const firstSeq = rows[0]?.seq ?? anchor.seq;
+        const lastSeq = rows[rows.length - 1]?.seq ?? anchor.seq;
+        const hasOlder = !!db.prepare(
+          `SELECT 1 FROM channel_messages
+           WHERE channel_id = ? AND thread_root_id IS NULL AND seq < ?
+           LIMIT 1`,
+        ).get(req.params.id, firstSeq);
+        const hasNewer = !!db.prepare(
+          `SELECT 1 FROM channel_messages
+           WHERE channel_id = ? AND thread_root_id IS NULL AND seq > ?
+           LIMIT 1`,
+        ).get(req.params.id, lastSeq);
+
+        return {
+          messages: rows.map(mapPublicChannelMessage),
+          hasOlder,
+          hasNewer,
+        };
+      }
+
       const rows = (before != null
         ? db.prepare(
             `SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
@@ -1401,24 +1597,13 @@ export async function startServer(params: {
           ).all(req.params.id, limit)
       ) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; seq: number; replyCount: number; messageSource: string | null; attachmentIds: string | null; taskNumber: number | null; taskStatus: string | null; taskAssigneeName: string | null }>;
       return {
-        messages: rows.reverse().map((r) => ({
-          id: r.id,
-          senderName: r.senderName,
-          senderType: r.senderType as 'user' | 'agent' | 'system',
-          content: r.content,
-          createdAt: new Date(r.createdAt).toISOString(),
-          seq: r.seq,
-          replyCount: r.replyCount,
-          ...(r.messageSource ? { messageSource: r.messageSource } : {}),
-          ...(r.attachmentIds ? { attachmentIds: JSON.parse(r.attachmentIds) as string[] } : {}),
-          ...(r.taskNumber != null ? { taskNumber: r.taskNumber, taskStatus: r.taskStatus, taskAssigneeName: r.taskAssigneeName } : {}),
-        })),
+        messages: rows.reverse().map(mapPublicChannelMessage),
       };
     },
   );
 
   // Get thread messages for a specific root message
-  app.get<{ Params: { id: string; shortId: string }; Querystring: { limit?: string; before?: string } }>(
+  app.get<{ Params: { id: string; shortId: string }; Querystring: { limit?: string; before?: string; around?: string } }>(
     '/api/channels/:id/threads/:shortId/messages',
     async (req, reply) => {
       if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
@@ -1426,6 +1611,62 @@ export async function startServer(params: {
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const limit = Math.min(Number(req.query.limit ?? 100), 200);
       const before = req.query.before != null ? Number(req.query.before) : null;
+      const around = typeof req.query.around === 'string' && req.query.around.trim() ? req.query.around.trim() : null;
+      const selectThreadRows = (
+        extraWhere = '',
+        orderBy = 'seq ASC',
+        rowLimit = limit,
+        extraParams: Array<string | number> = [],
+      ) => db.prepare(
+        `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
+                content, created_at as createdAt, seq, message_source as messageSource,
+                attachment_ids as attachmentIds
+         FROM channel_messages
+         WHERE channel_id = ? AND thread_root_id = ?${extraWhere}
+         ORDER BY ${orderBy} LIMIT ?`,
+      ).all(req.params.id, req.params.shortId, ...extraParams, rowLimit) as PublicThreadRow[];
+
+      if (around) {
+        const anchor = (/^\d+$/.test(around)
+          ? selectThreadRows(' AND seq = ?', 'seq ASC', 1, [Number(around)])[0]
+          : selectThreadRows(' AND message_id LIKE ?', 'seq DESC', 1, [`${around}%`])[0]) ?? null;
+        if (!anchor) {
+          reply.code(404);
+          return { error: 'Message not found' };
+        }
+
+        const beforeTarget = Math.floor((limit - 1) / 2);
+        const afterTarget = Math.max(0, limit - beforeTarget - 1);
+        let olderDesc = selectThreadRows(' AND seq < ?', 'seq DESC', beforeTarget, [anchor.seq]);
+        let newerAsc = selectThreadRows(' AND seq > ?', 'seq ASC', afterTarget, [anchor.seq]);
+
+        if (olderDesc.length < beforeTarget) {
+          newerAsc = selectThreadRows(' AND seq > ?', 'seq ASC', afterTarget + (beforeTarget - olderDesc.length), [anchor.seq]);
+        } else if (newerAsc.length < afterTarget) {
+          olderDesc = selectThreadRows(' AND seq < ?', 'seq DESC', beforeTarget + (afterTarget - newerAsc.length), [anchor.seq]);
+        }
+
+        const rows = [...olderDesc.reverse(), anchor, ...newerAsc];
+        const firstSeq = rows[0]?.seq ?? anchor.seq;
+        const lastSeq = rows[rows.length - 1]?.seq ?? anchor.seq;
+        const hasOlder = !!db.prepare(
+          `SELECT 1 FROM channel_messages
+           WHERE channel_id = ? AND thread_root_id = ? AND seq < ?
+           LIMIT 1`,
+        ).get(req.params.id, req.params.shortId, firstSeq);
+        const hasNewer = !!db.prepare(
+          `SELECT 1 FROM channel_messages
+           WHERE channel_id = ? AND thread_root_id = ? AND seq > ?
+           LIMIT 1`,
+        ).get(req.params.id, req.params.shortId, lastSeq);
+
+        return {
+          messages: rows.map((row) => mapPublicThreadMessage(row, req.params.shortId)),
+          hasOlder,
+          hasNewer,
+        };
+      }
+
       const rows = (before != null
         ? db.prepare(
             `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
@@ -1446,17 +1687,7 @@ export async function startServer(params: {
       ) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; seq: number; messageSource: string | null; attachmentIds: string | null }>;
       const ordered = before != null ? rows.reverse() : rows;
       return {
-        messages: ordered.map((r) => ({
-          id: r.id,
-          senderName: r.senderName,
-          senderType: r.senderType as 'user' | 'agent' | 'system',
-          content: r.content,
-          createdAt: new Date(r.createdAt).toISOString(),
-          seq: r.seq,
-          threadRootId: req.params.shortId,
-          ...(r.messageSource ? { messageSource: r.messageSource } : {}),
-          ...(r.attachmentIds ? { attachmentIds: JSON.parse(r.attachmentIds) as string[] } : {}),
-        })),
+        messages: ordered.map((r) => mapPublicThreadMessage(r, req.params.shortId)),
       };
     },
   );
@@ -2526,6 +2757,7 @@ export async function startServer(params: {
 
   await app.listen({ port, host });
   log.info(`Web server listening on ${host}:${port}`);
+  return app;
 }
 
 function normalizeWorkspaceQueryPath(rawPath?: string): string {
