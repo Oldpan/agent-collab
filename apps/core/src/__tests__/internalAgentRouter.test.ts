@@ -1555,6 +1555,301 @@ describe('internalAgentRouter', () => {
     expect(body.messages.map((msg) => msg.content)).toContain('hello channel');
   });
 
+  it('read_history 支持 around messageId 居中读取上下文', async () => {
+    const agent = manager.createAgent({
+      name: 'AroundReader',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/around-reader-router',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    for (const content of ['alpha', 'bravo', 'charlie', 'delta', 'echo']) {
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        `around-${content}`,
+        'default',
+        'user',
+        'User',
+        'user',
+        '#default',
+        content,
+        allocateNextChannelMessageSeq(db, 'default'),
+        Date.now(),
+      );
+    }
+
+    const res = await fetch(
+      `${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent('#default')}&around=${encodeURIComponent('around-charlie')}&limit=3`,
+    );
+    expect(res.status).toBe(200);
+
+    const body = await res.json() as {
+      messages: Array<{ content: string }>;
+      has_older: boolean;
+      has_newer: boolean;
+      has_more: boolean;
+    };
+    expect(body.messages.map((msg) => msg.content)).toEqual(['bravo', 'charlie', 'delta']);
+    expect(body.has_older).toBe(true);
+    expect(body.has_newer).toBe(true);
+    expect(body.has_more).toBe(true);
+  });
+
+  it('read_history 支持 around seq 居中读取上下文', async () => {
+    const agent = manager.createAgent({
+      name: 'AroundSeqReader',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/around-seq-reader-router',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    for (const content of ['one', 'two', 'three', 'four']) {
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run(
+        `around-seq-${content}`,
+        'default',
+        'user',
+        'User',
+        'user',
+        '#default',
+        content,
+        allocateNextChannelMessageSeq(db, 'default'),
+        Date.now(),
+      );
+    }
+
+    const res = await fetch(
+      `${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent('#default')}&around=3&limit=3`,
+    );
+    expect(res.status).toBe(200);
+
+    const body = await res.json() as { messages: Array<{ content: string }> };
+    expect(body.messages.map((msg) => msg.content)).toEqual(['two', 'three', 'four']);
+  });
+
+  it('thread target 的 read_history around 不应泄漏主频道消息', async () => {
+    const agent = manager.createAgent({
+      name: 'ThreadAroundReader',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/thread-around-reader-router',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES
+       ('thread-around-root', 'default', 'user', 'User', 'user', '#default', 'main thread root', ?, ?, NULL),
+       ('thread-around-1', 'default', 'user', 'User', 'user', '#default:thr12345', 'thread only one', ?, ?, 'thr12345'),
+       ('thread-around-2', 'default', 'user', 'User', 'user', '#default:thr12345', 'thread only two', ?, ?, 'thr12345'),
+       ('thread-around-3', 'default', 'user', 'User', 'user', '#default:thr12345', 'thread only three', ?, ?, 'thr12345')`,
+    ).run(
+      allocateNextChannelMessageSeq(db, 'default'),
+      Date.now(),
+      allocateNextChannelMessageSeq(db, 'default'),
+      Date.now() + 1,
+      allocateNextChannelMessageSeq(db, 'default'),
+      Date.now() + 2,
+      allocateNextChannelMessageSeq(db, 'default'),
+      Date.now() + 3,
+    );
+
+    const res = await fetch(
+      `${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent('#default:thr12345')}&around=${encodeURIComponent('thread-around-2')}&limit=3`,
+    );
+    expect(res.status).toBe(200);
+
+    const body = await res.json() as { messages: Array<{ content: string }> };
+    expect(body.messages.map((msg) => msg.content)).toEqual(['thread only one', 'thread only two', 'thread only three']);
+  });
+
+  it('read_history 的 around 不可与 before 同时使用', async () => {
+    const agent = manager.createAgent({
+      name: 'AroundConflict',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/around-conflict-router',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    const res = await fetch(
+      `${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent('#default')}&around=msg-1&before=2`,
+    );
+    expect(res.status).toBe(400);
+
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain('around');
+  });
+
+  it('read_history 的 around 找不到 anchor 时应返回 404', async () => {
+    const agent = manager.createAgent({
+      name: 'AroundMissing',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/around-missing-router',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    const res = await fetch(
+      `${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent('#default')}&around=${encodeURIComponent('missing-anchor')}`,
+    );
+    expect(res.status).toBe(404);
+
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain('Cannot resolve message');
+  });
+
+  it('search 应只返回 agent 可见范围内的命中消息', async () => {
+    const agent = manager.createAgent({
+      name: 'Searcher',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/searcher-router',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    const privateChannel = manager.createChannel({ name: 'private-search' });
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES
+       ('search-root', 'default', 'user', 'User', 'user', '#default', 'needle root hit', ?, ?, NULL),
+       ('search-thread', 'default', 'user', 'User', 'user', '#default:thread123', 'needle thread hit', ?, ?, 'thread123'),
+       ('search-private', ?, 'user', 'User', 'user', ?, 'needle hidden hit', ?, ?, NULL)`,
+    ).run(
+      allocateNextChannelMessageSeq(db, 'default'),
+      Date.now(),
+      allocateNextChannelMessageSeq(db, 'default'),
+      Date.now() + 1,
+      privateChannel.channelId,
+      '#private-search',
+      allocateNextChannelMessageSeq(db, privateChannel.channelId),
+      Date.now() + 2,
+    );
+
+    const res = await fetch(
+      `${baseUrl}/api/internal/agent/${agent.agentId}/search?q=${encodeURIComponent('needle')}`,
+    );
+    expect(res.status).toBe(200);
+
+    const body = await res.json() as {
+      results: Array<{ content: string; target: string; snippet: string }>;
+    };
+    expect(body.results.map((msg) => msg.content)).toContain('needle root hit');
+    expect(body.results.map((msg) => msg.content)).toContain('needle thread hit');
+    expect(body.results.map((msg) => msg.content)).not.toContain('needle hidden hit');
+    expect(body.results.map((msg) => msg.target)).toContain('#default');
+    expect(body.results.map((msg) => msg.target)).toContain('#default:thread123');
+    expect(body.results.some((msg) => msg.snippet.toLowerCase().includes('needle'))).toBe(true);
+  });
+
+  it('search 的基础 channel 过滤应包含该 channel 的主线与 thread 命中', async () => {
+    const agent = manager.createAgent({
+      name: 'ScopedSearcher',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/scoped-searcher-router',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES
+       ('scope-root', 'default', 'user', 'User', 'user', '#default', 'scoped term main', ?, ?, NULL),
+       ('scope-thread', 'default', 'user', 'User', 'user', '#default:scope123', 'scoped term thread', ?, ?, 'scope123')`,
+    ).run(
+      allocateNextChannelMessageSeq(db, 'default'),
+      Date.now(),
+      allocateNextChannelMessageSeq(db, 'default'),
+      Date.now() + 1,
+    );
+
+    const res = await fetch(
+      `${baseUrl}/api/internal/agent/${agent.agentId}/search?q=${encodeURIComponent('scoped')}&channel=${encodeURIComponent('#default')}`,
+    );
+    expect(res.status).toBe(200);
+
+    const body = await res.json() as { results: Array<{ content: string; target: string }> };
+    expect(body.results.map((msg) => msg.content)).toContain('scoped term main');
+    expect(body.results.map((msg) => msg.content)).toContain('scoped term thread');
+    expect(body.results.map((msg) => msg.target)).toContain('#default');
+    expect(body.results.map((msg) => msg.target)).toContain('#default:scope123');
+  });
+
+  it('search 的 channel 过滤支持 exact thread target', async () => {
+    const agent = manager.createAgent({
+      name: 'ThreadSearcher',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/thread-searcher-router',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES
+       ('thread-filter-root', 'default', 'user', 'User', 'user', '#default', 'focus term root', ?, ?, NULL),
+       ('thread-filter-thread', 'default', 'user', 'User', 'user', '#default:focus123', 'focus term thread', ?, ?, 'focus123')`,
+    ).run(
+      allocateNextChannelMessageSeq(db, 'default'),
+      Date.now(),
+      allocateNextChannelMessageSeq(db, 'default'),
+      Date.now() + 1,
+    );
+
+    const res = await fetch(
+      `${baseUrl}/api/internal/agent/${agent.agentId}/search?q=${encodeURIComponent('focus')}&channel=${encodeURIComponent('#default:focus123')}`,
+    );
+    expect(res.status).toBe(200);
+
+    const body = await res.json() as {
+      results: Array<{ content: string; target: string }>;
+    };
+    expect(body.results.map((msg) => msg.content)).toEqual(['focus term thread']);
+    expect(body.results.map((msg) => msg.target)).toEqual(['#default:focus123']);
+  });
+
+  it('search 对未加入的 channel 过滤应返回 403', async () => {
+    const agent = manager.createAgent({
+      name: 'ForbiddenSearcher',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/forbidden-searcher-router',
+    });
+    manager.createChannel({ name: 'private-search-filter' });
+
+    const res = await fetch(
+      `${baseUrl}/api/internal/agent/${agent.agentId}/search?q=${encodeURIComponent('needle')}&channel=${encodeURIComponent('#private-search-filter')}`,
+    );
+    expect(res.status).toBe(403);
+
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain('not a member');
+  });
+
+  it('search 的空查询应返回 400', async () => {
+    const agent = manager.createAgent({
+      name: 'EmptySearcher',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/empty-searcher-router',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    const res = await fetch(
+      `${baseUrl}/api/internal/agent/${agent.agentId}/search?q=${encodeURIComponent('   ')}`,
+    );
+    expect(res.status).toBe(400);
+
+    const body = await res.json() as { error: string };
+    expect(body.error).toContain('q');
+  });
+
   it('thread conversation 中的 agent 仍可读取所属主频道历史', async () => {
     const agent = manager.createAgent({
       name: 'ThreadReader',

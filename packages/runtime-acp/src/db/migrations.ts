@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 52;
+const LATEST_VERSION = 53;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -966,5 +966,66 @@ export function migrate(db: Db): void {
       }
     }
     db.exec(`UPDATE schema_version SET version = 52;`);
+  }
+
+  if (current < 53) {
+    db.exec(`
+      CREATE VIRTUAL TABLE IF NOT EXISTS channel_messages_fts USING fts5(
+        message_id UNINDEXED,
+        channel_id UNINDEXED,
+        thread_root_id UNINDEXED,
+        target UNINDEXED,
+        content,
+        tokenize = 'unicode61 porter'
+      );
+
+      DELETE FROM channel_messages_fts;
+
+      INSERT INTO channel_messages_fts(message_id, channel_id, thread_root_id, target, content)
+      SELECT
+        message_id,
+        channel_id,
+        COALESCE(thread_root_id, ''),
+        target,
+        content
+      FROM channel_messages;
+
+      CREATE TRIGGER IF NOT EXISTS channel_messages_fts_after_insert
+      AFTER INSERT ON channel_messages
+      BEGIN
+        INSERT INTO channel_messages_fts(message_id, channel_id, thread_root_id, target, content)
+        VALUES (
+          NEW.message_id,
+          NEW.channel_id,
+          COALESCE(NEW.thread_root_id, ''),
+          NEW.target,
+          NEW.content
+        );
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS channel_messages_fts_after_delete
+      AFTER DELETE ON channel_messages
+      BEGIN
+        DELETE FROM channel_messages_fts
+        WHERE message_id = OLD.message_id;
+      END;
+
+      CREATE TRIGGER IF NOT EXISTS channel_messages_fts_after_update
+      AFTER UPDATE OF message_id, channel_id, thread_root_id, target, content ON channel_messages
+      BEGIN
+        DELETE FROM channel_messages_fts
+        WHERE message_id = OLD.message_id;
+
+        INSERT INTO channel_messages_fts(message_id, channel_id, thread_root_id, target, content)
+        VALUES (
+          NEW.message_id,
+          NEW.channel_id,
+          COALESCE(NEW.thread_root_id, ''),
+          NEW.target,
+          NEW.content
+        );
+      END;
+    `);
+    db.exec(`UPDATE schema_version SET version = 53;`);
   }
 }

@@ -63,6 +63,45 @@ type TaskRow = {
 };
 
 type ContextMsg = { senderName: string; senderType: string; content: string; seq: number };
+type MessageScope = { clause: string; params: Array<string | number> };
+
+function parseBoundedPositiveInt(value: string | undefined, fallback: number, max: number): number {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
+  return Math.min(Math.floor(parsed), max);
+}
+
+function parseOptionalPositiveInt(value: string | undefined): number | undefined {
+  if (value === undefined) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed) || parsed <= 0) return undefined;
+  return Math.floor(parsed);
+}
+
+function buildMessageScope(alias: string, channelId: string, threadRootId: string | null): MessageScope {
+  const params: Array<string | number> = [channelId];
+  if (threadRootId !== null) {
+    params.push(threadRootId);
+    return {
+      clause: `${alias}.channel_id = ? AND ${alias}.thread_root_id = ?`,
+      params,
+    };
+  }
+
+  return {
+    clause: `${alias}.channel_id = ? AND ${alias}.thread_root_id IS NULL`,
+    params,
+  };
+}
+
+function buildFtsMatchQuery(rawQuery: string): string {
+  return rawQuery
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((term) => `"${term.replace(/"/g, '""')}"`)
+    .join(' AND ');
+}
 
 /** 获取 task 对应消息之前的 K 条主线消息作为上下文 */
 function fetchTaskContext(db: Db, channelId: string, messageId: string, limit = 8): ContextMsg[] {
@@ -613,7 +652,92 @@ export function registerInternalAgentRoutes(
    */
   app.get<{
     Params: { agentId: string };
-    Querystring: { channel: string; limit?: string; before?: string; after?: string };
+    Querystring: { q: string; channel?: string; limit?: string };
+  }>('/api/internal/agent/:agentId/search', async (req, reply) => {
+    const { agentId } = req.params;
+    const agent = conversationManager.getAgent(agentId);
+    if (!agent) {
+      reply.code(404);
+      return { error: 'Agent not found' };
+    }
+
+    const query = typeof req.query.q === 'string' ? req.query.q.trim() : '';
+    if (!query) {
+      reply.code(400);
+      return { error: 'q query parameter is required' };
+    }
+
+    const ftsQuery = buildFtsMatchQuery(query);
+    if (!ftsQuery) {
+      reply.code(400);
+      return { error: 'q query parameter is required' };
+    }
+
+    const limit = parseBoundedPositiveInt(req.query.limit, 10, 20);
+    const visibleChannelIds = Array.from(new Set([`dm:${agentId}`, ...(agent.channelIds ?? [])]));
+    const whereParts: string[] = [`cm.channel_id IN (${visibleChannelIds.map(() => '?').join(', ')})`];
+    const params: Array<string | number> = [ftsQuery, ...visibleChannelIds];
+
+    const channelTarget = typeof req.query.channel === 'string' ? req.query.channel.trim() : '';
+    if (channelTarget) {
+      const channelId = resolveChannelFromTarget(channelTarget, db) ?? (channelTarget.startsWith('dm:') ? `dm:${agentId}` : null);
+      if (!channelId) {
+        reply.code(400);
+        return { error: `Cannot resolve channel: ${channelTarget}` };
+      }
+      if (channelTarget.startsWith('#') && !(agent.channelIds ?? []).includes(channelId)) {
+        reply.code(403);
+        return { error: 'Agent is not a member of this channel' };
+      }
+
+      whereParts.push('cm.channel_id = ?');
+      params.push(channelId);
+
+      const threadRootId = resolveThreadRootId(channelTarget);
+      if (threadRootId !== null) {
+        whereParts.push('cm.thread_root_id = ?');
+        params.push(threadRootId);
+      }
+    }
+
+    const rows = db.prepare(
+      `SELECT
+         cm.message_id as messageId,
+         cm.channel_id as channelId,
+         cm.sender_id as senderId,
+         cm.sender_name as senderName,
+         cm.sender_type as senderType,
+         cm.target,
+         cm.content,
+         cm.seq,
+         cm.created_at as createdAt,
+         cm.thread_root_id as threadRootId,
+         snippet(channel_messages_fts, 4, '[', ']', '...', 12) as snippet
+       FROM channel_messages_fts
+       JOIN channel_messages cm ON cm.message_id = channel_messages_fts.message_id
+       WHERE channel_messages_fts MATCH ?
+         AND ${whereParts.join(' AND ')}
+       ORDER BY bm25(channel_messages_fts), cm.created_at DESC
+       LIMIT ?`,
+    ).all(...params, limit) as Array<MessageRow & { snippet: string | null }>;
+
+    return {
+      results: rows.map((row) => ({
+        id: row.messageId,
+        target: row.target,
+        senderName: row.senderName,
+        senderType: row.senderType,
+        content: row.content,
+        seq: row.seq,
+        createdAt: new Date(row.createdAt).toISOString(),
+        snippet: row.snippet ?? row.content,
+      })),
+    };
+  });
+
+  app.get<{
+    Params: { agentId: string };
+    Querystring: { channel: string; limit?: string; around?: string; before?: string; after?: string };
   }>('/api/internal/agent/:agentId/history', async (req, reply) => {
     const { agentId } = req.params;
     const agent = conversationManager.getAgent(agentId);
@@ -622,7 +746,7 @@ export function registerInternalAgentRoutes(
       return { error: 'Agent not found' };
     }
 
-    const { channel, limit: limitStr, before: beforeStr, after: afterStr } = req.query;
+    const { channel, limit: limitStr, around: aroundStr, before: beforeStr, after: afterStr } = req.query;
     if (!channel) {
       reply.code(400);
       return { error: 'channel query parameter is required' };
@@ -638,14 +762,18 @@ export function registerInternalAgentRoutes(
       return { error: 'Agent is not a member of this channel' };
     }
 
-    const limit = Math.min(Number(limitStr ?? 50), 100);
-    const before = beforeStr ? Number(beforeStr) : undefined;
-    const after = afterStr ? Number(afterStr) : undefined;
+    const limit = parseBoundedPositiveInt(limitStr, 50, 100);
+    const before = parseOptionalPositiveInt(beforeStr);
+    const after = parseOptionalPositiveInt(afterStr);
+    const around = typeof aroundStr === 'string' ? aroundStr.trim() : '';
+    if (around && (before !== undefined || after !== undefined)) {
+      reply.code(400);
+      return { error: 'around cannot be combined with before or after' };
+    }
+
     // Thread filter: "#channel:shortId" reads thread; "#channel" reads main channel only
     const targetThreadRootId = resolveThreadRootId(channel);
-    const threadFilter = targetThreadRootId !== null
-      ? `AND thread_root_id = '${targetThreadRootId.replace(/'/g, "''")}'`
-      : `AND thread_root_id IS NULL`;
+    const scope = buildMessageScope('cm', channelId, targetThreadRootId);
 
     const taskJoinSelect = `cm.message_id as messageId, cm.channel_id as channelId, cm.sender_id as senderId,
                   cm.sender_name as senderName, cm.sender_type as senderType,
@@ -653,37 +781,85 @@ export function registerInternalAgentRoutes(
                   t.task_number as taskNumber, t.status as taskStatus, t.claimed_by_name as taskAssigneeName`;
     const taskJoin = `LEFT JOIN tasks t ON t.message_id = cm.message_id`;
 
+    const selectRows = (extraWhere: string, extraParams: Array<string | number>, order: 'ASC' | 'DESC', rowLimit: number): MessageRow[] =>
+      db
+        .prepare(
+          `SELECT ${taskJoinSelect}
+           FROM channel_messages cm ${taskJoin}
+           WHERE ${scope.clause}${extraWhere ? ` AND ${extraWhere}` : ''}
+           ORDER BY cm.seq ${order} LIMIT ?`,
+        )
+        .all(...scope.params, ...extraParams, rowLimit) as MessageRow[];
+
+    const findAroundAnchorSeq = (): number | null => {
+      if (!around) return null;
+      if (/^\d+$/.test(around)) {
+        const row = db.prepare(
+          `SELECT cm.seq as seq
+           FROM channel_messages cm
+           WHERE ${scope.clause} AND cm.seq = ?
+           LIMIT 1`,
+        ).get(...scope.params, Number(around)) as { seq: number } | undefined;
+        return row?.seq ?? null;
+      }
+
+      const row = db.prepare(
+        `SELECT cm.seq as seq
+         FROM channel_messages cm
+         WHERE ${scope.clause} AND cm.message_id LIKE ?
+         ORDER BY cm.seq ASC
+         LIMIT 1`,
+      ).get(...scope.params, `${around}%`) as { seq: number } | undefined;
+      return row?.seq ?? null;
+    };
+
     let rows: MessageRow[];
-    if (after !== undefined) {
-      rows = db
-        .prepare(
-          `SELECT ${taskJoinSelect}
-           FROM channel_messages cm ${taskJoin}
-           WHERE cm.channel_id = ? AND cm.seq > ? ${threadFilter.replace(/\bthread_root_id\b/g, 'cm.thread_root_id')}
-           ORDER BY cm.seq ASC LIMIT ?`,
-        )
-        .all(channelId, after, limit) as MessageRow[];
+    if (around) {
+      const anchorSeq = findAroundAnchorSeq();
+      if (anchorSeq === null) {
+        reply.code(404);
+        return { error: `Cannot resolve message around ${around}` };
+      }
+
+      const beforeBase = Math.floor((limit - 1) / 2);
+      const afterBase = Math.max(limit - beforeBase - 1, 0);
+
+      let beforeRows = selectRows('cm.seq < ?', [anchorSeq], 'DESC', beforeBase);
+      let afterRows = selectRows('cm.seq > ?', [anchorSeq], 'ASC', afterBase);
+
+      if (beforeRows.length < beforeBase) {
+        afterRows = selectRows('cm.seq > ?', [anchorSeq], 'ASC', afterBase + (beforeBase - beforeRows.length));
+      }
+      if (afterRows.length < afterBase) {
+        beforeRows = selectRows('cm.seq < ?', [anchorSeq], 'DESC', beforeBase + (afterBase - afterRows.length));
+      }
+
+      const anchorRows = selectRows('cm.seq = ?', [anchorSeq], 'ASC', 1);
+      rows = beforeRows.reverse().concat(anchorRows, afterRows);
+    } else if (after !== undefined) {
+      rows = selectRows('cm.seq > ?', [after], 'ASC', limit);
     } else if (before !== undefined) {
-      rows = db
-        .prepare(
-          `SELECT ${taskJoinSelect}
-           FROM channel_messages cm ${taskJoin}
-           WHERE cm.channel_id = ? AND cm.seq < ? ${threadFilter.replace(/\bthread_root_id\b/g, 'cm.thread_root_id')}
-           ORDER BY cm.seq DESC LIMIT ?`,
-        )
-        .all(channelId, before, limit).reverse() as MessageRow[];
+      rows = selectRows('cm.seq < ?', [before], 'DESC', limit).reverse();
     } else {
-      rows = db
-        .prepare(
-          `SELECT ${taskJoinSelect}
-           FROM channel_messages cm ${taskJoin}
-           WHERE cm.channel_id = ? ${threadFilter.replace(/\bthread_root_id\b/g, 'cm.thread_root_id')}
-           ORDER BY cm.seq DESC LIMIT ?`,
-        )
-        .all(channelId, limit).reverse() as MessageRow[];
+      rows = selectRows('', [], 'DESC', limit).reverse();
     }
 
-    const hasMore = rows.length === limit;
+    const hasOlder = rows.length > 0
+      ? !!db.prepare(
+        `SELECT 1
+         FROM channel_messages cm
+         WHERE ${scope.clause} AND cm.seq < ?
+         LIMIT 1`,
+      ).get(...scope.params, rows[0].seq)
+      : false;
+    const hasNewer = rows.length > 0
+      ? !!db.prepare(
+        `SELECT 1
+         FROM channel_messages cm
+         WHERE ${scope.clause} AND cm.seq > ?
+         LIMIT 1`,
+      ).get(...scope.params, rows[rows.length - 1].seq)
+      : false;
     const messages = rows.map((r) => {
       const ext = r as MessageRow & { taskNumber?: number | null; taskStatus?: string | null; taskAssigneeName?: string | null };
       return {
@@ -701,7 +877,7 @@ export function registerInternalAgentRoutes(
       };
     });
 
-    return { messages, has_more: hasMore };
+    return { messages, has_more: hasOlder || hasNewer, has_older: hasOlder, has_newer: hasNewer };
   });
 
   app.get<{

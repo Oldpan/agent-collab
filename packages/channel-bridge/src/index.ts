@@ -204,31 +204,37 @@ server.tool(
 
 server.tool(
   'read_history',
-  "Read message history for a channel, DM, or thread. Use the same target format: '#channel', 'dm:@name', '#channel:id' for threads. Supports pagination: use 'before' to load older messages, 'after' to load messages after a seq number.",
+  "Read message history for a channel, DM, or thread. Use the same target format: '#channel', 'dm:@name', '#channel:id' for threads. Supports pagination with 'before' / 'after' and centered context jumps with 'around' (messageId or seq).",
   {
     channel: z.string().describe("The target to read history from — e.g. '#general', 'dm:@alice', '#general:abcd1234'"),
     limit: z.number().default(50).describe('Max number of messages to return (default 50, max 100)'),
+    around: z.union([z.string(), z.number()]).optional().describe('Center the history window around a messageId prefix or seq in this exact target.'),
     before: z.number().optional().describe('Return messages before this seq number (backward pagination).'),
     after: z.number().optional().describe('Return messages after this seq number (catching up on unread).'),
   },
-  async ({ channel, limit, before, after }) => {
+  async ({ channel, limit, around, before, after }) => {
     try {
       const params = new URLSearchParams();
       params.set('channel', channel);
       params.set('limit', String(Math.min(limit, 100)));
+      if (around !== undefined) params.set('around', String(around));
       if (before !== undefined) params.set('before', String(before));
       if (after !== undefined) params.set('after', String(after));
 
       const { ok, data } = await apiFetch(`/history?${params}`);
       if (!ok) return toText(`Error: ${errText(data, 'history fetch failed')}`);
 
-      const d = data as { messages?: HistoryMessage[]; has_more?: boolean };
+      const d = data as { messages?: HistoryMessage[]; has_more?: boolean; has_older?: boolean; has_newer?: boolean };
       if (!d.messages?.length) return toText('No messages in this channel.');
 
       const formatted = formatHistoryMessages(d.messages);
 
       let footer = '';
-      if (d.has_more && d.messages.length > 0) {
+      if (around !== undefined && d.messages.length > 0 && (d.has_older || d.has_newer)) {
+        const minSeq = d.messages[0].seq;
+        const maxSeq = d.messages[d.messages.length - 1].seq;
+        footer = `\n\n--- Context window shown. Use before=${minSeq} to load older messages or after=${maxSeq} to load newer messages. ---`;
+      } else if (d.has_more && d.messages.length > 0) {
         if (after !== undefined) {
           const maxSeq = d.messages[d.messages.length - 1].seq;
           footer = `\n\n--- ${d.messages.length} messages shown. Use after=${maxSeq} to load more recent messages. ---`;
@@ -238,7 +244,50 @@ server.tool(
         }
       }
 
-      return toText(`## Message History for ${channel} (${d.messages.length} messages)\n\n${formatted}\n\n--- IMPORTANT: The [Message metadata] block is system metadata for routing and context. Do NOT quote or repeat it back to the user. ---${footer}`);
+      const aroundHeader = around !== undefined ? ` around ${String(around)}` : '';
+      return toText(`## Message History for ${channel}${aroundHeader} (${d.messages.length} messages)\n\n${formatted}\n\n--- IMPORTANT: The [Message metadata] block is system metadata for routing and context. Do NOT quote or repeat it back to the user. ---${footer}`);
+    } catch (err: unknown) {
+      return toText(`Error: ${(err as Error).message}`);
+    }
+  },
+);
+
+// ── search_messages ──────────────────────────────────────────────────────────
+
+server.tool(
+  'search_messages',
+  'Search messages visible to this agent. Use this to find relevant older context, then inspect a hit with read_history(channel="<target>", around="<messageId>").',
+  {
+    query: z.string().describe('Search query'),
+    channel: z.string().optional().describe("Optional target to scope the search, e.g. '#general', 'dm:@alice', '#general:abcd1234'"),
+    limit: z.number().default(10).describe('Max number of search results to return (default 10, max 20)'),
+  },
+  async ({ query, channel, limit }) => {
+    try {
+      const trimmed = query.trim();
+      if (!trimmed) return toText('Search query cannot be empty.');
+
+      const params = new URLSearchParams();
+      params.set('q', trimmed);
+      params.set('limit', String(Math.min(limit, 20)));
+      if (channel) params.set('channel', channel);
+
+      const { ok, data } = await apiFetch(`/search?${params}`);
+      if (!ok) return toText(`Error: ${errText(data, 'search failed')}`);
+
+      const d = data as { results?: SearchMessageHit[] };
+      if (!d.results?.length) return toText('No search results.');
+
+      const formatted = d.results.map((result, index) => [
+        `[${index + 1}] msg=${result.id} seq=${result.seq} time=${result.createdAt}`,
+        `target: ${result.target}`,
+        `sender: @${result.senderName}${result.senderType === 'agent' ? ' (agent)' : ''}`,
+        `content: ${result.content}`,
+        `match: ${result.snippet}`,
+        `next: read_history(channel="${result.target}", around="${result.id}", limit=20)`,
+      ].join('\n')).join('\n\n');
+
+      return toText(`## Search Results for "${trimmed}" (${d.results.length} results)\n\n${formatted}`);
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }
@@ -634,6 +683,17 @@ type HistoryMessage = {
   taskNumber?: number | null;
   taskStatus?: string | null;
   taskAssigneeName?: string | null;
+};
+
+type SearchMessageHit = {
+  id: string;
+  senderName: string;
+  senderType: string;
+  target: string;
+  content: string;
+  seq: number;
+  createdAt: string;
+  snippet: string;
 };
 
 type ChannelItem = { name: string; joined: boolean; description?: string };

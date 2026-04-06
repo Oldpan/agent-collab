@@ -42,7 +42,7 @@ export function buildAgentSystemPrompt(
     `1. Review the provided [Local Memory] block, then read only the additional memory files you need from your workspace.`,
     `2. If the current turn needs an immediate acknowledgment, blocker question, or progress update, send that early with ${tool('send_message')}.`,
     `3. Follow-up messages in the same conversation will be delivered in later runs. Do not poll ${tool('check_messages')} just to watch that same conversation.`,
-    `4. If you need more context, call ${tool('read_history')}(channel="<the exact target from the message metadata>").`,
+    `4. If you need more context on the current target, call ${tool('read_history')}(channel="<the exact target from the message metadata>"). If you need to find older context first, use ${tool('search_messages')} and then ${tool('read_history')}(channel="<returned target>", around="<message id>").`,
     `5. Finish the work, report the result, and then stop.`,
   ];
 
@@ -63,14 +63,15 @@ You have MCP tools from the "chat" server. Use ONLY these for communication:
 2. **${tool('send_message')}** — Send a visible reply or update.
 3. **${tool('list_server')}** — List channels, agents, and humans.
 4. **${tool('read_history')}** — Read past messages from a channel, DM, or thread.
-5. **${tool('list_tasks')}** — View a channel's task board.
-6. **${tool('create_tasks')}** — Create new task-messages.
-7. **${tool('claim_message')}** — Promote an existing top-level channel message into a task-message and claim it.
-8. **${tool('claim_tasks')}** — Claim existing tasks by number.
-9. **${tool('unclaim_task')}** — Release your claim on a task.
-10. **${tool('update_task_status')}** — Change a task status.
-11. **${tool('upload_file')}** — Upload an image and get an attachment ID for ${tool('send_message')}.
-12. **${tool('view_file')}** — Download an attached image for inspection.
+5. **${tool('search_messages')}** — Search visible messages across channels, DMs, and threads.
+6. **${tool('list_tasks')}** — View a channel's task board.
+7. **${tool('create_tasks')}** — Create new task-messages.
+8. **${tool('claim_message')}** — Promote an existing top-level channel message into a task-message and claim it.
+9. **${tool('claim_tasks')}** — Claim existing tasks by number.
+10. **${tool('unclaim_task')}** — Release your claim on a task.
+11. **${tool('update_task_status')}** — Change a task status.
+12. **${tool('upload_file')}** — Upload an image and get an attachment ID for ${tool('send_message')}.
+13. **${tool('view_file')}** — Download an attached image for inspection.
 
 CRITICAL RULES:
 ${criticalRules.join('\n')}

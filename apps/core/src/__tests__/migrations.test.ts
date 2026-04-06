@@ -28,7 +28,7 @@ describe('migrations', () => {
   it('schema_version 应为最新版本', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBeGreaterThanOrEqual(52);
+    expect(row.version).toBeGreaterThanOrEqual(53);
     db.close();
   });
 
@@ -162,6 +162,80 @@ describe('migrations', () => {
     const db = createTestDb();
     const cols = db.prepare("PRAGMA table_info('channel_messages')").all() as Array<{ name: string }>;
     expect(cols.map((c) => c.name)).toContain('message_source');
+    db.close();
+  });
+
+  it('channel_messages_fts 应存在并与消息内容同步', () => {
+    const db = createTestDb();
+    const virtualTables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table' AND name = 'channel_messages_fts'")
+      .all() as Array<{ name: string }>;
+    expect(virtualTables.map((t) => t.name)).toContain('channel_messages_fts');
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run('fts-msg-1', 'default', 'user', 'User', 'user', '#default', 'searchable initial content', 1, Date.now());
+
+    let rows = db
+      .prepare(`SELECT message_id as messageId FROM channel_messages_fts WHERE channel_messages_fts MATCH ?`)
+      .all('"searchable"') as Array<{ messageId: string }>;
+    expect(rows.map((row) => row.messageId)).toContain('fts-msg-1');
+
+    db.prepare(`UPDATE channel_messages SET content = ? WHERE message_id = ?`).run('updated indexed phrase', 'fts-msg-1');
+    rows = db
+      .prepare(`SELECT message_id as messageId FROM channel_messages_fts WHERE channel_messages_fts MATCH ?`)
+      .all('"updated"') as Array<{ messageId: string }>;
+    expect(rows.map((row) => row.messageId)).toContain('fts-msg-1');
+
+    db.prepare(`DELETE FROM channel_messages WHERE message_id = ?`).run('fts-msg-1');
+    rows = db
+      .prepare(`SELECT message_id as messageId FROM channel_messages_fts WHERE channel_messages_fts MATCH ?`)
+      .all('"updated"') as Array<{ messageId: string }>;
+    expect(rows).toHaveLength(0);
+    db.close();
+  });
+
+  it('v53 migration 应回填旧 channel_messages 到 FTS 索引', () => {
+    const dbPath = join(tmpdir(), `migration-v53-${randomUUID()}.db`);
+    const db = openDb(dbPath);
+
+    db.exec(`
+      CREATE TABLE schema_version(version INTEGER NOT NULL);
+      INSERT INTO schema_version(version) VALUES(52);
+
+      CREATE TABLE channel_messages (
+        message_id TEXT PRIMARY KEY,
+        channel_id TEXT NOT NULL,
+        sender_id TEXT NOT NULL,
+        sender_name TEXT NOT NULL,
+        sender_type TEXT NOT NULL,
+        target TEXT NOT NULL,
+        content TEXT NOT NULL,
+        seq INTEGER NOT NULL,
+        created_at INTEGER NOT NULL,
+        run_id TEXT,
+        thread_root_id TEXT,
+        message_kind TEXT,
+        message_source TEXT,
+        attachment_ids TEXT
+      );
+
+      INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+      VALUES
+        ('legacy-root', 'default', 'user', 'User', 'user', '#default', 'legacy root searchable text', 1, 1000, NULL),
+        ('legacy-thread', 'default', 'user', 'User', 'user', '#default:legac123', 'legacy thread searchable text', 2, 1001, 'legac123');
+    `);
+
+    migrate(db);
+
+    const rows = db
+      .prepare(`SELECT message_id as messageId FROM channel_messages_fts WHERE channel_messages_fts MATCH ? ORDER BY message_id`)
+      .all('"legacy"') as Array<{ messageId: string }>;
+    expect(rows.map((row) => row.messageId)).toEqual(['legacy-root', 'legacy-thread']);
+
+    const versionRow = db.prepare('SELECT version FROM schema_version').get() as { version: number };
+    expect(versionRow.version).toBe(53);
     db.close();
   });
 
