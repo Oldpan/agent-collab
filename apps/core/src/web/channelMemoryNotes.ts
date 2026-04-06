@@ -28,6 +28,10 @@ export function buildChannelResetMarker(channelName: string, clearedAt: number):
   ].join('\n');
 }
 
+function escapeRegex(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function buildChannelNoteHeader(channelName: string): string {
   return [
     `# Channel: #${channelName}`,
@@ -57,25 +61,63 @@ function isNotFoundError(error: unknown): boolean {
   return message.startsWith('not_found:');
 }
 
-async function appendMarkerFile(params: {
+function stripLeadingHeader(content: string, header: string): string {
+  if (!content.startsWith(header)) return content.trim();
+  return content.slice(header.length).trim();
+}
+
+function stripManagedChannelResetBlocks(content: string, channelName: string): string {
+  const channelPattern = new RegExp(
+    String.raw`\n*## History Reset\n- Live chat history for #${escapeRegex(channelName)} was cleared at [^\n]+\.\n- Treat older notes in this file as durable memory, not as the currently visible channel transcript\.\n- If asked what is currently visible in the channel, rely on current chat history or read_history rather than older notes from before this reset\.\n*`,
+    'g',
+  );
+  return content.replace(channelPattern, '\n\n').trim();
+}
+
+function stripManagedLegacyResetBlocks(content: string, channelName: string): string {
+  const legacyPattern = new RegExp(
+    String.raw`\n*## #${escapeRegex(channelName)}\n- Live chat history was cleared at [^\n]+\.\n- Earlier bullets in this file are durable summaries, not necessarily the currently visible transcript\.\n*`,
+    'g',
+  );
+  return content.replace(legacyPattern, '\n\n').trim();
+}
+
+function buildManagedNoteContent(params: {
+  existingContent: string;
+  header: string;
+  marker: string;
+  stripMarkers: (content: string) => string;
+}): string {
+  const { existingContent, header, marker, stripMarkers } = params;
+  const withoutHeader = stripLeadingHeader(existingContent, header);
+  const remaining = stripMarkers(withoutHeader);
+  return remaining.length > 0 ? `${header}\n\n${marker}\n\n${remaining}\n` : `${header}\n\n${marker}\n`;
+}
+
+async function upsertMarkerFile(params: {
   broker: WorkspaceNoteWriter;
   agent: AgentInfo;
   relativePath: string;
   marker: string;
   header: string;
+  stripMarkers: (content: string) => string;
 }): Promise<void> {
-  const { broker, agent, relativePath, marker, header } = params;
+  const { broker, agent, relativePath, marker, header, stripMarkers } = params;
   if (!agent.nodeId || !agent.workspacePath) return;
 
   try {
     const existing = await broker.readFile(agent.nodeId, agent.workspacePath, relativePath);
-    const separator = existing.content.trim().length > 0 ? '\n\n' : '';
     await broker.writeFile(
       agent.nodeId,
       agent.workspacePath,
       relativePath,
-      `${separator}${marker}\n`,
-      'append',
+      buildManagedNoteContent({
+        existingContent: existing.content,
+        header,
+        marker,
+        stripMarkers,
+      }),
+      'overwrite',
     );
   } catch (error) {
     if (!isNotFoundError(error)) throw error;
@@ -102,19 +144,21 @@ export async function appendChannelResetMarkers(params: {
 
   for (const agent of agents) {
     if (!agent.nodeId || !agent.workspacePath) continue;
-    await appendMarkerFile({
+    await upsertMarkerFile({
       broker,
       agent,
       relativePath: notePath,
       marker: channelMarker,
       header: buildChannelNoteHeader(channelName),
+      stripMarkers: (content) => stripManagedChannelResetBlocks(content, channelName),
     });
-    await appendMarkerFile({
+    await upsertMarkerFile({
       broker,
       agent,
       relativePath: LEGACY_CHANNELS_NOTE_PATH,
       marker: legacyMarker,
       header: buildLegacyChannelsHeader(),
+      stripMarkers: (content) => stripManagedLegacyResetBlocks(content, channelName),
     });
   }
 }

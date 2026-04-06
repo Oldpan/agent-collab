@@ -102,6 +102,14 @@
   - 建议：对 channel/thread 更明确要求优先 `read_history(channel="<exact target>")`；对长任务和恢复场景更明确要求检查 `MEMORY.md`
   - 路径：`packages/memory/src/systemPrompt.ts`、`apps/core/src/web/channelActivationPrompt.ts`、`apps/core/src/web/directActivationPrompt.ts`
 
+- [ ] **Channel / Thread 多 agent 协同的长时压力测试与真实远端 node 联调**
+  - 现状：功能性回归已覆盖 `1A/2A/3A + user/agent` 的主链场景，且已补了 `collaborationScenarios.test.ts` 与 `scripts/e2e-collab-smoke.mjs` 两层基础脚手架；但尚未做真正的长时多轮 soak，也未对真实远端 `agent-node` 做稳定的端到端联调
+  - 风险：长轮次下仍可能出现 `participants/owner/queue` 漂移、prompt 体积失控、resume/replay 串台、以及真实 node 与测试桩行为不一致
+  - 目标：在遇到相关问题时，优先基于现有脚手架补两类验证：
+    - 长剧本 / 随机序列压力测试：覆盖多轮 channel root、thread、task thread、queue/resume、done task、新旧 participants TTL
+    - 真实远端 node 联调：至少验证 DM restore、channel 多 agent mention、thread recent participant、task assignee priority、active conversation queue/resume、done task 无 stale owner
+  - 路径：`apps/core/src/__tests__/collaborationScenarios.test.ts`、`scripts/e2e-collab-smoke.mjs`
+
 ---
 
 ## P3 — 体验优化

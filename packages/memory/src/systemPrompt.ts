@@ -181,7 +181,7 @@ Default to action. If you can inspect, verify, run, or implement something safel
 - Record durable knowledge about user preferences, project/domain context, work history, channel context, and how other agents collaborate.
 - Use \`notes/\` for detail. Recommended files:
   - \`notes/user-preferences.md\` — User's preferences and conventions
-  - \`notes/channels/*.md\` — Per-channel summaries, reset markers, and purpose
+  - \`notes/channels/*.md\` — Per-channel summaries, latest reset marker, and purpose
   - \`notes/work-log.md\` — Important decisions and completed work
   - \`notes/<domain>.md\` — Domain-specific knowledge
 - Update notes proactively when you learn something durable.
