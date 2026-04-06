@@ -29,7 +29,7 @@ import {
   type ToolState,
 } from "@/components/ai-elements/tool";
 import { useConversationStream } from "@/hooks/useConversationStream";
-import { ChevronRightIcon, MenuIcon } from "lucide-react";
+import { ChevronRightIcon, ListTodoIcon, MenuIcon } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 function AttachmentImage({ attachmentId }: { attachmentId: string }) {
@@ -49,10 +49,12 @@ import { AgentWorkspacePanel } from "./AgentWorkspacePanel";
 import { AgentSkillsPanel } from "./AgentSkillsPanel";
 import { AgentProfilePanel } from "./AgentProfilePanel";
 import { AgentActivityPanel } from "./AgentActivityPanel";
+import { AgentTasksPanel } from "./AgentTasksPanel";
 import { CodexDebugPanel } from "./CodexDebugPanel";
 import { ChatAvatar, readStoredUserIdentity } from "./ChatAvatar";
 import { AgentSettingsPanel } from "./AgentSettingsPanel";
 import type { AgentInfo, ConversationInfo, UpdateAgentRequest } from "@agent-collab/protocol";
+import type { AgentTask } from "@/lib/api";
 import type { LiveMessage, LiveToolCall } from "@/hooks/types";
 import { cn } from "@/lib/utils";
 import { MessageSourceBadge } from "@/components/MessageSourceBadge";
@@ -67,6 +69,7 @@ type ChatPanelProps = {
   onRestartConversation?: (id: string) => Promise<void>;
   onClearConversationChat?: (id: string) => Promise<void>;
   onResetAgent?: (id: string) => Promise<void>;
+  onOpenTask?: (task: AgentTask) => void;
 };
 
 /** Determine tool display state from LiveToolCall */
@@ -99,8 +102,9 @@ export function ChatPanel({
   onRestartConversation,
   onClearConversationChat,
   onResetAgent,
+  onOpenTask,
 }: ChatPanelProps) {
-  const [activeTab, setActiveTab] = useState<"chat" | "activity" | "debug" | "workspace" | "skills" | "profile" | "setting">("chat");
+  const [activeTab, setActiveTab] = useState<"chat" | "activity" | "task" | "debug" | "workspace" | "skills" | "profile" | "setting">("chat");
   const userIdentity = useMemo(() => readStoredUserIdentity(), []);
   const {
     messages,
@@ -215,6 +219,18 @@ export function ChatPanel({
               <span className="ml-1.5 size-1.5 rounded-full bg-amber-500 animate-pulse inline-block" />
             )}
           </Button>
+          <Button
+            size="sm"
+            variant={activeTab === "task" ? "default" : "outline"}
+            className={cn(
+              "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+              activeTab === "task" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+            )}
+            onClick={() => setActiveTab("task")}
+          >
+            <ListTodoIcon className="mr-1.5 size-3" />
+            Task
+          </Button>
           {canShowCodexDebug && (
             <Button
               size="sm"
@@ -317,6 +333,13 @@ export function ChatPanel({
       ) : activeTab === "activity" ? (
         <div className="flex flex-1 flex-col overflow-hidden">
           <AgentActivityPanel runs={runs} />
+        </div>
+      ) : activeTab === "task" ? (
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <AgentTasksPanel
+            agent={agent}
+            onOpenTask={onOpenTask}
+          />
         </div>
       ) : activeTab === "debug" ? (
         <div className="flex flex-1 flex-col overflow-hidden">

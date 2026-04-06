@@ -22,7 +22,7 @@ import type {
   UpdateAgentRequest,
 } from "@agent-collab/protocol";
 import * as api from "@/lib/api";
-import type { SearchMessageHit } from "@/lib/api";
+import type { AgentTask, SearchMessageHit } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
 type SearchFocusTarget = {
@@ -30,6 +30,11 @@ type SearchFocusTarget = {
   messageId: string;
   threadRootId: string | null;
   requestId: number;
+};
+
+type ChannelTaskContextAgent = {
+  agentId: string;
+  name: string;
 };
 
 function useIsMobile() {
@@ -81,6 +86,7 @@ export function App() {
   const { channels, createChannel, updateChannel: updateChannelInStore } = useChannels();
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [searchFocusTarget, setSearchFocusTarget] = useState<SearchFocusTarget | null>(null);
+  const [channelTaskContextAgent, setChannelTaskContextAgent] = useState<ChannelTaskContextAgent | null>(null);
 
   const visibleConversations = useMemo(() => {
     const agentIds = new Set(agents.map((agent) => agent.agentId));
@@ -162,6 +168,7 @@ export function App() {
       openAgentThread(agentId);
       setSelectedChannelId(null);
       setSearchFocusTarget(null);
+      setChannelTaskContextAgent(null);
       setViewMode("chat");
     },
     [openAgentThread],
@@ -174,10 +181,11 @@ export function App() {
       selectConversation(previousSelectedId);
       setSelectedChannelId(channelId);
       setSearchFocusTarget(null);
+      setChannelTaskContextAgent({ agentId, name: agents.find((item) => item.agentId === agentId)?.name ?? "Agent" });
       setViewMode("chat");
       return conversation;
     },
-    [openAgentChannelSession, selectConversation, selectedId],
+    [agents, openAgentChannelSession, selectConversation, selectedId],
   );
 
   const handleSelectConversation = useCallback(
@@ -185,6 +193,7 @@ export function App() {
       selectConversation(id);
       setSelectedChannelId(null);
       setSearchFocusTarget(null);
+      setChannelTaskContextAgent(null);
       setViewMode("chat");
     },
     [selectConversation],
@@ -195,6 +204,7 @@ export function App() {
       setSelectedChannelId(channelId);
       selectConversation(null);
       setSearchFocusTarget(null);
+      setChannelTaskContextAgent(null);
       setViewMode("chat");
     },
     [selectConversation],
@@ -218,9 +228,34 @@ export function App() {
     });
     setSelectedChannelId(result.channelId);
     selectConversation(null);
+    setChannelTaskContextAgent(null);
     setViewMode("chat");
     setMobileSidebarOpen(false);
   }, [selectConversation]);
+
+  const handleOpenAgentTask = useCallback((agent: { agentId: string; name: string }, task: AgentTask) => {
+    if (task.sourceType === "dm") {
+      openAgentThread(agent.agentId);
+      setSelectedChannelId(null);
+      setSearchFocusTarget(null);
+      setChannelTaskContextAgent(null);
+      setViewMode("chat");
+      setMobileSidebarOpen(false);
+      return;
+    }
+
+    setSelectedChannelId(task.channelId);
+    selectConversation(null);
+    setChannelTaskContextAgent({ agentId: agent.agentId, name: agent.name });
+    setSearchFocusTarget(task.messageId ? {
+      channelId: task.channelId,
+      messageId: task.messageId,
+      threadRootId: task.linkedThreadShortId ?? null,
+      requestId: Date.now(),
+    } : null);
+    setViewMode("chat");
+    setMobileSidebarOpen(false);
+  }, [openAgentThread, selectConversation]);
 
   const selectedChannel = useMemo(
     () => channels.find((c) => c.channelId === selectedChannelId) ?? null,
@@ -373,6 +408,8 @@ export function App() {
               focusMessageId={searchFocusTarget?.channelId === selectedChannel.channelId ? searchFocusTarget.messageId : null}
               focusRequestId={searchFocusTarget?.channelId === selectedChannel.channelId ? searchFocusTarget.requestId : null}
               initialThreadRootId={searchFocusTarget?.channelId === selectedChannel.channelId ? searchFocusTarget.threadRootId : null}
+              currentTaskAgentId={channelTaskContextAgent?.agentId ?? null}
+              currentTaskAgentName={channelTaskContextAgent?.name ?? null}
             />
           ) : selectedConversation ? (
             <ChatPanel
@@ -385,6 +422,10 @@ export function App() {
               onRestartConversation={handleRestartConversation}
               onClearConversationChat={handleClearConversationChat}
               onResetAgent={handleResetAgent}
+              onOpenTask={(task) => {
+                if (!selectedAgent) return;
+                handleOpenAgentTask(selectedAgent, task);
+              }}
             />
           ) : (
             <div className="flex h-full items-center justify-center text-muted-foreground">

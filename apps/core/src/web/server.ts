@@ -635,6 +635,278 @@ export async function startServer(params: {
     return thread;
   });
 
+  type AgentTaskListRow = {
+    taskId: string;
+    channelId: string;
+    taskNumber: number;
+    title: string;
+    description: string | null;
+    status: 'todo' | 'in_progress' | 'in_review' | 'done';
+    assigneeId: string | null;
+    assigneeName: string | null;
+    messageId: string | null;
+    createdAt: number;
+    updatedAt: number;
+    channelName: string | null;
+  };
+
+  const mapAgentTaskRow = (row: AgentTaskListRow, dmChannelId: string) => {
+    const linkedThreadId = row.messageId ? row.messageId.slice(0, 8) : null;
+    const sourceType = row.channelId === dmChannelId ? 'dm' : 'channel';
+    const channelName = sourceType === 'channel' ? row.channelName : null;
+    return {
+      taskId: row.taskId,
+      channelId: row.channelId,
+      taskNumber: row.taskNumber,
+      title: row.title,
+      ...(row.description != null ? { description: row.description } : {}),
+      status: row.status,
+      assigneeId: row.assigneeId,
+      assigneeName: row.assigneeName,
+      messageId: row.messageId,
+      ...(linkedThreadId ? { linkedThreadId, linkedThreadShortId: linkedThreadId } : {}),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      sourceType,
+      sourceLabel: sourceType === 'dm' ? 'DM' : `#${channelName ?? row.channelId}`,
+      ...(channelName ? { channelName } : {}),
+    };
+  };
+
+  const getAgentTaskRowById = (taskId: string): AgentTaskListRow | undefined => db.prepare(
+    `SELECT t.task_id as taskId,
+            t.channel_id as channelId,
+            t.task_number as taskNumber,
+            t.title as title,
+            t.description as description,
+            t.status as status,
+            t.claimed_by_agent_id as assigneeId,
+            t.claimed_by_name as assigneeName,
+            t.message_id as messageId,
+            t.created_at as createdAt,
+            t.updated_at as updatedAt,
+            c.name as channelName
+     FROM tasks t
+     LEFT JOIN channels c ON c.channel_id = t.channel_id
+     WHERE t.task_id = ?
+     LIMIT 1`,
+  ).get(taskId) as AgentTaskListRow | undefined;
+
+  app.get<{ Params: { id: string }; Querystring: { status?: string; scope?: string } }>(
+    '/api/agents/:id/tasks',
+    async (req, reply) => {
+      const user = requireAgentAccess(req, reply, req.params.id);
+      if (!user) return { error: 'Access denied' };
+      const agent = conversationManager.getAgent(req.params.id);
+      if (!agent) {
+        reply.code(404);
+        return { error: 'Not found' };
+      }
+
+      const status = (req.query.status as 'todo' | 'in_progress' | 'in_review' | 'done' | 'all' | undefined) ?? 'all';
+      const scope = (req.query.scope as 'all' | 'channel' | 'dm' | undefined) ?? 'all';
+      if (!['all', 'todo', 'in_progress', 'in_review', 'done'].includes(status)) {
+        reply.code(400);
+        return { error: 'Invalid status filter' };
+      }
+      if (!['all', 'channel', 'dm'].includes(scope)) {
+        reply.code(400);
+        return { error: 'Invalid scope filter' };
+      }
+
+      const dmChannelId = `dm:${req.params.id}`;
+      const whereParts = ['t.claimed_by_agent_id = ?'];
+      const params: Array<string> = [req.params.id];
+      if (status !== 'all') {
+        whereParts.push('t.status = ?');
+        params.push(status);
+      }
+      if (scope === 'channel') {
+        whereParts.push('t.channel_id != ?');
+        params.push(dmChannelId);
+      } else if (scope === 'dm') {
+        whereParts.push('t.channel_id = ?');
+        params.push(dmChannelId);
+      }
+
+      const rows = db.prepare(
+        `SELECT t.task_id as taskId,
+                t.channel_id as channelId,
+                t.task_number as taskNumber,
+                t.title as title,
+                t.description as description,
+                t.status as status,
+                t.claimed_by_agent_id as assigneeId,
+                t.claimed_by_name as assigneeName,
+                t.message_id as messageId,
+                t.created_at as createdAt,
+                t.updated_at as updatedAt,
+                c.name as channelName
+         FROM tasks t
+         LEFT JOIN channels c ON c.channel_id = t.channel_id
+         WHERE ${whereParts.join(' AND ')}
+         ORDER BY t.updated_at DESC`,
+      ).all(...params) as AgentTaskListRow[];
+
+      return {
+        tasks: rows
+          .filter((row) => row.channelId === dmChannelId || user.isAdmin || hasChannelAccess(user, row.channelId))
+          .map((row) => mapAgentTaskRow(row, dmChannelId)),
+      };
+    },
+  );
+
+  app.patch<{ Params: { id: string; taskId: string }; Body: { title?: string; description?: string } }>(
+    '/api/agents/:id/tasks/:taskId',
+    async (req, reply) => {
+      const user = requireAgentAccess(req, reply, req.params.id);
+      if (!user) return { error: 'Access denied' };
+      const dmChannelId = `dm:${req.params.id}`;
+      const title = normalizeRequiredText(req.body?.title);
+      const description = normalizeRequiredText(req.body?.description);
+      if (!title) {
+        reply.code(400);
+        return { error: 'title is required' };
+      }
+      if (!description) {
+        reply.code(400);
+        return { error: 'description is required' };
+      }
+
+      const current = db.prepare(
+        `SELECT t.task_id as taskId,
+                t.channel_id as channelId,
+                t.message_id as messageId,
+                t.created_at as taskCreatedAt,
+                cm.created_at as messageCreatedAt
+         FROM tasks t
+         LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
+         WHERE t.task_id = ?
+         LIMIT 1`,
+      ).get(req.params.taskId) as {
+        taskId: string;
+        channelId: string;
+        messageId: string | null;
+        taskCreatedAt: number;
+        messageCreatedAt: number | null;
+      } | undefined;
+      if (!current || current.channelId !== dmChannelId) {
+        reply.code(404);
+        return { error: 'DM task not found' };
+      }
+
+      const now = Date.now();
+      db.prepare(
+        `UPDATE tasks
+         SET title = ?, description = ?, updated_at = ?
+         WHERE task_id = ?`,
+      ).run(title, description, now, req.params.taskId);
+      if (current.messageId && current.messageCreatedAt === current.taskCreatedAt) {
+        db.prepare(`UPDATE channel_messages SET content = ? WHERE message_id = ?`).run(title, current.messageId);
+      }
+
+      const updated = getAgentTaskRowById(req.params.taskId);
+      if (!updated) {
+        reply.code(404);
+        return { error: 'DM task not found' };
+      }
+      return mapAgentTaskRow(updated, dmChannelId);
+    },
+  );
+
+  app.patch<{ Params: { id: string; taskId: string }; Body: { status?: string } }>(
+    '/api/agents/:id/tasks/:taskId/status',
+    async (req, reply) => {
+      const user = requireAgentAccess(req, reply, req.params.id);
+      if (!user) return { error: 'Access denied' };
+      const dmChannelId = `dm:${req.params.id}`;
+      const nextStatus = req.body?.status;
+      if (nextStatus !== 'todo' && nextStatus !== 'in_progress' && nextStatus !== 'in_review' && nextStatus !== 'done') {
+        reply.code(400);
+        return { error: 'Invalid status' };
+      }
+
+      const current = db.prepare(
+        `SELECT task_id as taskId,
+                channel_id as channelId,
+                status,
+                claimed_by_agent_id as assigneeId
+         FROM tasks
+         WHERE task_id = ?
+         LIMIT 1`,
+      ).get(req.params.taskId) as {
+        taskId: string;
+        channelId: string;
+        status: 'todo' | 'in_progress' | 'in_review' | 'done';
+        assigneeId: string | null;
+      } | undefined;
+      if (!current || current.channelId !== dmChannelId) {
+        reply.code(404);
+        return { error: 'DM task not found' };
+      }
+      if (!isValidTransition(current.status, nextStatus)) {
+        reply.code(409);
+        return { error: 'Invalid status transition' };
+      }
+
+      const now = Date.now();
+      db.prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?`).run(nextStatus, now, req.params.taskId);
+      syncTaskThreadOwner(db, {
+        taskId: req.params.taskId,
+        agentId: nextStatus === 'done' ? null : current.assigneeId,
+        lastActiveAt: now,
+      });
+
+      const updated = getAgentTaskRowById(req.params.taskId);
+      if (!updated) {
+        reply.code(404);
+        return { error: 'DM task not found' };
+      }
+      return mapAgentTaskRow(updated, dmChannelId);
+    },
+  );
+
+  app.post<{ Params: { id: string; taskId: string } }>(
+    '/api/agents/:id/tasks/:taskId/unclaim',
+    async (req, reply) => {
+      const user = requireAgentAccess(req, reply, req.params.id);
+      if (!user) return { error: 'Access denied' };
+      const dmChannelId = `dm:${req.params.id}`;
+      const current = db.prepare(
+        `SELECT task_id as taskId, channel_id as channelId
+         FROM tasks
+         WHERE task_id = ?
+         LIMIT 1`,
+      ).get(req.params.taskId) as { taskId: string; channelId: string } | undefined;
+      if (!current || current.channelId !== dmChannelId) {
+        reply.code(404);
+        return { error: 'DM task not found' };
+      }
+
+      const now = Date.now();
+      db.prepare(
+        `UPDATE tasks
+         SET claimed_by_agent_id = NULL,
+             claimed_by_name = NULL,
+             status = 'todo',
+             updated_at = ?
+         WHERE task_id = ?`,
+      ).run(now, req.params.taskId);
+      syncTaskThreadOwner(db, {
+        taskId: req.params.taskId,
+        agentId: null,
+        lastActiveAt: now,
+      });
+
+      const updated = getAgentTaskRowById(req.params.taskId);
+      if (!updated) {
+        reply.code(404);
+        return { error: 'DM task not found' };
+      }
+      return mapAgentTaskRow(updated, dmChannelId);
+    },
+  );
+
   app.post<{ Params: { id: string } }>('/api/agents/:id/reset', async (req, reply) => {
     if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
     const agent = conversationManager.getAgent(req.params.id);

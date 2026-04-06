@@ -248,6 +248,12 @@ export type ChannelTask = TaskInfo & {
   linkedThreadShortId?: string;
 };
 
+export type AgentTask = ChannelTask & {
+  sourceType: "channel" | "dm";
+  sourceLabel: string;
+  channelName?: string | null;
+};
+
 export type ThreadCollaborationSummary = {
   boundTask?: ChannelTask;
   ownerAgentId?: string | null;
@@ -368,6 +374,25 @@ export async function getChannelTasks(
   return res.json();
 }
 
+export async function getAgentTasks(
+  agentId: string,
+  status?: TaskInfo["status"] | "all",
+  scope?: "all" | "channel" | "dm",
+): Promise<{ tasks: AgentTask[] }> {
+  const params = new URLSearchParams();
+  if (status) params.set("status", status);
+  if (scope) params.set("scope", scope);
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/tasks${suffix}`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Failed to get agent tasks: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function createChannelTask(
   channelId: string,
   title: string,
@@ -484,6 +509,56 @@ export async function updateTaskStatus(
   if (!res.ok) {
     const err = await res.json().catch(() => ({})) as { error?: string };
     throw new Error(err.error ?? `Failed to update task status: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function updateAgentDmTask(
+  agentId: string,
+  taskId: string,
+  title: string,
+  description: string,
+): Promise<AgentTask> {
+  const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/tasks/${encodeURIComponent(taskId)}`, {
+    method: "PATCH",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ title, description }),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Failed to update DM task: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function updateAgentDmTaskStatus(
+  agentId: string,
+  taskId: string,
+  status: TaskInfo["status"],
+): Promise<AgentTask> {
+  const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/tasks/${encodeURIComponent(taskId)}/status`, {
+    method: "PATCH",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ status }),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Failed to update DM task status: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function unclaimAgentDmTask(
+  agentId: string,
+  taskId: string,
+): Promise<AgentTask> {
+  const res = await fetch(`${API_BASE}/agents/${encodeURIComponent(agentId)}/tasks/${encodeURIComponent(taskId)}/unclaim`, {
+    method: "POST",
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Failed to unclaim DM task: ${res.statusText}`);
   }
   return res.json();
 }

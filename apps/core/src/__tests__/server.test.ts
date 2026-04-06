@@ -525,6 +525,236 @@ beforeAll(async () => {
     return thread;
   });
 
+  type AgentTaskListRow = {
+    taskId: string;
+    channelId: string;
+    taskNumber: number;
+    title: string;
+    description: string | null;
+    status: 'todo' | 'in_progress' | 'in_review' | 'done';
+    assigneeId: string | null;
+    assigneeName: string | null;
+    messageId: string | null;
+    createdAt: number;
+    updatedAt: number;
+    channelName: string | null;
+  };
+
+  const mapAgentTaskRow = (row: AgentTaskListRow, dmChannelId: string) => {
+    const linkedThreadShortId = row.messageId ? row.messageId.slice(0, 8) : null;
+    const sourceType = row.channelId === dmChannelId ? 'dm' : 'channel';
+    return {
+      taskId: row.taskId,
+      channelId: row.channelId,
+      taskNumber: row.taskNumber,
+      title: row.title,
+      ...(row.description != null ? { description: row.description } : {}),
+      status: row.status,
+      assigneeId: row.assigneeId,
+      assigneeName: row.assigneeName,
+      messageId: row.messageId,
+      ...(linkedThreadShortId ? { linkedThreadId: linkedThreadShortId, linkedThreadShortId } : {}),
+      createdAt: row.createdAt,
+      updatedAt: row.updatedAt,
+      sourceType,
+      sourceLabel: sourceType === 'dm' ? 'DM' : `#${row.channelName ?? row.channelId}`,
+      ...(row.channelName ? { channelName: row.channelName } : {}),
+    };
+  };
+
+  const getAgentTaskRowById = (taskId: string) => db.prepare(
+    `SELECT t.task_id as taskId,
+            t.channel_id as channelId,
+            t.task_number as taskNumber,
+            t.title as title,
+            t.description as description,
+            t.status as status,
+            t.claimed_by_agent_id as assigneeId,
+            t.claimed_by_name as assigneeName,
+            t.message_id as messageId,
+            t.created_at as createdAt,
+            t.updated_at as updatedAt,
+            c.name as channelName
+     FROM tasks t
+     LEFT JOIN channels c ON c.channel_id = t.channel_id
+     WHERE t.task_id = ?
+     LIMIT 1`,
+  ).get(taskId) as AgentTaskListRow | undefined;
+
+  app.get<{ Params: { id: string }; Querystring: { status?: string; scope?: string } }>(
+    '/api/agents/:id/tasks',
+    async (req, reply) => {
+      const agent = manager.getAgent(req.params.id);
+      if (!agent) {
+        reply.code(404);
+        return { error: 'Not found' };
+      }
+      const status = (req.query.status as 'todo' | 'in_progress' | 'in_review' | 'done' | 'all' | undefined) ?? 'all';
+      const scope = (req.query.scope as 'all' | 'channel' | 'dm' | undefined) ?? 'all';
+      const dmChannelId = `dm:${req.params.id}`;
+      const whereParts = ['claimed_by_agent_id = ?'];
+      const params: Array<string> = [req.params.id];
+      if (status !== 'all') {
+        whereParts.push('status = ?');
+        params.push(status);
+      }
+      if (scope === 'channel') {
+        whereParts.push('channel_id != ?');
+        params.push(dmChannelId);
+      } else if (scope === 'dm') {
+        whereParts.push('channel_id = ?');
+        params.push(dmChannelId);
+      }
+      const rows = db.prepare(
+        `SELECT t.task_id as taskId,
+                t.channel_id as channelId,
+                t.task_number as taskNumber,
+                t.title as title,
+                t.description as description,
+                t.status as status,
+                t.claimed_by_agent_id as assigneeId,
+                t.claimed_by_name as assigneeName,
+                t.message_id as messageId,
+                t.created_at as createdAt,
+                t.updated_at as updatedAt,
+                c.name as channelName
+         FROM tasks t
+         LEFT JOIN channels c ON c.channel_id = t.channel_id
+         WHERE ${whereParts.join(' AND ')}
+         ORDER BY t.updated_at DESC`,
+      ).all(...params) as AgentTaskListRow[];
+      return { tasks: rows.map((row) => mapAgentTaskRow(row, dmChannelId)) };
+    },
+  );
+
+  app.patch<{ Params: { id: string; taskId: string }; Body: { title?: string; description?: string } }>(
+    '/api/agents/:id/tasks/:taskId',
+    async (req, reply) => {
+      const dmChannelId = `dm:${req.params.id}`;
+      const title = normalizeRequiredText(req.body?.title);
+      const description = normalizeRequiredText(req.body?.description);
+      if (!title) { reply.code(400); return { error: 'title is required' }; }
+      if (!description) { reply.code(400); return { error: 'description is required' }; }
+
+      const current = db.prepare(
+        `SELECT t.task_id as taskId,
+                t.channel_id as channelId,
+                t.message_id as messageId,
+                t.created_at as taskCreatedAt,
+                cm.created_at as messageCreatedAt
+         FROM tasks t
+         LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
+         WHERE t.task_id = ?
+         LIMIT 1`,
+      ).get(req.params.taskId) as {
+        taskId: string;
+        channelId: string;
+        messageId: string | null;
+        taskCreatedAt: number;
+        messageCreatedAt: number | null;
+      } | undefined;
+      if (!current || current.channelId !== dmChannelId) {
+        reply.code(404);
+        return { error: 'DM task not found' };
+      }
+
+      db.prepare(
+        `UPDATE tasks
+         SET title = ?, description = ?, updated_at = ?
+         WHERE task_id = ?`,
+      ).run(title, description, Date.now(), req.params.taskId);
+      if (current.messageId && current.taskCreatedAt === current.messageCreatedAt) {
+        db.prepare(`UPDATE channel_messages SET content = ? WHERE message_id = ?`).run(title, current.messageId);
+      }
+
+      const updated = getAgentTaskRowById(req.params.taskId);
+      if (!updated) { reply.code(404); return { error: 'DM task not found' }; }
+      return mapAgentTaskRow(updated, dmChannelId);
+    },
+  );
+
+  app.patch<{ Params: { id: string; taskId: string }; Body: { status?: string } }>(
+    '/api/agents/:id/tasks/:taskId/status',
+    async (req, reply) => {
+      const dmChannelId = `dm:${req.params.id}`;
+      const nextStatus = req.body?.status;
+      if (nextStatus !== 'todo' && nextStatus !== 'in_progress' && nextStatus !== 'in_review' && nextStatus !== 'done') {
+        reply.code(400);
+        return { error: 'Invalid status' };
+      }
+      const current = db.prepare(
+        `SELECT task_id as taskId,
+                channel_id as channelId,
+                status,
+                claimed_by_agent_id as assigneeId
+         FROM tasks
+         WHERE task_id = ?
+         LIMIT 1`,
+      ).get(req.params.taskId) as {
+        taskId: string;
+        channelId: string;
+        status: 'todo' | 'in_progress' | 'in_review' | 'done';
+        assigneeId: string | null;
+      } | undefined;
+      if (!current || current.channelId !== dmChannelId) {
+        reply.code(404);
+        return { error: 'DM task not found' };
+      }
+      if (!isValidTransition(current.status, nextStatus)) {
+        reply.code(409);
+        return { error: 'Invalid status transition' };
+      }
+
+      const now = Date.now();
+      db.prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?`).run(nextStatus, now, req.params.taskId);
+      syncTaskThreadOwner(db, {
+        taskId: req.params.taskId,
+        agentId: nextStatus === 'done' ? null : current.assigneeId,
+        lastActiveAt: now,
+      });
+
+      const updated = getAgentTaskRowById(req.params.taskId);
+      if (!updated) { reply.code(404); return { error: 'DM task not found' }; }
+      return mapAgentTaskRow(updated, dmChannelId);
+    },
+  );
+
+  app.post<{ Params: { id: string; taskId: string } }>(
+    '/api/agents/:id/tasks/:taskId/unclaim',
+    async (req, reply) => {
+      const dmChannelId = `dm:${req.params.id}`;
+      const current = db.prepare(
+        `SELECT task_id as taskId, channel_id as channelId
+         FROM tasks
+         WHERE task_id = ?
+         LIMIT 1`,
+      ).get(req.params.taskId) as { taskId: string; channelId: string } | undefined;
+      if (!current || current.channelId !== dmChannelId) {
+        reply.code(404);
+        return { error: 'DM task not found' };
+      }
+
+      const now = Date.now();
+      db.prepare(
+        `UPDATE tasks
+         SET claimed_by_agent_id = NULL,
+             claimed_by_name = NULL,
+             status = 'todo',
+             updated_at = ?
+         WHERE task_id = ?`,
+      ).run(now, req.params.taskId);
+      syncTaskThreadOwner(db, {
+        taskId: req.params.taskId,
+        agentId: null,
+        lastActiveAt: now,
+      });
+
+      const updated = getAgentTaskRowById(req.params.taskId);
+      if (!updated) { reply.code(404); return { error: 'DM task not found' }; }
+      return mapAgentTaskRow(updated, dmChannelId);
+    },
+  );
+
   app.delete<{ Params: { id: string } }>('/api/conversations/:id', async (req, reply) => {
     const conv = manager.getConversation(req.params.id);
     if (!conv) {
@@ -1112,6 +1342,127 @@ describe('REST API', () => {
 
     const rows = manager.listConversations({ agentId: agent.agentId });
     expect(rows).toHaveLength(1);
+  });
+
+  it('GET /api/agents/:id/tasks 应同时返回 assigned channel task 和 DM task', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'TaskPanelAlice',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/task-panel-alice',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    const channelSeq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('agtask01-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Channel task root', ?, ?, 'task')`,
+    ).run(channelSeq, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
+       VALUES('agent-channel-task', 'default', 301, 'Channel task root', 'Channel task brief', 'in_progress', ?, ?, 'agtask01-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(agent.agentId, agent.name, now, now);
+
+    const dmChannelId = `dm:${agent.agentId}`;
+    const dmSeq = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('dmtask01-0000-0000-0000-000000000000', ?, 'system', 'system', 'system', 'dm:@User', 'DM task root', ?, ?, 'task')`,
+    ).run(dmChannelId, dmSeq, now + 1);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
+       VALUES('agent-dm-task', ?, 401, 'DM task root', 'DM task brief', 'todo', ?, ?, 'dmtask01-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(dmChannelId, agent.agentId, agent.name, now + 1, now + 1);
+
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, created_at, updated_at)
+       VALUES('agent-unassigned-task', 'default', 999, 'Ignore me', 'todo', ?, ?)`,
+    ).run(now, now);
+
+    const result = await fetchJson(`/api/agents/${agent.agentId}/tasks`);
+
+    expect(result.status).toBe(200);
+    expect(result.body.tasks).toHaveLength(2);
+    expect(result.body.tasks).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        taskId: 'agent-channel-task',
+        sourceType: 'channel',
+        sourceLabel: '#default',
+        linkedThreadShortId: 'agtask01',
+      }),
+      expect.objectContaining({
+        taskId: 'agent-dm-task',
+        sourceType: 'dm',
+        sourceLabel: 'DM',
+        linkedThreadShortId: 'dmtask01',
+      }),
+    ]));
+  });
+
+  it('PATCH /api/agents/:id/tasks/:taskId 应更新 DM task，并同步 dedicated root 标题', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'DmEditAlice',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/dm-edit-alice',
+      channelId: 'default',
+    });
+    const dmChannelId = `dm:${agent.agentId}`;
+    const seq = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('dmedit01-0000-0000-0000-000000000000', ?, 'system', 'system', 'system', 'dm:@User', 'Old DM task title', ?, ?, 'task')`,
+    ).run(dmChannelId, seq, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
+       VALUES('agent-dm-edit-task', ?, 11, 'Old DM task title', 'Old DM brief', 'in_progress', ?, ?, 'dmedit01-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(dmChannelId, agent.agentId, agent.name, now, now);
+
+    const result = await fetchJson(`/api/agents/${agent.agentId}/tasks/agent-dm-edit-task`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        title: 'Updated DM task title',
+        description: 'Updated DM task brief',
+      }),
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.title).toBe('Updated DM task title');
+    expect(result.body.description).toBe('Updated DM task brief');
+
+    const messageRow = db.prepare(
+      `SELECT content FROM channel_messages WHERE message_id = 'dmedit01-0000-0000-0000-000000000000'`,
+    ).get() as { content: string };
+    expect(messageRow.content).toBe('Updated DM task title');
+  });
+
+  it('POST /api/agents/:id/tasks/:taskId/unclaim 应释放 DM task claim 并回到 todo', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'DmReleaseAlice',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/dm-release-alice',
+      channelId: 'default',
+    });
+    const dmChannelId = `dm:${agent.agentId}`;
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, created_at, updated_at)
+       VALUES('agent-dm-release-task', ?, 12, 'Release DM task', 'DM brief', 'in_progress', ?, ?, ?, ?)`,
+    ).run(dmChannelId, agent.agentId, agent.name, now, now);
+
+    const result = await fetchJson(`/api/agents/${agent.agentId}/tasks/agent-dm-release-task/unclaim`, {
+      method: 'POST',
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.status).toBe('todo');
+    expect(result.body.assigneeId).toBeNull();
+    expect(result.body.assigneeName).toBeNull();
   });
 
   it('POST /api/channels/:id/messages 在主频道 @agent 时应创建/复用 channel root branch，而不是 thread reply 或私聊主 thread', async () => {

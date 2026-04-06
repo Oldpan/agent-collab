@@ -43,6 +43,8 @@ type ChannelPanelProps = {
   focusMessageId?: string | null;
   focusRequestId?: number | null;
   initialThreadRootId?: string | null;
+  currentTaskAgentId?: string | null;
+  currentTaskAgentName?: string | null;
 };
 
 const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
@@ -1018,6 +1020,8 @@ export function ChannelPanel({
   focusMessageId,
   focusRequestId,
   initialThreadRootId,
+  currentTaskAgentId,
+  currentTaskAgentName,
 }: ChannelPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "members" | "settings">("chat");
   const channelFocusAnchor = initialThreadRootId ?? focusMessageId ?? null;
@@ -1306,6 +1310,8 @@ export function ChannelPanel({
           channelAgents={channelMembers}
           onOpenThread={handleOpenTaskThread}
           taskVersion={taskVersion}
+          currentAgentId={currentTaskAgentId}
+          currentAgentName={currentTaskAgentName}
         />
       ) : activeTab === "members" ? (
         <MembersTab

@@ -21,6 +21,8 @@ type TasksTabProps = {
   channelAgents: Pick<AgentInfo, "agentId" | "name">[];
   onOpenThread?: (threadShortId: string) => void;
   taskVersion?: number;
+  currentAgentId?: string | null;
+  currentAgentName?: string | null;
 };
 
 const TASK_ORDER: TaskInfo["status"][] = ["todo", "in_progress", "in_review", "done"];
@@ -69,11 +71,20 @@ function hasTaskBrief(description?: string | null): boolean {
   return Boolean(description?.trim());
 }
 
-export function TasksTab({ channelId, channelAgents, onOpenThread, taskVersion = 0 }: TasksTabProps) {
+export function TasksTab({
+  channelId,
+  channelAgents,
+  onOpenThread,
+  taskVersion = 0,
+  currentAgentId = null,
+  currentAgentName = null,
+}: TasksTabProps) {
   const { user } = useAuth();
   const [tasks, setTasks] = useState<ChannelTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<TaskInfo["status"] | "all">("all");
+  const [assigneeFilter, setAssigneeFilter] = useState<string>("all");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
   const [creating, setCreating] = useState(false);
@@ -110,6 +121,24 @@ export function TasksTab({ channelId, channelAgents, onOpenThread, taskVersion =
     void loadTasks();
   }, [loadTasks, taskVersion]);
 
+  useEffect(() => {
+    setAssigneeFilter(currentAgentId ?? "all");
+  }, [channelId, currentAgentId]);
+
+  const assigneeOptions = useMemo(() => {
+    const options = [...channelAgents];
+    if (currentAgentId && !options.some((agent) => agent.agentId === currentAgentId)) {
+      options.unshift({ agentId: currentAgentId, name: currentAgentName ?? "Current agent" });
+    }
+    return options;
+  }, [channelAgents, currentAgentId, currentAgentName]);
+
+  const filteredTasks = useMemo(() => tasks.filter((task) => {
+    if (statusFilter !== "all" && task.status !== statusFilter) return false;
+    if (assigneeFilter !== "all" && task.assigneeId !== assigneeFilter) return false;
+    return true;
+  }), [assigneeFilter, statusFilter, tasks]);
+
   const grouped = useMemo(() => {
     const buckets: Record<TaskInfo["status"], ChannelTask[]> = {
       todo: [],
@@ -117,20 +146,20 @@ export function TasksTab({ channelId, channelAgents, onOpenThread, taskVersion =
       in_review: [],
       done: [],
     };
-    for (const task of tasks) buckets[task.status].push(task);
+    for (const task of filteredTasks) buckets[task.status].push(task);
     return buckets;
-  }, [tasks]);
+  }, [filteredTasks]);
 
   const counts = useMemo(() => {
     const done = grouped.done.length;
     return {
-      total: tasks.length,
-      open: tasks.length - done,
+      total: filteredTasks.length,
+      open: filteredTasks.length - done,
       inProgress: grouped.in_progress.length,
       inReview: grouped.in_review.length,
       done,
     };
-  }, [grouped, tasks.length]);
+  }, [filteredTasks.length, grouped]);
 
   const handleCreate = useCallback(async () => {
     const trimmedTitle = title.trim();
@@ -495,6 +524,41 @@ export function TasksTab({ channelId, channelAgents, onOpenThread, taskVersion =
           </span>
           <span className="text-zinc-500">{counts.total} total</span>
         </div>
+        <div className="mb-3 grid gap-2 md:grid-cols-2">
+          <label className="space-y-1">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
+              Assignee
+            </span>
+            <select
+              value={assigneeFilter}
+              onChange={(event) => setAssigneeFilter(event.target.value)}
+              className="h-9 w-full rounded-sm border-2 border-zinc-900 bg-white px-3 text-sm text-zinc-900"
+            >
+              <option value="all">All assignees</option>
+              {assigneeOptions.map((agent) => (
+                <option key={agent.agentId} value={agent.agentId}>
+                  @{agent.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
+              Status
+            </span>
+            <select
+              value={statusFilter}
+              onChange={(event) => setStatusFilter(event.target.value as TaskInfo["status"] | "all")}
+              className="h-9 w-full rounded-sm border-2 border-zinc-900 bg-white px-3 text-sm text-zinc-900"
+            >
+              <option value="all">All statuses</option>
+              <option value="todo">Todo</option>
+              <option value="in_progress">In progress</option>
+              <option value="in_review">In review</option>
+              <option value="done">Done</option>
+            </select>
+          </label>
+        </div>
         <div className="flex gap-2">
           <input
             value={title}
@@ -544,6 +608,10 @@ export function TasksTab({ channelId, channelAgents, onOpenThread, taskVersion =
         ) : tasks.length === 0 ? (
           <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fff8d8] px-4 py-6 text-center text-sm text-zinc-500">
             No task-messages yet. Create the first task-message for this channel.
+          </div>
+        ) : filteredTasks.length === 0 ? (
+          <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fff8d8] px-4 py-6 text-center text-sm text-zinc-500">
+            No tasks match the current filters.
           </div>
         ) : (
           <div className="grid gap-4 lg:grid-cols-2">
