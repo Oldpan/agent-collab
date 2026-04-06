@@ -9,6 +9,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
     "test": "vitest run",
+    "test:scenarios": "vitest run src/__tests__/collaborationScenarios.test.ts",
     "test:watch": "vitest"
   },
   "engines": {

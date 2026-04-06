@@ -20,6 +20,7 @@
     "dev:restart": "node scripts/restart-dev.mjs all",
     "build": "pnpm -r run build",
     "test": "pnpm -r run test",
+    "test:collab:smoke": "node scripts/e2e-collab-smoke.mjs",
     "lint": "pnpm -r run lint"
   }
 }
