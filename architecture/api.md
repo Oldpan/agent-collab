@@ -75,7 +75,9 @@ Channel 当前已经在 UI 中作为协作空间使用，包含 `Chat / Tasks / 
 - `claim-message` 只允许提升 channel 主时间线里的根消息，不支持 thread reply
 - `POST /api/channels/:id/tasks/:num/claim` 若带 `agentId`，会把 task assignee 设为该 agent，并自动在 task thread 中追加 kickoff prompt
 - agent 指派要求 task 已有 brief 且有 dedicated task thread
-- 除 `in_review -> done` 外，其它状态更新都要求当前用户就是 assignee
+- assignee 负责把任务推进到 `in_review`
+- `in_review -> done` 与 `in_review -> in_progress` 允许任意 channel 用户执行 review 决策
+- 其余状态更新都要求当前用户就是 assignee
 - `clear-chat` 不再保留 tasks，避免留下失去 task message / thread 的悬空任务
 
 ## Nodes（兼容，仅返回在线节点）

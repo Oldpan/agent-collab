@@ -2,7 +2,7 @@ import type { TaskInfo } from '@agent-collab/protocol';
 
 const VALID_TRANSITIONS: Record<TaskInfo['status'], TaskInfo['status'][]> = {
   todo: ['in_progress'],
-  in_progress: ['in_review', 'done'],
+  in_progress: ['in_review'],
   in_review: ['done', 'in_progress'],
   done: [],
 };

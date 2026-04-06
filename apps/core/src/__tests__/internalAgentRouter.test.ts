@@ -1400,7 +1400,7 @@ describe('internalAgentRouter', () => {
     });
   });
 
-  it('隐式 task-root thread 的 claim / done 也应同步 owner', async () => {
+  it('隐式 task-root thread 的 claim / in_review 应同步 owner，agent 不应直接 done', async () => {
     const now = Date.now();
     const agent = manager.createAgent({
       name: 'ImplicitOwnerBob',
@@ -1457,13 +1457,14 @@ describe('internalAgentRouter', () => {
         status: 'done',
       }),
     });
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(403);
+    expect(await res.json()).toEqual({ error: 'Only a channel user can mark a task done' });
 
     participant = db.prepare(
       `SELECT role FROM target_participants
        WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'f00d0000'`,
     ).get(agent.agentId) as { role: string } | undefined;
-    expect(participant?.role).toBe('participant');
+    expect(participant?.role).toBe('owner');
   });
 });
 

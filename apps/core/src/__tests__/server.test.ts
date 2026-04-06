@@ -811,8 +811,9 @@ beforeAll(async () => {
       if (!isValidTransition(current.currentStatus, nextStatus)) {
         reply.code(400); return { error: `Invalid transition: ${current.currentStatus} → ${nextStatus}` };
       }
-      const isReviewToDone = current.currentStatus === 'in_review' && nextStatus === 'done';
-      if (!isReviewToDone && !isTaskClaimedByUserName(current, getTaskUserName(req))) {
+      const isReviewDecision = current.currentStatus === 'in_review'
+        && (nextStatus === 'done' || nextStatus === 'in_progress');
+      if (!isReviewDecision && !isTaskClaimedByUserName(current, getTaskUserName(req))) {
         reply.code(403);
         return { error: 'You must be the task assignee to update its status' };
       }
@@ -1913,7 +1914,7 @@ describe('REST API', () => {
     expect(released.body.assigneeName).toBeNull();
   });
 
-  it('PATCH /api/channels/:id/tasks/:num/status 应限制非 assignee 推进状态，但允许 review 完成', async () => {
+  it('PATCH /api/channels/:id/tasks/:num/status 应限制非 assignee 推进状态，但允许 review 决策', async () => {
     const now = Date.now();
     db.prepare(
       `INSERT INTO tasks(task_id, channel_id, task_number, title, status, claimed_by_name, created_at, updated_at)
@@ -1930,6 +1931,33 @@ describe('REST API', () => {
     });
     expect(forbidden.status).toBe(403);
     expect(forbidden.body.error).toContain('task assignee');
+
+    const invalidDone = await fetchJson('/api/channels/default/tasks/94/status', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': 'Alice',
+      },
+      body: JSON.stringify({ status: 'done' }),
+    });
+    expect(invalidDone.status).toBe(400);
+    expect(invalidDone.body.error).toBe('Invalid transition: in_progress → done');
+
+    db.prepare(
+      `UPDATE tasks SET status = 'in_review', updated_at = ? WHERE task_id = 'task-user-owned'`,
+    ).run(Date.now());
+
+    const sendBack = await fetchJson('/api/channels/default/tasks/94/status', {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': 'Bob',
+      },
+      body: JSON.stringify({ status: 'in_progress' }),
+    });
+    expect(sendBack.status).toBe(200);
+    expect(sendBack.body.status).toBe('in_progress');
+    expect(sendBack.body.assigneeName).toBe('Alice');
 
     db.prepare(
       `UPDATE tasks SET status = 'in_review', updated_at = ? WHERE task_id = 'task-user-owned'`,

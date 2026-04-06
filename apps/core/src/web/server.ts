@@ -2031,8 +2031,9 @@ export async function startServer(params: {
         reply.code(400);
         return { error: `Invalid transition: ${current.currentStatus} → ${nextStatus}` };
       }
-      const isReviewToDone = current.currentStatus === 'in_review' && nextStatus === 'done';
-      if (!isReviewToDone && !isTaskClaimedByUser(current, chanUser)) {
+      const isReviewDecision = current.currentStatus === 'in_review'
+        && (nextStatus === 'done' || nextStatus === 'in_progress');
+      if (!isReviewDecision && !isTaskClaimedByUser(current, chanUser)) {
         reply.code(403);
         return { error: 'You must be the task assignee to update its status' };
       }

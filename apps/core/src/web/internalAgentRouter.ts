@@ -1263,14 +1263,18 @@ export function registerInternalAgentRoutes(
       return { error: `Invalid transition: ${row.currentStatus} → ${nextStatus}` };
     }
 
-    // in_review→done is allowed by anyone; other transitions require the assignee
-    const isReviewToDone = row.currentStatus === 'in_review' && nextStatus === 'done';
-    if (!isReviewToDone && row.claimedByAgentId !== agentId) {
+    if (nextStatus === 'done') {
+      reply.code(403);
+      return { error: 'Only a channel user can mark a task done' };
+    }
+
+    if (row.claimedByAgentId !== agentId) {
       reply.code(403);
       return { error: 'You must be the task assignee to update its status' };
     }
 
     const now = Date.now();
+    const nextOwnerAgentId = row.claimedByAgentId ?? null;
     db.transaction(() => {
       db.prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?`).run(
         nextStatus,
@@ -1280,7 +1284,7 @@ export function registerInternalAgentRoutes(
 
       syncTaskThreadOwner(db, {
         taskId: row.taskId,
-        agentId: nextStatus === 'done' ? null : (row.claimedByAgentId ?? null),
+        agentId: nextOwnerAgentId,
         lastActiveAt: now,
       });
     })();

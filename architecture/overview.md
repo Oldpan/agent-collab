@@ -193,11 +193,12 @@ agent 详情中的基础信息集中在 `Profile`：
 - channel chat 支持消息、thread reply、`@mention`
 - `Tasks` tab 已支持：
   - 任务列表
-  - 按状态分组
+  - 按状态分组的双列看板
   - 新建任务（要求填写 task brief）
   - 编辑 task title / brief
   - claim self / assign-to-agent / release / reassign
-  - 推进状态
+  - assignee 推进到 `in_review`
+  - 用户 review 决策：`Mark done` / `Request changes`
   - 删除任务
 - chat 中普通 channel 根消息可直接 `Promote to task`，并先补全 brief
 - 被提升或新建的 task 都会绑定到自己的 task thread

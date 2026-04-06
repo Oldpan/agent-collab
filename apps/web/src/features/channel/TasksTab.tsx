@@ -24,6 +24,10 @@ type TasksTabProps = {
 };
 
 const TASK_ORDER: TaskInfo["status"][] = ["todo", "in_progress", "in_review", "done"];
+const TASK_BOARD_COLUMNS: Array<TaskInfo["status"][]> = [
+  ["todo", "in_progress"],
+  ["in_review", "done"],
+];
 
 function nextStatus(status: TaskInfo["status"]): TaskInfo["status"] {
   const idx = TASK_ORDER.indexOf(status);
@@ -77,12 +81,17 @@ export function TasksTab({ channelId, channelAgents, onOpenThread, taskVersion =
   const [unclaimingTaskNumber, setUnclaimingTaskNumber] = useState<number | null>(null);
   const [updatingTaskNumber, setUpdatingTaskNumber] = useState<number | null>(null);
   const [deletingTaskNumber, setDeletingTaskNumber] = useState<number | null>(null);
-  const [showDone, setShowDone] = useState(false);
   const [editingTask, setEditingTask] = useState<ChannelTask | null>(null);
   const [editing, setEditing] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [assigningTask, setAssigningTask] = useState<ChannelTask | null>(null);
   const [assignError, setAssignError] = useState<string | null>(null);
+  const [collapsedSections, setCollapsedSections] = useState<Record<TaskInfo["status"], boolean>>({
+    todo: false,
+    in_progress: false,
+    in_review: false,
+    done: true,
+  });
 
   const loadTasks = useCallback(async () => {
     setLoading(true);
@@ -156,12 +165,12 @@ export function TasksTab({ channelId, channelAgents, onOpenThread, taskVersion =
     }
   }, [channelId, editing, editingTask]);
 
-  const handleAdvance = useCallback(async (task: TaskInfo) => {
-    if (task.status === "done" || updatingTaskNumber === task.taskNumber) return;
+  const handleStatusChange = useCallback(async (task: ChannelTask, nextStatus: TaskInfo["status"]) => {
+    if (updatingTaskNumber === task.taskNumber) return;
     setUpdatingTaskNumber(task.taskNumber);
     setError(null);
     try {
-      const updated = await updateTaskStatus(channelId, task.taskNumber, nextStatus(task.status));
+      const updated = await updateTaskStatus(channelId, task.taskNumber, nextStatus);
       setTasks((prev) => prev.map((item) => (item.taskId === updated.taskId ? updated : item)));
     } catch (err) {
       setError(String((err as Error)?.message ?? err));
@@ -169,6 +178,21 @@ export function TasksTab({ channelId, channelAgents, onOpenThread, taskVersion =
       setUpdatingTaskNumber(null);
     }
   }, [channelId, updatingTaskNumber]);
+
+  const handleAdvance = useCallback(async (task: ChannelTask) => {
+    if (task.status !== "todo" && task.status !== "in_progress") return;
+    await handleStatusChange(task, nextStatus(task.status));
+  }, [handleStatusChange]);
+
+  const handleMarkDone = useCallback(async (task: ChannelTask) => {
+    if (task.status !== "in_review") return;
+    await handleStatusChange(task, "done");
+  }, [handleStatusChange]);
+
+  const handleRequestChanges = useCallback(async (task: ChannelTask) => {
+    if (task.status !== "in_review") return;
+    await handleStatusChange(task, "in_progress");
+  }, [handleStatusChange]);
 
   const handleClaimSelf = useCallback(async (task: ChannelTask) => {
     if (claimingTaskNumber === task.taskNumber) return;
@@ -228,8 +252,233 @@ export function TasksTab({ channelId, channelAgents, onOpenThread, taskVersion =
     }
   }, [channelId, deletingTaskNumber]);
 
+  const toggleSection = useCallback((status: TaskInfo["status"]) => {
+    setCollapsedSections((prev) => ({
+      ...prev,
+      [status]: !prev[status],
+    }));
+  }, []);
+
+  const renderTaskCard = (task: ChannelTask) => {
+    const isAgentAssignee = Boolean(task.assigneeId);
+    const isCurrentUserAssignee = !task.assigneeId && sameUserName(task.assigneeName, user?.username);
+    const canClaimSelf = !task.assigneeName && task.status !== "done";
+    const canAssignAgent = (
+      channelAgents.length > 0
+      && Boolean(task.linkedThreadShortId)
+      && hasTaskBrief(task.description)
+      && task.status !== "done"
+      && (!task.assigneeName || isCurrentUserAssignee || isAgentAssignee)
+    );
+    const canUnclaim = task.status !== "done" && (isCurrentUserAssignee || isAgentAssignee);
+    const canAdvance = isCurrentUserAssignee && (task.status === "todo" || task.status === "in_progress");
+    const canReview = task.status === "in_review";
+    const isUpdating = updatingTaskNumber === task.taskNumber;
+    const isClaiming = claimingTaskNumber === task.taskNumber;
+    const isUnclaiming = unclaimingTaskNumber === task.taskNumber;
+    const isDeleting = deletingTaskNumber === task.taskNumber;
+    const statusChip = canAdvance ? (
+      <button
+        type="button"
+        onClick={() => void handleAdvance(task)}
+        disabled={isUpdating}
+        className={cn(
+          "rounded-full border border-zinc-900 px-2 py-0.5 text-[11px] font-medium transition-colors",
+          statusClassName(task.status),
+          "hover:brightness-95",
+          isUpdating && "opacity-60",
+        )}
+      >
+        {isUpdating ? "Updating..." : formatStatus(task.status)}
+      </button>
+    ) : (
+      <span
+        className={cn(
+          "rounded-full border border-zinc-900 px-2 py-0.5 text-[11px] font-medium",
+          statusClassName(task.status),
+        )}
+      >
+        {formatStatus(task.status)}
+      </span>
+    );
+
+    return (
+      <div
+        key={task.taskId}
+        className="rounded-sm border-2 border-zinc-900 bg-white px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]"
+      >
+        <div className="flex flex-col gap-3">
+          <div className="flex items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              <div className="text-sm font-medium text-zinc-900">
+                #{task.taskNumber} {task.title}
+              </div>
+              {hasTaskBrief(task.description) ? (
+                <div className="mt-1 whitespace-pre-wrap text-xs text-zinc-500">
+                  {task.description}
+                </div>
+              ) : (
+                <div className="mt-1 rounded-sm border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
+                  Task brief missing. Add the goal and done criteria before starting.
+                </div>
+              )}
+              {task.assigneeName && (
+                <div className="mt-2 inline-flex rounded-full border border-zinc-300 bg-[#fff8d8] px-2 py-0.5 text-[11px] text-zinc-600">
+                  @{task.assigneeName}{task.assigneeId ? " · agent" : ""}
+                </div>
+              )}
+              <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
+                {task.linkedThreadShortId ? (
+                  <button
+                    type="button"
+                    onClick={() => onOpenThread?.(task.linkedThreadShortId!)}
+                    className="rounded-full border border-zinc-400 bg-[#d8efff] px-2 py-0.5 text-blue-700 hover:bg-[#b8e0ff] transition-colors"
+                  >
+                    Task thread {task.linkedThreadShortId}
+                  </button>
+                ) : (
+                  <span className="rounded-full border border-dashed border-zinc-300 bg-[#fffdf4] px-2 py-0.5">
+                    No task thread
+                  </span>
+                )}
+                {!task.assigneeName && (
+                  <span className="rounded-full border border-dashed border-zinc-300 bg-[#fffdf4] px-2 py-0.5">
+                    Unassigned
+                  </span>
+                )}
+                {canReview && (
+                  <span className="rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-amber-800">
+                    Waiting for user review
+                  </span>
+                )}
+              </div>
+            </div>
+            <div className="shrink-0">
+              {statusChip}
+            </div>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 border-t border-zinc-200/80 pt-2">
+            {canReview ? (
+              <>
+                <Button
+                  size="sm"
+                  disabled={isUpdating}
+                  onClick={() => void handleMarkDone(task)}
+                  className="h-8 rounded-sm border-2 border-zinc-900 bg-[#d8f8c8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#b8f0a8]"
+                >
+                  {isUpdating ? "Updating..." : "Mark done"}
+                </Button>
+                <Button
+                  size="sm"
+                  disabled={isUpdating}
+                  onClick={() => void handleRequestChanges(task)}
+                  className="h-8 rounded-sm border-2 border-zinc-900 bg-[#fff0d0] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#ffe4b0]"
+                >
+                  {isUpdating ? "Updating..." : "Request changes"}
+                </Button>
+              </>
+            ) : null}
+            {canAssignAgent ? (
+              <Button
+                size="sm"
+                disabled={isClaiming}
+                onClick={() => {
+                  setAssigningTask(task);
+                  setAssignError(null);
+                }}
+                className="h-8 rounded-sm border-2 border-zinc-900 bg-[#d8f8c8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#b8f0a8]"
+              >
+                {isClaiming
+                  ? "Assigning..."
+                  : task.assigneeId
+                    ? "Reassign"
+                    : "Claim"}
+              </Button>
+            ) : null}
+            {canClaimSelf ? (
+              <Button
+                size="sm"
+                disabled={isClaiming}
+                onClick={() => void handleClaimSelf(task)}
+                className="h-8 rounded-sm border-2 border-zinc-900 bg-[#fff9d8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff1a9]"
+              >
+                {isClaiming ? "Claiming..." : "Claim self"}
+              </Button>
+            ) : canUnclaim ? (
+              <Button
+                size="sm"
+                disabled={isUnclaiming}
+                onClick={() => void handleUnclaim(task)}
+                className="h-8 rounded-sm border-2 border-zinc-900 bg-[#fff0d0] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#ffe4b0]"
+              >
+                {isUnclaiming
+                  ? (task.assigneeId ? "Releasing..." : "Unclaiming...")
+                  : (task.assigneeId ? "Release" : "Unclaim")}
+              </Button>
+            ) : null}
+            <Button
+              size="sm"
+              onClick={() => {
+                setEditingTask(task);
+                setEditError(null);
+              }}
+              className="h-8 rounded-sm border-2 border-zinc-900 bg-[#d8efff] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#b8e0ff]"
+            >
+              Edit
+            </Button>
+            <Button
+              size="sm"
+              disabled={isDeleting}
+              onClick={() => void handleDelete(task)}
+              className="h-8 rounded-sm border-2 border-zinc-900 bg-[#ffe1e1] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#ffd2d2]"
+            >
+              {isDeleting ? "Deleting..." : "Delete"}
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderSection = (status: TaskInfo["status"]) => {
+    const items = grouped[status];
+    const isCollapsed = collapsedSections[status];
+
+    return (
+      <section
+        key={status}
+        className="rounded-md border-2 border-zinc-900 bg-[#fffdf4] p-3 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]"
+      >
+        <button
+          type="button"
+          onClick={() => toggleSection(status)}
+          className="mb-2 flex w-full items-center justify-between rounded-sm border border-zinc-200 bg-white/70 px-2 py-1.5 text-left transition-colors hover:bg-white"
+          aria-expanded={!isCollapsed}
+        >
+          <span className="text-sm font-semibold text-zinc-900">
+            {formatStatus(status)} ({items.length})
+          </span>
+          <span className="text-[11px] uppercase tracking-wide text-zinc-500">
+            {isCollapsed ? "Show" : "Hide"}
+          </span>
+        </button>
+        {!isCollapsed && (
+          items.length === 0 ? (
+            <div className="rounded border border-dashed border-zinc-300 bg-[#fff8d8] px-3 py-2 text-xs text-zinc-400">
+              No tasks
+            </div>
+          ) : (
+            <div className="space-y-2">
+              {items.map(renderTaskCard)}
+            </div>
+          )
+        )}
+      </section>
+    );
+  };
+
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <div className="border-b-2 border-black bg-[#fff6b8] px-4 py-3">
         <div className="mb-3 flex flex-wrap items-center gap-2 text-[11px] text-zinc-700">
           <span className="rounded-full border border-zinc-900 bg-white px-2 py-0.5 font-semibold">
@@ -287,7 +536,7 @@ export function TasksTab({ channelId, channelAgents, onOpenThread, taskVersion =
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-4">
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
         {loading ? (
           <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fff8d8] px-4 py-6 text-center text-sm text-zinc-500">
             Loading tasks...
@@ -297,198 +546,12 @@ export function TasksTab({ channelId, channelAgents, onOpenThread, taskVersion =
             No task-messages yet. Create the first task-message for this channel.
           </div>
         ) : (
-          <div className="space-y-4">
-            {TASK_ORDER.map((status) => {
-              const items = grouped[status];
-              if (status === "done" && items.length === 0) return null;
-              if (status === "done" && !showDone) {
-                return (
-                  <div key={status} className="rounded-md border-2 border-zinc-900 bg-[#fffdf4] p-3 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]">
-                    <button
-                      type="button"
-                      onClick={() => setShowDone(true)}
-                      className="flex w-full items-center justify-between text-left text-sm font-semibold text-zinc-700"
-                    >
-                      <span>done ({items.length})</span>
-                      <span className="text-xs font-normal text-zinc-500">Show</span>
-                    </button>
-                  </div>
-                );
-              }
-              return (
-                <section
-                  key={status}
-                  className="rounded-md border-2 border-zinc-900 bg-[#fffdf4] p-3 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]"
-                >
-                  <div className="mb-2 flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-zinc-900">
-                      {formatStatus(status)} ({items.length})
-                    </h3>
-                    {status === "done" && (
-                      <button
-                        type="button"
-                        onClick={() => setShowDone(false)}
-                        className="text-xs text-zinc-500 hover:text-zinc-700"
-                      >
-                        Hide
-                      </button>
-                    )}
-                  </div>
-                  {items.length === 0 ? (
-                    <div className="rounded border border-dashed border-zinc-300 bg-[#fff8d8] px-3 py-2 text-xs text-zinc-400">
-                      No tasks
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {items.map((task) => {
-                        const isAgentAssignee = Boolean(task.assigneeId);
-                        const isCurrentUserAssignee = !task.assigneeId && sameUserName(task.assigneeName, user?.username);
-                        const canClaimSelf = !task.assigneeName && task.status !== "done";
-                        const canAssignAgent = (
-                          channelAgents.length > 0
-                          && Boolean(task.linkedThreadShortId)
-                          && hasTaskBrief(task.description)
-                          && task.status !== "done"
-                          && (!task.assigneeName || isCurrentUserAssignee || isAgentAssignee)
-                        );
-                        const canUnclaim = task.status !== "done" && (isCurrentUserAssignee || isAgentAssignee);
-                        const canAdvance = isCurrentUserAssignee && task.status !== "done";
-                        return (
-                        <div
-                          key={task.taskId}
-                          className="rounded-sm border-2 border-zinc-900 bg-white px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]"
-                        >
-                          <div className="flex items-start gap-2">
-                            <div className="min-w-0 flex-1">
-                              <div className="text-sm font-medium text-zinc-900">
-                                #{task.taskNumber} {task.title}
-                              </div>
-                              {hasTaskBrief(task.description) ? (
-                                <div className="mt-1 whitespace-pre-wrap text-xs text-zinc-500">
-                                  {task.description}
-                                </div>
-                              ) : (
-                                <div className="mt-1 rounded-sm border border-amber-300 bg-amber-50 px-2 py-1 text-[11px] text-amber-800">
-                                  Task brief missing. Add the goal and done criteria before starting.
-                                </div>
-                              )}
-                              {task.assigneeName && (
-                                <div className="mt-2 inline-flex rounded-full border border-zinc-300 bg-[#fff8d8] px-2 py-0.5 text-[11px] text-zinc-600">
-                                  @{task.assigneeName}{task.assigneeId ? " · agent" : ""}
-                                </div>
-                              )}
-                              <div className="mt-2 flex flex-wrap items-center gap-2 text-[11px] text-zinc-500">
-                                {task.linkedThreadShortId ? (
-                                  <button
-                                    type="button"
-                                    onClick={() => onOpenThread?.(task.linkedThreadShortId!)}
-                                    className="rounded-full border border-zinc-400 bg-[#d8efff] px-2 py-0.5 text-blue-700 hover:bg-[#b8e0ff] transition-colors"
-                                  >
-                                    Task thread {task.linkedThreadShortId}
-                                  </button>
-                                ) : (
-                                  <span className="rounded-full border border-dashed border-zinc-300 bg-[#fffdf4] px-2 py-0.5">
-                                    No task thread
-                                  </span>
-                                )}
-                                {!task.assigneeName && (
-                                  <span className="rounded-full border border-dashed border-zinc-300 bg-[#fffdf4] px-2 py-0.5">
-                                    Unassigned
-                                  </span>
-                                )}
-                              </div>
-                            </div>
-                            <div className="flex shrink-0 flex-col items-end gap-2">
-                              {canAdvance ? (
-                                <button
-                                  type="button"
-                                  onClick={() => void handleAdvance(task)}
-                                  disabled={updatingTaskNumber === task.taskNumber}
-                                  className={cn(
-                                    "rounded-full border border-zinc-900 px-2 py-0.5 text-[11px] font-medium transition-colors",
-                                    statusClassName(task.status),
-                                    "hover:brightness-95",
-                                    updatingTaskNumber === task.taskNumber && "opacity-60",
-                                  )}
-                                >
-                                  {updatingTaskNumber === task.taskNumber ? "Updating..." : formatStatus(task.status)}
-                                </button>
-                              ) : (
-                                <span
-                                  className={cn(
-                                    "rounded-full border border-zinc-900 px-2 py-0.5 text-[11px] font-medium",
-                                    statusClassName(task.status),
-                                  )}
-                                >
-                                  {formatStatus(task.status)}
-                                </span>
-                              )}
-                              {canAssignAgent ? (
-                                <Button
-                                  size="sm"
-                                  disabled={claimingTaskNumber === task.taskNumber}
-                                  onClick={() => {
-                                    setAssigningTask(task);
-                                    setAssignError(null);
-                                  }}
-                                  className="h-8 rounded-sm border-2 border-zinc-900 bg-[#d8f8c8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#b8f0a8]"
-                                >
-                                  {claimingTaskNumber === task.taskNumber
-                                    ? "Assigning..."
-                                    : task.assigneeId
-                                      ? "Reassign"
-                                      : "Claim"}
-                                </Button>
-                              ) : null}
-                              {canClaimSelf ? (
-                                <Button
-                                  size="sm"
-                                  disabled={claimingTaskNumber === task.taskNumber}
-                                  onClick={() => void handleClaimSelf(task)}
-                                  className="h-8 rounded-sm border-2 border-zinc-900 bg-[#fff9d8] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#fff1a9]"
-                                >
-                                  {claimingTaskNumber === task.taskNumber ? "Claiming..." : "Claim self"}
-                                </Button>
-                              ) : canUnclaim ? (
-                                <Button
-                                  size="sm"
-                                  disabled={unclaimingTaskNumber === task.taskNumber}
-                                  onClick={() => void handleUnclaim(task)}
-                                  className="h-8 rounded-sm border-2 border-zinc-900 bg-[#fff0d0] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#ffe4b0]"
-                                >
-                                  {unclaimingTaskNumber === task.taskNumber
-                                    ? (task.assigneeId ? "Releasing..." : "Unclaiming...")
-                                    : (task.assigneeId ? "Release" : "Unclaim")}
-                                </Button>
-                              ) : null}
-                              <Button
-                                size="sm"
-                                onClick={() => {
-                                  setEditingTask(task);
-                                  setEditError(null);
-                                }}
-                                className="h-8 rounded-sm border-2 border-zinc-900 bg-[#d8efff] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#b8e0ff]"
-                              >
-                                Edit
-                              </Button>
-                              <Button
-                                size="sm"
-                                disabled={deletingTaskNumber === task.taskNumber}
-                                onClick={() => void handleDelete(task)}
-                                className="h-8 rounded-sm border-2 border-zinc-900 bg-[#ffe1e1] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#ffd2d2]"
-                              >
-                                {deletingTaskNumber === task.taskNumber ? "Deleting..." : "Delete"}
-                              </Button>
-                            </div>
-                          </div>
-                        </div>
-                        );
-                      })}
-                    </div>
-                  )}
-                </section>
-              );
-            })}
+          <div className="grid gap-4 lg:grid-cols-2">
+            {TASK_BOARD_COLUMNS.map((column, index) => (
+              <div key={index} className="flex flex-col gap-4">
+                {column.map(renderSection)}
+              </div>
+            ))}
           </div>
         )}
       </div>
