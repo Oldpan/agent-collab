@@ -347,9 +347,9 @@ server.tool(
 
 server.tool(
   'create_tasks',
-  "Create one or more new task-messages on a channel's board. Each task requires a title and a brief that states the goal and done criteria. Each created task gets a task root message and a default thread.",
+  "Create one or more new task-messages in a top-level channel or DM. Each task requires a title and a brief that states the goal and done criteria. Each created task gets a task root message and a default thread. Use this only for genuinely new work or subtasks. Do not use it to convert an existing message — use claim_tasks with message_ids instead.",
   {
-    channel: z.string().describe("The channel to create tasks in — e.g. '#general'"),
+    channel: z.string().describe("The channel or DM to create tasks in — e.g. '#general' or 'dm:@User'"),
     tasks: z
       .array(z.object({
         title: z.string().describe('Task title'),
@@ -383,18 +383,18 @@ server.tool(
 
 server.tool(
   'claim_message',
-  `Promote one or more existing top-level messages into task-messages and claim them. Use the 8-character msg= ID from received messages or read_history. Each promoted message becomes the task root and default thread — reply in its thread with send_message(target="${'#channel:msgid'}"). If a message is already a task-message, the claim fails. The task brief is required; use separate calls when promoted messages need different briefs.`,
+  `Compatibility alias for claim_tasks(message_ids=[...]). Promote one or more existing top-level channel or DM messages into task-messages and claim them. Use the 8-character msg= ID from received messages or read_history. Each promoted message becomes the task root and default thread — reply in its thread with send_message(target="${'#channel:msgid'}"). If a message is already a task-message, the claim fails. Thread messages cannot be converted. The task brief is required; use separate calls when promoted messages need different briefs.`,
   {
-    channel: z.string().describe("The channel — e.g. '#engineering'"),
+    channel: z.string().describe("The channel or DM — e.g. '#engineering' or 'dm:@User'"),
     message_ids: z.array(z.string()).describe("8-char message IDs (the msg= value from check_messages or read_history, e.g. ['a1b2c3d4'])"),
     title: z.string().optional().describe('Optional task title override. If omitted, uses the message content (truncated to 120 chars).'),
     description: z.string().trim().min(1, 'description is required').describe('Required task brief / goal / done criteria. Use one call per message when briefs differ.'),
   },
   async ({ channel, message_ids, title, description }) => {
     try {
-      const { ok, data } = await apiFetch('/tasks/claim-message', {
+      const { ok, data } = await apiFetch('/tasks/claim', {
         method: 'POST',
-        body: { channel, message_ids, title, description },
+        body: { channel, message_ids, title, description, conversationId },
       });
       if (!ok) return toText(`Error: ${errText(data, 'claim-message failed')}`);
 
@@ -462,16 +462,26 @@ server.tool(
 
 server.tool(
   'claim_tasks',
-  'Claim one or more tasks by their number. Returns which claims succeeded and which failed (e.g. already claimed by someone else).',
+  `Claim tasks so you are assigned to work on them. Two modes:
+1. By task number: claim existing tasks shown in list_tasks. Use task_numbers=[1, 3].
+2. By message ID: convert a regular top-level channel or DM message into a task and claim it. Use message_ids=["a1b2c3d4"] with description="goal and done criteria".
+
+Thread messages cannot be claimed or converted into tasks. If a task is in "todo" status, claiming auto-advances it to "in_progress". If another agent already claimed it, the claim fails — do not work on that task, move on. Always claim before starting any work to prevent duplicate effort.`,
   {
-    channel: z.string().describe("The channel whose tasks to claim — e.g. '#general'"),
-    task_numbers: z.array(z.number()).describe('Task numbers to claim (e.g. [1, 3, 5])'),
+    channel: z.string().describe("The channel or DM whose tasks to claim — e.g. '#general' or 'dm:@User'"),
+    task_numbers: z.array(z.number()).optional().describe('Task numbers to claim (e.g. [1, 3, 5])'),
+    message_ids: z.array(z.string()).optional().describe("Message IDs or short ID prefixes (the 8-char msg= value, e.g. ['a1b2c3d4']). Converts a regular top-level message to a task and claims it. Thread messages are not allowed."),
+    title: z.string().optional().describe('Optional task title override when claiming regular top-level messages by message ID.'),
+    description: z.string().optional().describe('Required task brief / goal / done criteria when claiming regular top-level messages by message ID.'),
   },
-  async ({ channel, task_numbers }) => {
+  async ({ channel, task_numbers, message_ids, title, description }) => {
     try {
+      if ((!task_numbers || task_numbers.length === 0) && (!message_ids || message_ids.length === 0)) {
+        return toText('Error: provide at least one of task_numbers or message_ids');
+      }
       const { ok, data } = await apiFetch('/tasks/claim', {
         method: 'POST',
-        body: { channel, task_numbers, conversationId },
+        body: { channel, task_numbers, message_ids, title, description, conversationId },
       });
       if (!ok) return toText(`Error: ${errText(data, 'claim tasks failed')}`);
 
@@ -509,7 +519,7 @@ server.tool(
 
 server.tool(
   'unclaim_task',
-  'Release your claim on a task, setting it back to open.',
+  'Release your claim on a task so someone else can pick it up. Only use this if you can no longer work on the task — not as a way to mark it done.',
   {
     channel: z.string().describe("The channel — e.g. '#general'"),
     task_number: z.number().describe('The task number to unclaim (e.g. 3)'),
@@ -532,7 +542,7 @@ server.tool(
 
 server.tool(
   'update_task_status',
-  'Update a task\'s progress status. Valid transitions: todo→in_progress, in_progress→in_review, in_progress→done, in_review→done, in_review→in_progress. You must be the assignee (except in_review→done which anyone can do).',
+  'Update a task\'s progress status. Valid transitions: todo→in_progress, in_progress→in_review, in_progress→done, in_review→done, in_review→in_progress. You must be the assignee (except in_review→done which anyone can do). Use in_review when the work is ready for human validation. Only set done for trivial tasks or after explicit approval.',
   {
     channel: z.string().describe("The channel — e.g. '#general'"),
     task_number: z.number().describe('The task number to update (e.g. 3)'),

@@ -2167,6 +2167,145 @@ describe('internalAgentRouter', () => {
     expect(body.error).toBe('description is required');
   });
 
+  it('claim_tasks 支持用 message_ids 提升普通顶层消息并自动进入 in_progress', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'ClaimByMessageBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/claim-by-message-bob',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    const seq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('feedc0de-0000-0000-0000-000000000000', 'default', 'user', 'User', 'user', '#default', 'Please investigate this regression', ?, ?)`,
+    ).run(seq, now);
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: '#default',
+        message_ids: ['feedc0de'],
+        description: 'Investigate the regression and report a concrete root cause or fix.',
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      results: Array<{ taskNumber?: number; success: boolean; messageId?: string; context?: Array<unknown> }>;
+    };
+    expect(body.results).toHaveLength(1);
+    expect(body.results[0]).toMatchObject({
+      success: true,
+      messageId: 'feedc0de-0000-0000-0000-000000000000',
+    });
+    expect(Array.isArray(body.results[0].context)).toBe(true);
+
+    const taskRow = db.prepare(
+      `SELECT status, claimed_by_agent_id as claimedByAgentId, message_id as messageId
+       FROM tasks
+       WHERE channel_id = 'default' AND message_id = 'feedc0de-0000-0000-0000-000000000000'`,
+    ).get() as { status: string; claimedByAgentId: string | null; messageId: string } | undefined;
+    expect(taskRow).toMatchObject({
+      status: 'in_progress',
+      claimedByAgentId: agent.agentId,
+      messageId: 'feedc0de-0000-0000-0000-000000000000',
+    });
+  });
+
+  it('claim_tasks 支持在 DM 中用 message_ids 认领顶层消息', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'DmClaimBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/dm-claim-bob',
+      channelId: 'default',
+    });
+    const dmChannelId = `dm:${agent.agentId}`;
+    const seq = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('dmclaim0-0000-0000-0000-000000000000', ?, 'user', 'User', 'user', 'dm:@User', 'Please take care of this DM task', ?, ?)`,
+    ).run(dmChannelId, seq, now);
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: 'dm:@User',
+        message_ids: ['dmclaim0'],
+        description: 'Handle the requested DM work and report completion.',
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      results: Array<{ taskNumber?: number; success: boolean; messageId?: string; context?: Array<unknown> }>;
+    };
+    expect(body.results).toEqual([
+      {
+        taskNumber: 1,
+        success: true,
+        messageId: 'dmclaim0-0000-0000-0000-000000000000',
+        context: [],
+      },
+    ]);
+
+    const taskRow = db.prepare(
+      `SELECT channel_id as channelId, status, claimed_by_agent_id as claimedByAgentId
+       FROM tasks
+       WHERE message_id = 'dmclaim0-0000-0000-0000-000000000000'`,
+    ).get() as { channelId: string; status: string; claimedByAgentId: string | null } | undefined;
+    expect(taskRow).toMatchObject({
+      channelId: dmChannelId,
+      status: 'in_progress',
+      claimedByAgentId: agent.agentId,
+    });
+  });
+
+  it('claim_tasks 用 message_ids 认领 thread 消息时应拒绝', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'ThreadClaimBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/thread-claim-bob',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    const seq = allocateNextChannelMessageSeq(db, 'default');
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES('threadmsg-0000-0000-0000-000000000000', 'default', 'user', 'User', 'user', '#default:root0001', 'Can you do this from a thread?', ?, ?, 'root0001')`,
+    ).run(seq, now);
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: '#default',
+        message_ids: ['threadms'],
+        description: 'This should be rejected because it is a thread message.',
+      }),
+    });
+
+    expect(res.status).toBe(200);
+    const body = await res.json() as {
+      results: Array<{ success: boolean; messageId?: string; reason?: string }>;
+    };
+    expect(body.results).toEqual([
+      {
+        success: false,
+        messageId: 'threadmsg-0000-0000-0000-000000000000',
+        reason: 'Thread messages cannot become tasks',
+      },
+    ]);
+  });
+
   it('update-details 应更新 task 标题和 brief，并同步 dedicated task root message', async () => {
     const now = Date.now();
     const agent = manager.createAgent({

@@ -33,7 +33,7 @@ export function buildAgentSystemPrompt(
     `- Always communicate through ${tool('send_message')}. This is your only user-visible output channel.`,
     `- Do NOT output user-visible text directly.`,
     `- Use only the provided MCP tools for messaging. They are already available.`,
-    `- Claim a task via ${tool('claim_tasks')} or ${tool('claim_message')} before starting work on it.`,
+    `- If a message requires real work beyond replying, claim it via ${tool('claim_tasks')} before starting.`,
     `- Complete all required work before stopping.`,
     ...(opts.extraCriticalRules ?? []),
   ];
@@ -66,8 +66,8 @@ You have MCP tools from the "chat" server. Use ONLY these for communication:
 5. **${tool('search_messages')}** — Search visible messages across channels, DMs, and threads.
 6. **${tool('list_tasks')}** — View a channel's task board.
 7. **${tool('create_tasks')}** — Create new task-messages.
-8. **${tool('claim_message')}** — Promote an existing top-level channel message into a task-message and claim it.
-9. **${tool('claim_tasks')}** — Claim existing tasks by number.
+8. **${tool('claim_message')}** — Compatibility alias for promoting an existing top-level message into a task-message and claiming it.
+9. **${tool('claim_tasks')}** — Claim existing tasks by number, or promote top-level messages by ID and claim them.
 10. **${tool('unclaim_task')}** — Release your claim on a task.
 11. **${tool('update_task_status')}** — Change a task status.
 12. **${tool('upload_file')}** — Upload an image and get an attachment ID for ${tool('send_message')}.
@@ -145,14 +145,19 @@ When a direct message, channel mention, or thread reply triggers this run, the t
 Status flow: \`todo\` → \`in_progress\` → \`in_review\` → \`done\`.
 
 Rules:
-- Pure questions or short conversational replies usually do **not** need a task.
-- If fulfilling a message requires real execution, follow-up, tracking, or handoff, move it into the task workflow.
-- Prefer \`${tool('claim_message')}\` when the relevant work already exists as a top-level channel message. Use \`${tool('create_tasks')}\` only when you need a brand-new task-message.
+- If you are only answering a question, clarifying, or having a short conversation, do **not** claim a task.
+- If fulfilling a message requires action beyond replying — running tools, writing code, investigating, changing files or config, doing multi-step follow-up, or handing work off — claim it first.
+- If a message already shows \`[task #N ...]\`, claim it with \`${tool('claim_tasks')}(channel="...", task_numbers=[N])\`.
+- If a regular top-level channel or DM message needs work, claim it with \`${tool('claim_tasks')}(channel="...", message_ids=["msgid"], description="goal and done criteria")\`.
+- Thread messages are discussion context only. Do not convert a thread message into a task; claim from the corresponding top-level message instead.
+- \`${tool('claim_message')}\` is a compatibility alias. Prefer \`${tool('claim_tasks')}\` as the primary task-claiming tool.
+- Use \`${tool('create_tasks')}\` only when you need a genuinely new task-message or subtask that does not already exist.
 - Check for existing relevant work before creating a new task-message.
 - Claim a task before starting work. If the claim fails, do not work on it.
 - Do the work in the task-message's thread whenever possible.
 - When finished, set the task to \`in_review\`.
-- After approval, set it to \`done\`.
+- Only set \`done\` for trivial tasks or after explicit human approval.
+- These rules apply in both channels and DMs. Pure DM Q&A should be answered directly without claiming.
 
 ### Splitting tasks for parallel execution
 

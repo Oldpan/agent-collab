@@ -959,7 +959,7 @@ export function registerInternalAgentRoutes(
       return { error: 'channel query parameter is required' };
     }
 
-    const channelId = resolveChannelFromTarget(channel, db);
+    const channelId = resolveTaskChannelId(agentId, channel, db);
     if (!channelId) {
       reply.code(400);
       return { error: `Cannot resolve channel: ${channel}` };
@@ -1023,7 +1023,7 @@ export function registerInternalAgentRoutes(
       return { error: 'channel and non-empty tasks array are required' };
     }
 
-    const channelId = resolveChannelFromTarget(channel, db);
+    const channelId = resolveTaskChannelId(agentId, channel, db);
     if (!channelId) {
       reply.code(400);
       return { error: `Cannot resolve channel: ${channel}` };
@@ -1103,7 +1103,7 @@ export function registerInternalAgentRoutes(
       return { error: 'channel and non-empty message_ids array are required' };
     }
 
-    const channelId = resolveChannelFromTarget(channel, db);
+    const channelId = resolveTaskChannelId(agentId, channel, db);
     if (!channelId) { reply.code(400); return { error: `Cannot resolve channel: ${channel}` }; }
     const normalizedDescription = normalizeRequiredText(description);
     if (!normalizedDescription) {
@@ -1191,7 +1191,7 @@ export function registerInternalAgentRoutes(
       return { error: 'channel, task_number, title, and description are required' };
     }
 
-    const channelId = resolveChannelFromTarget(channel, db);
+    const channelId = resolveTaskChannelId(agentId, channel, db);
     if (!channelId) {
       reply.code(400);
       return { error: `Cannot resolve channel: ${channel}` };
@@ -1247,11 +1247,11 @@ export function registerInternalAgentRoutes(
   /**
    * POST /api/internal/agent/:agentId/tasks/claim
    * Claim one or more tasks atomically (prevents race conditions).
-   * Body: { channel: string; task_numbers: number[] }
+   * Body: { channel: string; task_numbers?: number[]; message_ids?: string[]; title?: string; description?: string }
    */
   app.post<{
     Params: { agentId: string };
-    Body: { channel: string; task_numbers: number[]; conversationId?: string };
+    Body: { channel: string; task_numbers?: number[]; message_ids?: string[]; title?: string; description?: string; conversationId?: string };
   }>('/api/internal/agent/:agentId/tasks/claim', async (req, reply) => {
     const { agentId } = req.params;
     const agent = conversationManager.getAgent(agentId);
@@ -1260,23 +1260,31 @@ export function registerInternalAgentRoutes(
       return { error: 'Agent not found' };
     }
 
-    const { channel, task_numbers } = req.body ?? {};
-    if (!channel || !Array.isArray(task_numbers)) {
+    const { channel, task_numbers, message_ids, title, description } = req.body ?? {};
+    if (
+      !channel
+      || ((!Array.isArray(task_numbers) || task_numbers.length === 0)
+        && (!Array.isArray(message_ids) || message_ids.length === 0))
+    ) {
       reply.code(400);
-      return { error: 'channel and task_numbers array are required' };
+      return { error: 'channel and at least one of task_numbers or message_ids are required' };
+    }
+    if (Array.isArray(message_ids) && message_ids.length > 0 && !description?.trim()) {
+      reply.code(400);
+      return { error: 'description is required when claiming by message_ids' };
     }
 
-    const channelId = resolveChannelFromTarget(channel, db);
+    const channelId = resolveTaskChannelId(agentId, channel, db);
     if (!channelId) {
       reply.code(400);
       return { error: `Cannot resolve channel: ${channel}` };
     }
 
     const now = Date.now();
-    const results: Array<{ taskNumber: number; success: boolean; reason?: string; messageId?: string | null; context?: ContextMsg[] }> = [];
+    const results: Array<{ taskNumber?: number; success: boolean; reason?: string; messageId?: string | null; context?: ContextMsg[] }> = [];
     let changed = false;
 
-    for (const taskNumber of task_numbers) {
+    for (const taskNumber of task_numbers ?? []) {
       const row = db
         .prepare(
           `SELECT task_id as taskId, status, claimed_by_agent_id as claimedByAgentId, message_id as messageId
@@ -1323,6 +1331,78 @@ export function registerInternalAgentRoutes(
       });
     }
 
+    for (const messageIdPrefix of message_ids ?? []) {
+      const messageRow = db.prepare(
+        `SELECT message_id as messageId, content, thread_root_id as threadRootId
+         FROM channel_messages
+         WHERE message_id LIKE ? AND channel_id = ?`,
+      ).get(`${messageIdPrefix}%`, channelId) as {
+        messageId: string;
+        content: string;
+        threadRootId: string | null;
+      } | undefined;
+
+      if (!messageRow) {
+        results.push({ success: false, messageId: messageIdPrefix, reason: 'Message not found' });
+        continue;
+      }
+      if (messageRow.threadRootId) {
+        results.push({ success: false, messageId: messageRow.messageId, reason: 'Thread messages cannot become tasks' });
+        continue;
+      }
+
+      const existingTask = db.prepare(
+        `SELECT task_id as taskId, task_number as taskNumber, status, claimed_by_agent_id as claimedByAgentId
+         FROM tasks WHERE channel_id = ? AND message_id = ?`,
+      ).get(channelId, messageRow.messageId) as {
+        taskId: string;
+        taskNumber: number;
+        status: string;
+        claimedByAgentId: string | null;
+      } | undefined;
+
+      if (existingTask) {
+        results.push({
+          taskNumber: existingTask.taskNumber,
+          success: false,
+          messageId: messageRow.messageId,
+          reason: existingTask.claimedByAgentId && existingTask.claimedByAgentId !== agentId
+            ? 'Already claimed by another agent'
+            : 'Message is already a task; claim it by task number',
+        });
+        continue;
+      }
+
+      const nextTaskNumberRow = db.prepare(
+        `SELECT COALESCE(MAX(task_number), 0) + 1 as nextTaskNumber FROM tasks WHERE channel_id = ?`,
+      ).get(channelId) as { nextTaskNumber: number };
+      const taskId = randomUUID();
+      const taskNumber = nextTaskNumberRow.nextTaskNumber;
+      const taskTitle = title?.trim() || messageRow.content.trim().slice(0, 120) || `Task #${taskNumber}`;
+
+      db.transaction(() => {
+        db.prepare(
+          `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
+                             claimed_by_agent_id, claimed_by_name, created_at, updated_at)
+           VALUES(?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?)`,
+        ).run(taskId, channelId, taskNumber, taskTitle, description!.trim(), messageRow.messageId, agentId, agent.name, now, now);
+
+        syncTaskThreadOwner(db, {
+          taskId,
+          agentId,
+          lastActiveAt: now,
+        });
+      })();
+      changed = true;
+
+      results.push({
+        taskNumber,
+        success: true,
+        messageId: messageRow.messageId,
+        context: fetchTaskContext(db, channelId, messageRow.messageId),
+      });
+    }
+
     if (changed) broadcastChannelTasksChanged(channelId);
 
     return { results };
@@ -1349,7 +1429,7 @@ export function registerInternalAgentRoutes(
       return { error: 'channel and task_number are required' };
     }
 
-    const channelId = resolveChannelFromTarget(channel, db);
+    const channelId = resolveTaskChannelId(agentId, channel, db);
     if (!channelId) {
       reply.code(400);
       return { error: `Cannot resolve channel: ${channel}` };
@@ -1421,7 +1501,7 @@ export function registerInternalAgentRoutes(
     }
     const nextStatus = status as 'todo' | 'in_progress' | 'in_review' | 'done';
 
-    const channelId = resolveChannelFromTarget(channel, db);
+    const channelId = resolveTaskChannelId(agentId, channel, db);
     if (!channelId) {
       reply.code(400);
       return { error: `Cannot resolve channel: ${channel}` };
@@ -1516,6 +1596,10 @@ function resolveChannelFromTarget(target: string, db: Db): string | null {
   }
 
   return null;
+}
+
+function resolveTaskChannelId(agentId: string, channel: string, db: Db): string | null {
+  return resolveChannelFromTarget(channel, db) ?? (channel.startsWith('dm:') ? `dm:${agentId}` : null);
 }
 
 function resolveDefaultReplyTarget(db: Db, conversationId: string, humanUserName: string): string | null {

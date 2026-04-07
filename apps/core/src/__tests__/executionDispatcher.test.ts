@@ -171,7 +171,12 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.systemPromptText).toContain('Do **not** quote or repeat that metadata block back to the user');
     expect(dispatch.systemPromptText).toContain('Treat the current `reply_target` as the shared work surface for that conversation.');
     expect(dispatch.systemPromptText).toContain('If you need another agent\'s help in a channel or thread, explicitly `@mention` them');
-    expect(dispatch.systemPromptText).toContain('If you are not the owner of a thread-bound task, default to coordination, review, or support');
+    expect(dispatch.systemPromptText).toContain('If you are not the owner of the current task thread, default to coordination, review, or support');
+    expect(dispatch.systemPromptText).toContain('If you are only answering a question, clarifying, or having a short conversation, do **not** claim a task.');
+    expect(dispatch.systemPromptText).toContain('If fulfilling a message requires action beyond replying');
+    expect(dispatch.systemPromptText).toContain('claim_tasks') ;
+    expect(dispatch.systemPromptText).toContain('message_ids=["msgid"], description="goal and done criteria"');
+    expect(dispatch.systemPromptText).toContain('These rules apply in both channels and DMs');
     expect(dispatch.systemPromptText).toContain('Maintain memory carefully');
     expect(dispatch.systemPromptText).not.toContain('put to sleep when idle');
     expect(dispatch.systemPromptText).not.toContain('stdin prompt');
