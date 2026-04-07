@@ -181,12 +181,17 @@ export function ChatPanel({
     setOpeningThreadMessageId(null);
   }, [conversation.id]);
 
-  const handleOpenDmTaskThread = useCallback(async (message: LiveMessage) => {
+  const handleOpenDmTaskThread = useCallback(async (message: LiveMessage, threadRootId?: string | null) => {
     if (!isPrimaryDirectConversation) return;
     setOpeningThreadMessageId(message.id);
     setThreadError(null);
     try {
-      const thread = await openConversationThread(conversation.id, { messageId: message.id });
+      const thread = await openConversationThread(
+        conversation.id,
+        threadRootId
+          ? { threadRootId }
+          : { messageId: message.id },
+      );
       setDmThreadConversation(thread);
       setDmThreadRootMessage(message);
     } catch (error) {
@@ -211,7 +216,7 @@ export function ChatPanel({
         taskStatus: task.status,
         taskAssigneeName: task.assigneeName ?? null,
       };
-      void handleOpenDmTaskThread(rootMessage);
+      void handleOpenDmTaskThread(rootMessage, task.linkedThreadShortId ?? null);
       return;
     }
     onOpenTask?.(task);

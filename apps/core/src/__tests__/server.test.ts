@@ -8,7 +8,7 @@ import { createRun } from '@agent-collab/runtime-acp';
 import WebSocket from 'ws';
 import { findMentionedAgents } from '../web/channelMentions.js';
 import { buildChannelActivationPrompt, buildChannelActivationContextText } from '../web/channelActivationPrompt.js';
-import { buildTargetActivationContext } from '../web/activationContext.js';
+import { buildTargetActivationContext, ensureDmThreadContextSnapshot } from '../web/activationContext.js';
 import { bumpAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
 import { listChannelSubscriptions } from '../web/channelSubscriptions.js';
 import {
@@ -524,6 +524,124 @@ beforeAll(async () => {
     }
     return thread;
   });
+
+  app.post<{ Params: { id: string }; Body: { messageId?: string; threadRootId?: string } }>(
+    '/api/conversations/:id/open-thread',
+    async (req, reply) => {
+      const conv = manager.getConversation(req.params.id);
+      if (!conv) {
+        reply.code(404);
+        return { error: 'Not found' };
+      }
+      if (!conv.agentId || conv.threadKind !== 'direct' || !conv.isPrimaryThread) {
+        reply.code(409);
+        return { error: 'Only primary private chats can open DM task threads' };
+      }
+
+      const requestedThreadRootId = typeof req.body?.threadRootId === 'string' && req.body.threadRootId.trim()
+        ? req.body.threadRootId.trim().slice(0, 8)
+        : null;
+      const requestedMessageId = typeof req.body?.messageId === 'string' && req.body.messageId.trim()
+        ? req.body.messageId.trim()
+        : null;
+      if (!requestedThreadRootId && !requestedMessageId) {
+        reply.code(400);
+        return { error: 'messageId or threadRootId is required' };
+      }
+
+      const directTarget = (conv.replyTarget ?? '').trim();
+      if (!directTarget) {
+        reply.code(409);
+        return { error: 'Conversation has no DM target' };
+      }
+
+      const dmChannelId = `dm:${conv.agentId}`;
+      let resolvedThreadRootId = requestedThreadRootId;
+      if (!resolvedThreadRootId && requestedMessageId) {
+        const exactMessage = db.prepare(
+          `SELECT message_id as messageId, thread_root_id as threadRootId, message_kind as messageKind
+           FROM channel_messages
+           WHERE channel_id = ?
+             AND (message_id = ? OR message_id LIKE ?)
+           ORDER BY CASE WHEN message_id = ? THEN 0 ELSE 1 END, seq ASC
+           LIMIT 1`,
+        ).get(dmChannelId, requestedMessageId, `${requestedMessageId.slice(0, 8)}%`, requestedMessageId) as {
+          messageId: string;
+          threadRootId: string | null;
+          messageKind: string | null;
+        } | undefined;
+        if (exactMessage?.threadRootId) {
+          resolvedThreadRootId = exactMessage.threadRootId;
+        } else if (exactMessage?.messageKind === 'task') {
+          resolvedThreadRootId = exactMessage.messageId.slice(0, 8);
+        } else {
+          const snapshotRow = db.prepare(
+            `SELECT thread_root_id as threadRootId
+             FROM dm_thread_context_snapshots
+             WHERE channel_id = ?
+               AND (trigger_message_id = ? OR trigger_message_id LIKE ?)
+             ORDER BY created_at DESC
+             LIMIT 1`,
+          ).get(dmChannelId, requestedMessageId, `${requestedMessageId.slice(0, 8)}%`) as { threadRootId: string } | undefined;
+          if (snapshotRow?.threadRootId) {
+            resolvedThreadRootId = snapshotRow.threadRootId.slice(0, 8);
+          } else if (exactMessage?.messageId) {
+            resolvedThreadRootId = exactMessage.messageId.slice(0, 8);
+          }
+        }
+      }
+      if (!resolvedThreadRootId) {
+        reply.code(404);
+        return { error: 'Thread root not found in this DM' };
+      }
+
+      const rootRow = db.prepare(
+        `SELECT message_id as messageId
+         FROM channel_messages
+         WHERE channel_id = ?
+           AND (
+             target = ?
+             OR (
+               message_kind = 'task'
+               AND target = ?
+               AND EXISTS(
+                 SELECT 1
+                 FROM channel_messages thread_msgs
+                 WHERE thread_msgs.channel_id = channel_messages.channel_id
+                   AND thread_msgs.thread_root_id = SUBSTR(channel_messages.message_id, 1, 8)
+                   AND thread_msgs.target LIKE ?
+                 LIMIT 1
+               )
+             )
+           )
+           AND thread_root_id IS NULL
+           AND message_id LIKE ?
+         LIMIT 1`,
+      ).get(dmChannelId, directTarget, `#${dmChannelId}`, `${directTarget}:%`, `${resolvedThreadRootId}%`) as { messageId: string } | undefined;
+      if (!rootRow) {
+        reply.code(404);
+        return { error: 'Thread root not found in this DM' };
+      }
+
+      ensureDmThreadContextSnapshot(db, {
+        channelId: dmChannelId,
+        directTarget,
+        threadRootId: rootRow.messageId.slice(0, 8),
+        rootMessageId: rootRow.messageId,
+      });
+
+      const thread = manager.openAgentDirectThread(
+        conv.agentId,
+        conv.userId ?? null,
+        rootRow.messageId.slice(0, 8),
+      );
+      if (!thread) {
+        reply.code(404);
+        return { error: 'Unable to open DM task thread' };
+      }
+      return thread;
+    },
+  );
 
   type AgentTaskListRow = {
     taskId: string;
@@ -1342,6 +1460,43 @@ describe('REST API', () => {
 
     const rows = manager.listConversations({ agentId: agent.agentId });
     expect(rows).toHaveLength(1);
+  });
+
+  it('POST /api/conversations/:id/open-thread 传入触发消息时应打开真正的 DM task thread', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'DmThreadResolver',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/dm-thread-resolver',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    const dmChannelId = `dm:${agent.agentId}`;
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES
+       ('client-trigger-0000-0000-0000-000000000000', ?, 'user', 'oldpan', 'user', 'dm:@oldpan', '请把这个变成一个任务', 1, ?),
+       ('task-root-0000-0000-0000-0000000000000000', ?, ?, ?, 'agent', 'dm:@oldpan', '查看系统显存占用情况', 2, ?)`,
+    ).run(dmChannelId, now, dmChannelId, agent.agentId, agent.name, now + 1);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
+       VALUES('dm-task-open-thread', ?, 1, '查看系统显存占用情况', '检查显存使用并汇报', 'in_progress', ?, ?, 'task-root-0000-0000-0000-0000000000000000', ?, ?)`,
+    ).run(dmChannelId, agent.agentId, agent.name, now + 1, now + 1);
+    db.prepare(
+      `INSERT INTO dm_thread_context_snapshots(channel_id, thread_root_id, trigger_message_id, snapshot_json, created_at)
+       VALUES(?, 'task-roo', 'client-trigger-0000-0000-0000-000000000000', '[]', ?)`,
+    ).run(dmChannelId, now + 2);
+
+    const result = await fetchJson(`/api/conversations/${conv.id}/open-thread`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messageId: 'client-trigger-0000-0000-0000-000000000000' }),
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.replyTarget).toBe('dm:@oldpan:task-roo');
   });
 
   it('GET /api/agents/:id/tasks 应同时返回 assigned channel task 和 DM task', async () => {

@@ -1669,10 +1669,11 @@ export async function startServer(params: {
 
       const requestedThreadRootId = typeof req.body?.threadRootId === 'string' && req.body.threadRootId.trim()
         ? req.body.threadRootId.trim().slice(0, 8)
-        : typeof req.body?.messageId === 'string' && req.body.messageId.trim()
-          ? req.body.messageId.trim().slice(0, 8)
-          : null;
-      if (!requestedThreadRootId) {
+        : null;
+      const requestedMessageId = typeof req.body?.messageId === 'string' && req.body.messageId.trim()
+        ? req.body.messageId.trim()
+        : null;
+      if (!requestedThreadRootId && !requestedMessageId) {
         reply.code(400);
         return { error: 'messageId or threadRootId is required' };
       }
@@ -1684,6 +1685,45 @@ export async function startServer(params: {
       }
 
       const dmChannelId = `dm:${conv.agentId}`;
+      let resolvedThreadRootId = requestedThreadRootId;
+      if (!resolvedThreadRootId && requestedMessageId) {
+        const exactMessage = db.prepare(
+          `SELECT message_id as messageId, thread_root_id as threadRootId, message_kind as messageKind
+           FROM channel_messages
+           WHERE channel_id = ?
+             AND (message_id = ? OR message_id LIKE ?)
+           ORDER BY CASE WHEN message_id = ? THEN 0 ELSE 1 END, seq ASC
+           LIMIT 1`,
+        ).get(dmChannelId, requestedMessageId, `${requestedMessageId.slice(0, 8)}%`, requestedMessageId) as {
+          messageId: string;
+          threadRootId: string | null;
+          messageKind: string | null;
+        } | undefined;
+        if (exactMessage?.threadRootId) {
+          resolvedThreadRootId = exactMessage.threadRootId;
+        } else if (exactMessage?.messageKind === 'task') {
+          resolvedThreadRootId = exactMessage.messageId.slice(0, 8);
+        } else {
+          const snapshotRow = db.prepare(
+            `SELECT thread_root_id as threadRootId
+             FROM dm_thread_context_snapshots
+             WHERE channel_id = ?
+               AND (trigger_message_id = ? OR trigger_message_id LIKE ?)
+             ORDER BY created_at DESC
+             LIMIT 1`,
+          ).get(dmChannelId, requestedMessageId, `${requestedMessageId.slice(0, 8)}%`) as { threadRootId: string } | undefined;
+          if (snapshotRow?.threadRootId) {
+            resolvedThreadRootId = snapshotRow.threadRootId.slice(0, 8);
+          } else if (exactMessage?.messageId) {
+            resolvedThreadRootId = exactMessage.messageId.slice(0, 8);
+          }
+        }
+      }
+      if (!resolvedThreadRootId) {
+        reply.code(404);
+        return { error: 'Thread root not found in this DM' };
+      }
+
       const rootRow = db.prepare(
         `SELECT message_id as messageId
          FROM channel_messages
@@ -1706,7 +1746,7 @@ export async function startServer(params: {
            AND thread_root_id IS NULL
            AND message_id LIKE ?
          LIMIT 1`,
-      ).get(dmChannelId, directTarget, `#${dmChannelId}`, `${directTarget}:%`, `${requestedThreadRootId}%`) as { messageId: string } | undefined;
+      ).get(dmChannelId, directTarget, `#${dmChannelId}`, `${directTarget}:%`, `${resolvedThreadRootId}%`) as { messageId: string } | undefined;
       if (!rootRow) {
         reply.code(404);
         return { error: 'Thread root not found in this DM' };

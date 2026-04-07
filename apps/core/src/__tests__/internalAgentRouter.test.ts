@@ -336,6 +336,16 @@ describe('internalAgentRouter', () => {
       promptText: 'claim current then work in thread',
     });
 
+    const helloSeq = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('dm-hello-0000-0000-0000-000000000000', ?, 'user', 'oldpan', 'user', 'dm:@oldpan', '你好', ?, ?)`,
+    ).run(dmChannelId, helloSeq, now - 2);
+    const helloReplySeq = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('dm-hello-reply-0000-0000-0000-0000', ?, ?, ?, 'agent', 'dm:@oldpan', '你好！我是 Kimi。', ?, ?)`,
+    ).run(dmChannelId, agent.agentId, agent.name, helloReplySeq, now - 1);
     const seq = allocateNextChannelMessageSeq(db, dmChannelId);
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
@@ -385,6 +395,17 @@ describe('internalAgentRouter', () => {
     expect(threadRun?.promptText).toContain('[Current conversation target]');
     expect(threadRun?.promptText).toContain('reply_target: dm:@oldpan:currtask');
     expect(threadRun?.promptText).toContain('Inspect current memory usage and summarize the result in the task thread.');
+    const threadDebug = db.prepare(
+      `SELECT context_text as contextText
+       FROM run_debug_inputs
+       WHERE conversation_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(claimBody.results[0].threadConversationId) as { contextText: string | null } | undefined;
+    expect(threadDebug?.contextText).toContain('[Context from DM]');
+    expect(threadDebug?.contextText).toContain('@oldpan: 你好');
+    expect(threadDebug?.contextText).toContain(`@${agent.name}: 你好！我是 Kimi。`);
+    expect(threadDebug?.contextText).toContain('@oldpan [Trigger]: Check memory usage and treat it as a task');
 
     const blockedRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
       method: 'POST',

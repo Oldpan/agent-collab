@@ -14,6 +14,7 @@ import {
   setAgentMessageCheckpoint,
 } from './messageCheckpoints.js';
 import { buildTargetActivationContext } from './activationContext.js';
+import { buildDirectActivationContextText } from './directActivationPrompt.js';
 import { recordAgentMentionNotification, shouldTriggerAgentMention } from './agentMentionCooldowns.js';
 import { buildChannelActivationContextText, buildChannelActivationPrompt } from './channelActivationPrompt.js';
 import { findMentionedAgents } from './channelMentions.js';
@@ -574,6 +575,22 @@ export function registerInternalAgentRoutes(
       };
     }
     const beforeDispatchState = getLatestConversationDispatchState(threadConversationId);
+    const rootMessageRow = db.prepare(
+      `SELECT seq
+       FROM channel_messages
+       WHERE channel_id = ?
+         AND message_id = ?
+       LIMIT 1`,
+    ).get(`dm:${params.agentId}`, params.messageId) as { seq: number } | undefined;
+    const threadActivationContext = rootMessageRow
+      ? buildTargetActivationContext(db, {
+          agentId: params.agentId,
+          channelId: `dm:${params.agentId}`,
+          replyTarget: threadTarget,
+          triggerSeq: rootMessageRow.seq + 1,
+          threadRootId: params.messageId.slice(0, 8),
+        })
+      : null;
     try {
       await conversationManager.submitPrompt(
         threadConversationId,
@@ -585,7 +602,19 @@ export function registerInternalAgentRoutes(
           rootMessageId: params.messageId,
           triggerMessage: params.triggerMessage,
         }),
-        { recordAsUserMessage: false },
+        {
+          recordAsUserMessage: false,
+          activationContextText: threadActivationContext
+            ? buildDirectActivationContextText({
+                target: threadTarget,
+                recentMessages: threadActivationContext.recentMessages,
+                unreadCount: threadActivationContext.unreadCount,
+                oldestVisibleSeq: threadActivationContext.oldestVisibleSeq,
+                rootMessage: threadActivationContext.rootMessage,
+                dmContextSnapshot: threadActivationContext.dmContextSnapshot,
+              })
+            : undefined,
+        },
       );
       emitDmTaskLifecycleEvent({
         agentId: params.agentId,
