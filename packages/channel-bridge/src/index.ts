@@ -359,7 +359,7 @@ server.tool(
   },
   async ({ channel, tasks }) => {
     try {
-      const { ok, data } = await apiFetch('/tasks', { method: 'POST', body: { channel, tasks } });
+      const { ok, data } = await apiFetch('/tasks', { method: 'POST', body: { channel, tasks, conversationId } });
       if (!ok) return toText(`Error: ${errText(data, 'create tasks failed')}`);
 
       const d = data as { tasks?: Array<{ taskNumber: number; title: string; messageId?: string }> };
@@ -383,10 +383,10 @@ server.tool(
 
 server.tool(
   'claim_message',
-  `Compatibility alias for claim_tasks(message_ids=[...]). Promote one or more existing top-level channel or DM messages into task-messages and claim them. Use the 8-character msg= ID from received messages or read_history. Each promoted message becomes the task root and default thread — reply in its thread with send_message(target="${'#channel:msgid'}"). If a message is already a task-message, the claim fails. Thread messages cannot be converted. The task brief is required; use separate calls when promoted messages need different briefs.`,
+  `Compatibility alias for claim_tasks(message_ids=[...]). Promote one or more existing top-level channel or DM messages into task-messages and claim them. Use the 8-character msg= ID from received messages or read_history. In the current primary DM, you may use message_ids=["current"] to claim the latest user request instead of manually picking an older msg id. Each promoted message becomes the task root and default thread — reply in its thread with send_message(target="${'#channel:msgid'}"). If a message is already a task-message, the claim fails. Thread messages cannot be converted. The task brief is required; use separate calls when promoted messages need different briefs.`,
   {
     channel: z.string().describe("The channel or DM — e.g. '#engineering' or 'dm:@User'"),
-    message_ids: z.array(z.string()).describe("8-char message IDs (the msg= value from check_messages or read_history, e.g. ['a1b2c3d4'])"),
+    message_ids: z.array(z.string()).describe("8-char message IDs (the msg= value from check_messages or read_history, e.g. ['a1b2c3d4']). In the current primary DM you may use ['current'] to claim the latest user request."),
     title: z.string().optional().describe('Optional task title override. If omitted, uses the message content (truncated to 120 chars).'),
     description: z.string().trim().min(1, 'description is required').describe('Required task brief / goal / done criteria. Use one call per message when briefs differ.'),
   },
@@ -464,13 +464,13 @@ server.tool(
   'claim_tasks',
   `Claim tasks so you are assigned to work on them. Two modes:
 1. By task number: claim existing tasks shown in list_tasks. Use task_numbers=[1, 3].
-2. By message ID: convert a regular top-level channel or DM message into a task and claim it. Use message_ids=["a1b2c3d4"] with description="goal and done criteria".
+2. By message ID: convert a regular top-level channel or DM message into a task and claim it. Use message_ids=["a1b2c3d4"] with description="goal and done criteria". In the current primary DM, prefer message_ids=["current"] for the latest user request.
 
 Thread messages cannot be claimed or converted into tasks. If a task is in "todo" status, claiming auto-advances it to "in_progress". If another agent already claimed it, the claim fails — do not work on that task, move on. Always claim before starting any work to prevent duplicate effort.`,
   {
     channel: z.string().describe("The channel or DM whose tasks to claim — e.g. '#general' or 'dm:@User'"),
     task_numbers: z.array(z.number()).optional().describe('Task numbers to claim (e.g. [1, 3, 5])'),
-    message_ids: z.array(z.string()).optional().describe("Message IDs or short ID prefixes (the 8-char msg= value, e.g. ['a1b2c3d4']). Converts a regular top-level message to a task and claims it. Thread messages are not allowed."),
+    message_ids: z.array(z.string()).optional().describe("Message IDs or short ID prefixes (the 8-char msg= value, e.g. ['a1b2c3d4']). In the current primary DM you may use ['current'] to claim the latest user request. Converts a regular top-level message to a task and claims it. Thread messages are not allowed."),
     title: z.string().optional().describe('Optional task title override when claiming regular top-level messages by message ID.'),
     description: z.string().optional().describe('Required task brief / goal / done criteria when claiming regular top-level messages by message ID.'),
   },

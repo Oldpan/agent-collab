@@ -10,6 +10,11 @@ import {
   ConversationEmptyState,
   ConversationScrollButton,
 } from "@/components/ai-elements/conversation";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import { Confirmation } from "@/components/ai-elements/confirmation";
 import { Loader } from "@/components/ai-elements/loader";
 import {
@@ -30,7 +35,7 @@ import {
 } from "@/components/ai-elements/tool";
 import { useConversationStream } from "@/hooks/useConversationStream";
 import { ChevronRightIcon, ListTodoIcon, MenuIcon } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 
 function AttachmentImage({ attachmentId }: { attachmentId: string }) {
   const [src, setSrc] = useState<string | null>(null);
@@ -51,10 +56,11 @@ import { AgentProfilePanel } from "./AgentProfilePanel";
 import { AgentActivityPanel } from "./AgentActivityPanel";
 import { AgentTasksPanel } from "./AgentTasksPanel";
 import { CodexDebugPanel } from "./CodexDebugPanel";
+import { DmTaskThreadPanel } from "./DmTaskThreadPanel";
 import { ChatAvatar, readStoredUserIdentity } from "./ChatAvatar";
 import { AgentSettingsPanel } from "./AgentSettingsPanel";
 import type { AgentInfo, ConversationInfo, UpdateAgentRequest } from "@agent-collab/protocol";
-import type { AgentTask } from "@/lib/api";
+import { openConversationThread, type AgentTask } from "@/lib/api";
 import type { LiveMessage, LiveToolCall } from "@/hooks/types";
 import { cn } from "@/lib/utils";
 import { MessageSourceBadge } from "@/components/MessageSourceBadge";
@@ -105,6 +111,10 @@ export function ChatPanel({
   onOpenTask,
 }: ChatPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "activity" | "task" | "debug" | "workspace" | "skills" | "profile" | "setting">("chat");
+  const [dmThreadConversation, setDmThreadConversation] = useState<ConversationInfo | null>(null);
+  const [dmThreadRootMessage, setDmThreadRootMessage] = useState<LiveMessage | null>(null);
+  const [threadError, setThreadError] = useState<string | null>(null);
+  const [openingThreadMessageId, setOpeningThreadMessageId] = useState<string | null>(null);
   const userIdentity = useMemo(() => readStoredUserIdentity(), []);
   const {
     messages,
@@ -142,6 +152,7 @@ export function ChatPanel({
     status === "awaiting_approval";
   const shouldDisableInput = false;
   const canShowCodexDebug = isAdmin && (conversation.agentType === "codex_acp" || conversation.agentType === "claude_acp");
+  const isPrimaryDirectConversation = conversation.threadKind === "direct" && Boolean(conversation.isPrimaryThread);
 
   const displayStatus =
     hasDispatchFailure && status !== "submitted" && status !== "streaming"
@@ -164,7 +175,47 @@ export function ChatPanel({
 
   useEffect(() => {
     setActiveTab("chat");
+    setDmThreadConversation(null);
+    setDmThreadRootMessage(null);
+    setThreadError(null);
+    setOpeningThreadMessageId(null);
   }, [conversation.id]);
+
+  const handleOpenDmTaskThread = useCallback(async (message: LiveMessage) => {
+    if (!isPrimaryDirectConversation) return;
+    setOpeningThreadMessageId(message.id);
+    setThreadError(null);
+    try {
+      const thread = await openConversationThread(conversation.id, { messageId: message.id });
+      setDmThreadConversation(thread);
+      setDmThreadRootMessage(message);
+    } catch (error) {
+      setThreadError(String((error as Error)?.message ?? error));
+    } finally {
+      setOpeningThreadMessageId(null);
+    }
+  }, [conversation.id, isPrimaryDirectConversation]);
+
+  const handleTaskOpen = useCallback((task: AgentTask) => {
+    if (task.sourceType === "dm" && isPrimaryDirectConversation && task.messageId) {
+      setActiveTab("chat");
+      setThreadError(null);
+      const existing = messages.find((message) => message.id === task.messageId);
+      const rootMessage: LiveMessage = existing ?? {
+        id: task.messageId,
+        role: "user",
+        text: task.title,
+        createdAt: task.createdAt,
+        isStreaming: false,
+        taskNumber: task.taskNumber,
+        taskStatus: task.status,
+        taskAssigneeName: task.assigneeName ?? null,
+      };
+      void handleOpenDmTaskThread(rootMessage);
+      return;
+    }
+    onOpenTask?.(task);
+  }, [handleOpenDmTaskThread, isPrimaryDirectConversation, messages, onOpenTask]);
 
   return (
     <div className="flex h-full flex-col bg-[#fff9d0]">
@@ -338,7 +389,8 @@ export function ChatPanel({
         <div className="flex flex-1 flex-col overflow-hidden">
           <AgentTasksPanel
             agent={agent}
-            onOpenTask={onOpenTask}
+            conversation={conversation}
+            onOpenTask={handleTaskOpen}
           />
         </div>
       ) : activeTab === "debug" ? (
@@ -346,62 +398,158 @@ export function ChatPanel({
           <CodexDebugPanel conversationId={conversation.id} />
         </div>
       ) : (
-        <>
-          <Conversation className="min-h-0 flex-1 bg-[#fff9d0]">
-            <ConversationContent className="px-3 py-4">
-              {messages.length === 0 ? (
-                <ConversationEmptyState
-                  title="Start the conversation"
-                  description="Send a message to begin"
+        dmThreadConversation && dmThreadRootMessage ? (
+          <ResizablePanelGroup direction="horizontal" className="min-h-0 flex-1">
+            <ResizablePanel defaultSize={72} minSize={45}>
+              <div className="min-w-0 flex h-full flex-col">
+                <Conversation className="min-h-0 flex-1 bg-[#fff9d0]">
+                  <ConversationContent className="px-3 py-4">
+                    {threadError ? (
+                      <div className="mx-1 mb-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+                        {threadError}
+                      </div>
+                    ) : null}
+                    {messages.length === 0 ? (
+                      <ConversationEmptyState
+                        title="Start the conversation"
+                        description="Send a message to begin"
+                      />
+                    ) : (
+                      messages.map((msg) => (
+                        <MessageRow
+                          key={msg.id}
+                          message={msg}
+                          agent={agent}
+                          userName={userIdentity.name}
+                          userIdentity={userIdentity}
+                          onOpenThread={isPrimaryDirectConversation ? () => void handleOpenDmTaskThread(msg) : undefined}
+                          openingThread={openingThreadMessageId === msg.id}
+                        />
+                      ))
+                    )}
+
+                    {pendingApproval && (
+                      <div className="mx-1 mt-2 mb-3 rounded-md border-2 border-zinc-900 bg-[#fff7d1] p-3 shadow-[4px_4px_0_0_rgba(0,0,0,0.12)]">
+                        <Confirmation
+                          toolName={pendingApproval.toolName}
+                          toolArgs={pendingApproval.toolArgs}
+                          onAllow={() => respondApproval(pendingApproval.requestId, "allow")}
+                          onDeny={() => respondApproval(pendingApproval.requestId, "deny")}
+                        />
+                      </div>
+                    )}
+
+                    {(status === "queued" || status === "recovering" || status === "awaiting_approval") && (
+                      <div className="mx-1 mt-2 mb-3 flex items-center gap-2 rounded-md border-2 border-zinc-900 bg-[#fffce8] px-3 py-2 text-sm text-zinc-600 shadow-[4px_4px_0_0_rgba(0,0,0,0.1)]">
+                        <Loader size={14} />
+                        <span>
+                          {status === "queued"
+                            ? "Waiting for the current conversation to finish..."
+                            : status === "recovering"
+                              ? "Recovering session..."
+                              : "Waiting for approval..."}
+                        </span>
+                      </div>
+                    )}
+                  </ConversationContent>
+                  <ConversationScrollButton />
+                </Conversation>
+
+                <PromptComposer
+                  status={status}
+                  ready={connectionReady}
+                  showCancel={shouldShowCancel}
+                  disableInput={shouldDisableInput}
+                  onSend={sendPrompt}
+                  onCancel={cancel}
                 />
-              ) : (
-                messages.map((msg) => (
-                  <MessageRow
-                    key={msg.id}
-                    message={msg}
-                    agent={agent}
-                    userName={userIdentity.name}
-                    userIdentity={userIdentity}
-                  />
-                ))
-              )}
+              </div>
+            </ResizablePanel>
 
-              {pendingApproval && (
-                <div className="mx-1 mt-2 mb-3 rounded-md border-2 border-zinc-900 bg-[#fff7d1] p-3 shadow-[4px_4px_0_0_rgba(0,0,0,0.12)]">
-                  <Confirmation
-                    toolName={pendingApproval.toolName}
-                    toolArgs={pendingApproval.toolArgs}
-                    onAllow={() => respondApproval(pendingApproval.requestId, "allow")}
-                    onDeny={() => respondApproval(pendingApproval.requestId, "deny")}
-                  />
-                </div>
-              )}
+            <ResizableHandle />
 
-              {(status === "queued" || status === "recovering" || status === "awaiting_approval") && (
-                <div className="mx-1 mt-2 mb-3 flex items-center gap-2 rounded-md border-2 border-zinc-900 bg-[#fffce8] px-3 py-2 text-sm text-zinc-600 shadow-[4px_4px_0_0_rgba(0,0,0,0.1)]">
-                  <Loader size={14} />
-                  <span>
-                    {status === "queued"
-                      ? "Queued behind another thread..."
-                      : status === "recovering"
-                        ? "Recovering session..."
-                        : "Waiting for approval..."}
-                  </span>
-                </div>
-              )}
-            </ConversationContent>
-            <ConversationScrollButton />
-          </Conversation>
+            <ResizablePanel defaultSize={28} minSize={22} maxSize={55}>
+              <div className="h-full border-l-2 border-black bg-[#fff5c2]">
+                <DmTaskThreadPanel
+                  conversation={dmThreadConversation}
+                  agent={agent}
+                  rootMessage={dmThreadRootMessage}
+                  onClose={() => {
+                    setDmThreadConversation(null);
+                    setDmThreadRootMessage(null);
+                    setThreadError(null);
+                  }}
+                />
+              </div>
+            </ResizablePanel>
+          </ResizablePanelGroup>
+        ) : (
+          <div className="min-h-0 flex flex-1">
+            <div className="min-w-0 flex flex-1 flex-col">
+              <Conversation className="min-h-0 flex-1 bg-[#fff9d0]">
+                <ConversationContent className="px-3 py-4">
+                  {threadError ? (
+                    <div className="mx-1 mb-3 rounded-md border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+                      {threadError}
+                    </div>
+                  ) : null}
+                  {messages.length === 0 ? (
+                    <ConversationEmptyState
+                      title="Start the conversation"
+                      description="Send a message to begin"
+                    />
+                  ) : (
+                    messages.map((msg) => (
+                      <MessageRow
+                        key={msg.id}
+                        message={msg}
+                        agent={agent}
+                        userName={userIdentity.name}
+                        userIdentity={userIdentity}
+                        onOpenThread={isPrimaryDirectConversation ? () => void handleOpenDmTaskThread(msg) : undefined}
+                        openingThread={openingThreadMessageId === msg.id}
+                      />
+                    ))
+                  )}
 
-          <PromptComposer
-            status={status}
-            ready={connectionReady}
-            showCancel={shouldShowCancel}
-            disableInput={shouldDisableInput}
-            onSend={sendPrompt}
-            onCancel={cancel}
-          />
-        </>
+                  {pendingApproval && (
+                    <div className="mx-1 mt-2 mb-3 rounded-md border-2 border-zinc-900 bg-[#fff7d1] p-3 shadow-[4px_4px_0_0_rgba(0,0,0,0.12)]">
+                      <Confirmation
+                        toolName={pendingApproval.toolName}
+                        toolArgs={pendingApproval.toolArgs}
+                        onAllow={() => respondApproval(pendingApproval.requestId, "allow")}
+                        onDeny={() => respondApproval(pendingApproval.requestId, "deny")}
+                      />
+                    </div>
+                  )}
+
+                  {(status === "queued" || status === "recovering" || status === "awaiting_approval") && (
+                    <div className="mx-1 mt-2 mb-3 flex items-center gap-2 rounded-md border-2 border-zinc-900 bg-[#fffce8] px-3 py-2 text-sm text-zinc-600 shadow-[4px_4px_0_0_rgba(0,0,0,0.1)]">
+                      <Loader size={14} />
+                      <span>
+                        {status === "queued"
+                          ? "Waiting for the current conversation to finish..."
+                          : status === "recovering"
+                            ? "Recovering session..."
+                            : "Waiting for approval..."}
+                      </span>
+                    </div>
+                  )}
+                </ConversationContent>
+                <ConversationScrollButton />
+              </Conversation>
+
+              <PromptComposer
+                status={status}
+                ready={connectionReady}
+                showCancel={shouldShowCancel}
+                disableInput={shouldDisableInput}
+                onSend={sendPrompt}
+                onCancel={cancel}
+              />
+            </div>
+          </div>
+        )
       )}
     </div>
   );
@@ -413,11 +561,15 @@ function MessageRow({
   agent,
   userName,
   userIdentity,
+  onOpenThread,
+  openingThread = false,
 }: {
   message: LiveMessage;
   agent: AgentInfo | null;
   userName: string;
   userIdentity: { name: string; avatarUrl: string | null };
+  onOpenThread?: () => void;
+  openingThread?: boolean;
 }) {
   if (message.role === "system") {
     return (
@@ -432,6 +584,7 @@ function MessageRow({
   }
 
   const isUser = message.role === "user";
+  const hasThreadSurface = Boolean(onOpenThread && (message.taskNumber != null || (message.replyCount ?? 0) > 0));
   const displayName = isUser ? userName : (agent?.name ?? "Agent");
   const displayRole = isUser ? "Owner" : "Agent";
   const cardTone = isUser
@@ -442,6 +595,16 @@ function MessageRow({
   const metaAlign = isUser ? "justify-end" : "justify-between";
   const infoAlign = isUser ? "justify-end" : "justify-start";
   const showFallbackBadge = message.messageSource === "delta_fallback";
+  const statusTone = message.taskStatus === "done"
+    ? "bg-[#d8f8c8] text-green-800"
+    : message.taskStatus === "in_review"
+      ? "bg-[#ffe8c7] text-amber-800"
+      : message.taskStatus === "in_progress"
+        ? "bg-[#d8efff] text-blue-800"
+        : "bg-[#fff8d8] text-zinc-700";
+  const threadLabel = (message.replyCount ?? 0) > 0
+    ? `${message.replyCount} ${(message.replyCount ?? 0) === 1 ? "reply" : "replies"}`
+    : "Open thread";
 
   const body = isUser ? (
     <UserMessageContent className={cn("w-fit min-w-[20px] max-w-full self-end rounded-md border-2 px-3 py-2.5", cardTone)}>
@@ -467,6 +630,60 @@ function MessageRow({
       {message.text && <MessageResponse>{message.text}</MessageResponse>}
     </MessageContent>
   );
+
+  if (hasThreadSurface) {
+    return (
+      <div className="px-1 py-2.5">
+        <div className="rounded-sm border-2 border-zinc-900 bg-[#fffdf4] px-3 py-3 shadow-[4px_4px_0_0_rgba(0,0,0,0.1)]">
+          <div className="flex items-start gap-3">
+            {!isUser ? (
+              <ChatAvatar role={message.role} agent={agent} user={userIdentity} size={38} className="mt-0.5 shrink-0" />
+            ) : (
+              <ChatAvatar role={message.role} agent={agent} user={userIdentity} size={38} className="mt-0.5 shrink-0" />
+            )}
+            <div className="min-w-0 flex-1">
+              <div className="mb-1.5 flex flex-wrap items-center gap-2">
+                <span className="text-[15px] font-semibold tracking-tight text-zinc-950">{displayName}</span>
+                <span className="rounded-sm border border-zinc-900 bg-[#fffce8]/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-500">
+                  {message.taskNumber != null ? "Task" : "Thread"}
+                </span>
+                {message.taskNumber != null ? (
+                  <span className="rounded-sm border border-zinc-900 bg-[#d8f8c8] px-1.5 py-0.5 text-[10px] font-semibold text-zinc-900">
+                    #{message.taskNumber}
+                  </span>
+                ) : null}
+                {message.taskStatus ? (
+                  <span className={cn("rounded-sm border border-zinc-900 px-1.5 py-0.5 text-[10px] font-semibold", statusTone)}>
+                    {message.taskStatus.replace("_", " ")}
+                  </span>
+                ) : null}
+                {message.taskAssigneeName ? (
+                  <span className="rounded-sm border border-zinc-300 bg-[#fff8d8] px-1.5 py-0.5 text-[10px] text-zinc-700">
+                    @{message.taskAssigneeName}
+                  </span>
+                ) : null}
+                <span className="text-[11px] font-medium text-zinc-500">
+                  {messageTimeFormatter.format(message.createdAt)}
+                </span>
+              </div>
+
+              {body}
+
+              <div className="mt-2 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={onOpenThread}
+                  className="rounded border-2 border-zinc-900 bg-[#fff9d8] px-2.5 py-1 text-[11px] font-medium text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)] hover:bg-[#ffd54a]"
+                >
+                  {openingThread ? "Opening..." : threadLabel}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <Message

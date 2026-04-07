@@ -28,7 +28,7 @@ import { ClaudeTranscriptService } from '../services/claudeTranscriptService.js'
 import { findMentionedAgents } from './channelMentions.js';
 import { buildChannelActivationPrompt, buildChannelActivationContextText } from './channelActivationPrompt.js';
 import { appendChannelResetMarkers } from './channelMemoryNotes.js';
-import { buildTargetActivationContext } from './activationContext.js';
+import { buildTargetActivationContext, ensureDmThreadContextSnapshot } from './activationContext.js';
 import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
 import { deleteChannelSubscription, listChannelSubscriptions, upsertChannelSubscription } from './channelSubscriptions.js';
 import {
@@ -1270,40 +1270,315 @@ export async function startServer(params: {
       const limit = Math.min(Number(req.query.limit ?? 50), 200);
       const dmChannelId = `dm:${conv.agentId}`;
       const directTarget = (conv.replyTarget ?? '').trim();
-      const directTargetPrefix = `${directTarget}:%`;
+      const brokenDmTaskTarget = `#${dmChannelId}`;
+      const directThreadPrefix = `${directTarget}:%`;
+      if (!directTarget) {
+        return { messages: [] };
+      }
 
-      const rows = db
-        .prepare(
-          `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
-                  content, created_at as createdAt, seq, message_source as messageSource,
-                  attachment_ids as attachmentIds
-           FROM channel_messages
-           WHERE channel_id = ? AND (target = ? OR target LIKE ?)
-           ORDER BY seq DESC LIMIT ?`,
-        )
-        .all(dmChannelId, directTarget, directTargetPrefix, limit) as Array<{
-        id: string;
-        senderName: string;
-        senderType: string;
-        content: string;
-        createdAt: number;
-        seq: number;
-        messageSource: string | null;
-        attachmentIds: string | null;
-      }>;
+      if (conv.threadKind === 'direct' && !conv.isPrimaryThread && conv.threadRootId) {
+        const baseTarget = directTarget.replace(/:[^:]+$/, '');
+        const rows = db.prepare(
+          `SELECT cm.message_id as id,
+                  cm.sender_name as senderName,
+                  cm.sender_type as senderType,
+                  cm.content as content,
+                  cm.created_at as createdAt,
+                  cm.seq as seq,
+                  COALESCE(CASE WHEN cm.thread_root_id IS NULL THEN (
+                    SELECT COUNT(*)
+                    FROM channel_messages replies
+                    WHERE replies.channel_id = cm.channel_id
+                      AND replies.thread_root_id = SUBSTR(cm.message_id, 1, 8)
+                  ) ELSE 0 END, 0) as replyCount,
+                  cm.message_source as messageSource,
+                  cm.attachment_ids as attachmentIds,
+                  t.task_number as taskNumber,
+                  t.status as taskStatus,
+                  t.claimed_by_name as taskAssigneeName
+           FROM channel_messages cm
+           LEFT JOIN tasks t ON t.message_id = cm.message_id
+           WHERE cm.channel_id = ?
+             AND (
+               (cm.message_id LIKE ? AND cm.thread_root_id IS NULL AND cm.target = ?)
+               OR cm.thread_root_id = ?
+             )
+           ORDER BY cm.seq ASC LIMIT ?`,
+        ).all(dmChannelId, `${conv.threadRootId}%`, baseTarget, conv.threadRootId, limit) as PublicChannelRow[];
+        const rootMessageId = rows.find((row) => row.id.startsWith(conv.threadRootId!))?.id;
+        const contextSnapshot = rootMessageId
+          ? ensureDmThreadContextSnapshot(db, {
+              channelId: dmChannelId,
+              directTarget: baseTarget,
+              threadRootId: conv.threadRootId,
+              rootMessageId,
+            })
+          : undefined;
 
-      const messages = rows.reverse().map((r) => ({
-        id: r.id,
-        senderName: r.senderName,
-        senderType: r.senderType as 'user' | 'agent' | 'system',
-        content: r.content,
-        createdAt: new Date(r.createdAt).toISOString(),
-        seq: r.seq,
-        ...(r.messageSource ? { messageSource: r.messageSource } : {}),
-        ...(r.attachmentIds ? { attachmentIds: JSON.parse(r.attachmentIds) as string[] } : {}),
-      }));
+        return {
+          messages: rows.map(mapPublicChannelMessage),
+          ...(contextSnapshot
+            ? {
+                contextSnapshot: {
+                  triggerMessageId: contextSnapshot.triggerMessageId,
+                  messages: contextSnapshot.messages.map((message) => ({
+                    messageId: message.messageId,
+                    seq: message.seq,
+                    target: message.target,
+                    senderName: message.senderName,
+                    senderType: message.senderType,
+                    content: message.content,
+                    createdAt: new Date(message.createdAt).toISOString(),
+                  })),
+                },
+              }
+            : {}),
+        };
+      }
 
-      return { messages };
+      const rows = db.prepare(
+        `SELECT cm.message_id as id,
+                cm.sender_name as senderName,
+                cm.sender_type as senderType,
+                cm.content as content,
+                cm.created_at as createdAt,
+                cm.seq as seq,
+                COUNT(replies.message_id) as replyCount,
+                cm.message_source as messageSource,
+                cm.attachment_ids as attachmentIds,
+                t.task_number as taskNumber,
+                t.status as taskStatus,
+                t.claimed_by_name as taskAssigneeName
+         FROM channel_messages cm
+         LEFT JOIN channel_messages replies
+           ON replies.channel_id = cm.channel_id
+           AND replies.thread_root_id = SUBSTR(cm.message_id, 1, 8)
+         LEFT JOIN tasks t ON t.message_id = cm.message_id
+         WHERE cm.channel_id = ?
+           AND (
+             cm.target = ?
+             OR (
+               cm.message_kind = 'task'
+               AND cm.target = ?
+               AND EXISTS(
+                 SELECT 1
+                 FROM channel_messages thread_msgs
+                 WHERE thread_msgs.channel_id = cm.channel_id
+                   AND thread_msgs.thread_root_id = SUBSTR(cm.message_id, 1, 8)
+                   AND thread_msgs.target LIKE ?
+                 LIMIT 1
+               )
+             )
+           )
+           AND cm.thread_root_id IS NULL
+         GROUP BY cm.message_id
+         ORDER BY cm.seq DESC LIMIT ?`,
+      ).all(dmChannelId, directTarget, brokenDmTaskTarget, directThreadPrefix, limit) as PublicChannelRow[];
+
+      return {
+        messages: rows.reverse().map(mapPublicChannelMessage),
+      };
+    },
+  );
+
+  app.get<{ Params: { id: string }; Querystring: { view?: string; status?: string } }>(
+    '/api/conversations/:id/tasks',
+    async (req, reply) => {
+      const user = requireConversationAccess(req, reply, req.params.id);
+      if (!user) return { error: 'Access denied' };
+
+      const conv = conversationManager.getConversation(req.params.id);
+      if (!conv) {
+        reply.code(404);
+        return { error: 'Not found' };
+      }
+      if (!conv.agentId || conv.threadKind !== 'direct' || !conv.isPrimaryThread) {
+        reply.code(409);
+        return { error: 'Conversation tasks are only available on primary private chats' };
+      }
+
+      const directTarget = (conv.replyTarget ?? '').trim();
+      if (!directTarget) {
+        return { tasks: [] };
+      }
+
+      const status = (req.query.status as 'todo' | 'in_progress' | 'in_review' | 'done' | 'all' | undefined) ?? 'all';
+      const view = (req.query.view as 'current_dm' | 'all_agent' | undefined) ?? 'current_dm';
+      if (!['all', 'todo', 'in_progress', 'in_review', 'done'].includes(status)) {
+        reply.code(400);
+        return { error: 'Invalid status filter' };
+      }
+      if (!['current_dm', 'all_agent'].includes(view)) {
+        reply.code(400);
+        return { error: 'Invalid task view' };
+      }
+
+      const dmChannelId = `dm:${conv.agentId}`;
+      const whereParts = ['t.claimed_by_agent_id = ?'];
+      const params: Array<string> = [conv.agentId];
+      if (status !== 'all') {
+        whereParts.push('t.status = ?');
+        params.push(status);
+      }
+
+      const rows = (view === 'current_dm'
+        ? db.prepare(
+            `SELECT t.task_id as taskId,
+                    t.channel_id as channelId,
+                    t.task_number as taskNumber,
+                    t.title as title,
+                    t.description as description,
+                    t.status as status,
+                    t.claimed_by_agent_id as assigneeId,
+                    t.claimed_by_name as assigneeName,
+                    t.message_id as messageId,
+                    t.created_at as createdAt,
+                    t.updated_at as updatedAt,
+                    c.name as channelName
+             FROM tasks t
+             LEFT JOIN channels c ON c.channel_id = t.channel_id
+             LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
+             WHERE ${whereParts.join(' AND ')}
+               AND t.channel_id = ?
+               AND (
+                 cm.target = ?
+                 OR (
+                   cm.message_kind = 'task'
+                   AND cm.target = ?
+                   AND EXISTS(
+                     SELECT 1
+                     FROM channel_messages thread_msgs
+                     WHERE thread_msgs.channel_id = t.channel_id
+                       AND thread_msgs.thread_root_id = SUBSTR(t.message_id, 1, 8)
+                       AND thread_msgs.target LIKE ?
+                     LIMIT 1
+                   )
+                 )
+               )
+             ORDER BY t.updated_at DESC`,
+          ).all(...params, dmChannelId, directTarget, `#${dmChannelId}`, `${directTarget}:%`)
+        : db.prepare(
+            `SELECT t.task_id as taskId,
+                    t.channel_id as channelId,
+                    t.task_number as taskNumber,
+                    t.title as title,
+                    t.description as description,
+                    t.status as status,
+                    t.claimed_by_agent_id as assigneeId,
+                    t.claimed_by_name as assigneeName,
+                    t.message_id as messageId,
+                    t.created_at as createdAt,
+                    t.updated_at as updatedAt,
+                    c.name as channelName
+             FROM tasks t
+             LEFT JOIN channels c ON c.channel_id = t.channel_id
+             LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
+             WHERE ${whereParts.join(' AND ')}
+               AND (
+                 t.channel_id != ?
+                 OR cm.target = ?
+                 OR (
+                   cm.message_kind = 'task'
+                   AND cm.target = ?
+                   AND EXISTS(
+                     SELECT 1
+                     FROM channel_messages thread_msgs
+                     WHERE thread_msgs.channel_id = t.channel_id
+                       AND thread_msgs.thread_root_id = SUBSTR(t.message_id, 1, 8)
+                       AND thread_msgs.target LIKE ?
+                     LIMIT 1
+                   )
+                 )
+               )
+             ORDER BY t.updated_at DESC`,
+          ).all(...params, dmChannelId, directTarget, `#${dmChannelId}`, `${directTarget}:%`)
+      ) as AgentTaskListRow[];
+
+      return {
+        tasks: rows
+          .filter((row) => row.channelId === dmChannelId || user.isAdmin || hasChannelAccess(user, row.channelId))
+          .map((row) => mapAgentTaskRow(row, dmChannelId)),
+      };
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { messageId?: string; threadRootId?: string } }>(
+    '/api/conversations/:id/open-thread',
+    async (req, reply) => {
+      const user = requireConversationAccess(req, reply, req.params.id);
+      if (!user) return { error: 'Access denied' };
+
+      const conv = conversationManager.getConversation(req.params.id);
+      if (!conv) {
+        reply.code(404);
+        return { error: 'Not found' };
+      }
+      if (!conv.agentId || conv.threadKind !== 'direct' || !conv.isPrimaryThread) {
+        reply.code(409);
+        return { error: 'Only primary private chats can open DM task threads' };
+      }
+
+      const requestedThreadRootId = typeof req.body?.threadRootId === 'string' && req.body.threadRootId.trim()
+        ? req.body.threadRootId.trim().slice(0, 8)
+        : typeof req.body?.messageId === 'string' && req.body.messageId.trim()
+          ? req.body.messageId.trim().slice(0, 8)
+          : null;
+      if (!requestedThreadRootId) {
+        reply.code(400);
+        return { error: 'messageId or threadRootId is required' };
+      }
+
+      const directTarget = (conv.replyTarget ?? '').trim();
+      if (!directTarget) {
+        reply.code(409);
+        return { error: 'Conversation has no DM target' };
+      }
+
+      const dmChannelId = `dm:${conv.agentId}`;
+      const rootRow = db.prepare(
+        `SELECT message_id as messageId
+         FROM channel_messages
+         WHERE channel_id = ?
+           AND (
+             target = ?
+             OR (
+               message_kind = 'task'
+               AND target = ?
+               AND EXISTS(
+                 SELECT 1
+                 FROM channel_messages thread_msgs
+                 WHERE thread_msgs.channel_id = channel_messages.channel_id
+                   AND thread_msgs.thread_root_id = SUBSTR(channel_messages.message_id, 1, 8)
+                   AND thread_msgs.target LIKE ?
+                 LIMIT 1
+               )
+             )
+           )
+           AND thread_root_id IS NULL
+           AND message_id LIKE ?
+         LIMIT 1`,
+      ).get(dmChannelId, directTarget, `#${dmChannelId}`, `${directTarget}:%`, `${requestedThreadRootId}%`) as { messageId: string } | undefined;
+      if (!rootRow) {
+        reply.code(404);
+        return { error: 'Thread root not found in this DM' };
+      }
+      ensureDmThreadContextSnapshot(db, {
+        channelId: dmChannelId,
+        directTarget,
+        threadRootId: rootRow.messageId.slice(0, 8),
+        rootMessageId: rootRow.messageId,
+      });
+
+      const thread = conversationManager.openAgentDirectThread(
+        conv.agentId,
+        conv.userId ?? null,
+        rootRow.messageId.slice(0, 8),
+      );
+      if (!thread) {
+        reply.code(404);
+        return { error: 'Unable to open DM task thread' };
+      }
+      return thread;
     },
   );
 

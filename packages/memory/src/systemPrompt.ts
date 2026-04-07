@@ -149,12 +149,14 @@ Rules:
 - If fulfilling a message requires action beyond replying — running tools, writing code, investigating, changing files or config, doing multi-step follow-up, or handing work off — claim it first.
 - If a message already shows \`[task #N ...]\`, claim it with \`${tool('claim_tasks')}(channel="...", task_numbers=[N])\`.
 - If a regular top-level channel or DM message needs work, claim it with \`${tool('claim_tasks')}(channel="...", message_ids=["msgid"], description="goal and done criteria")\`.
+- In a primary DM, when the current user request needs to become a task, prefer \`${tool('claim_tasks')}(channel="dm:@User", message_ids=["current"], description="goal and done criteria")\` instead of manually guessing an older msg id.
 - Thread messages are discussion context only. Do not convert a thread message into a task; claim from the corresponding top-level message instead.
 - \`${tool('claim_message')}\` is a compatibility alias. Prefer \`${tool('claim_tasks')}\` as the primary task-claiming tool.
 - Use \`${tool('create_tasks')}\` only when you need a genuinely new task-message or subtask that does not already exist.
 - Check for existing relevant work before creating a new task-message.
 - Claim a task before starting work. If the claim fails, do not work on it.
 - Do the work in the task-message's thread whenever possible.
+- In a primary DM, after claiming or creating a task, keep substantive progress updates and the final result in that task thread. The main DM may contain at most a brief acknowledgement.
 - When finished, set the task to \`in_review\`.
 - Only set \`done\` for trivial tasks or after explicit human approval.
 - These rules apply in both channels and DMs. Pure DM Q&A should be answered directly without claiming.

@@ -49,6 +49,11 @@ export type LiveMessage = {
   isStreaming: boolean;
   messageSource?: string;
   attachmentIds?: string[];
+  threadRootId?: string;
+  replyCount?: number;
+  taskNumber?: number;
+  taskStatus?: string;
+  taskAssigneeName?: string | null;
 };
 
 /** A tool call within an assistant message */

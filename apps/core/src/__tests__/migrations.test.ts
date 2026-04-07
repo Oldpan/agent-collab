@@ -28,7 +28,7 @@ describe('migrations', () => {
   it('schema_version 应为最新版本', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBeGreaterThanOrEqual(53);
+    expect(row.version).toBeGreaterThanOrEqual(54);
     db.close();
   });
 
@@ -235,7 +235,7 @@ describe('migrations', () => {
     expect(rows.map((row) => row.messageId)).toEqual(['legacy-root', 'legacy-thread']);
 
     const versionRow = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(versionRow.version).toBe(53);
+    expect(versionRow.version).toBe(54);
     db.close();
   });
 
@@ -290,7 +290,22 @@ describe('migrations', () => {
     );
 
     const versionRow = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(versionRow.version).toBe(53);
+    expect(versionRow.version).toBe(54);
+    db.close();
+  });
+
+  it('dm_thread_context_snapshots 表应存在并以 channel_id + thread_root_id 为主键', () => {
+    const db = createTestDb();
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all() as Array<{ name: string }>;
+    expect(tables.map((t) => t.name)).toContain('dm_thread_context_snapshots');
+
+    const pkRows = db.prepare(`PRAGMA table_info('dm_thread_context_snapshots')`).all() as Array<{ name: string; pk: number }>;
+    const pkCols = pkRows.filter((row) => row.pk > 0).map((row) => row.name);
+    expect(pkCols).toEqual(['channel_id', 'thread_root_id']);
+    expect(pkRows.map((row) => row.name)).toContain('trigger_message_id');
+    expect(pkRows.map((row) => row.name)).toContain('snapshot_json');
     db.close();
   });
 

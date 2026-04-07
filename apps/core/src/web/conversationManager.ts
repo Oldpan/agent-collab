@@ -452,6 +452,78 @@ export class ConversationManager {
     });
   }
 
+  openAgentDirectThread(agentId: string, userId: string | null | undefined, threadRootId: string): ConversationInfo | null {
+    const agent = this.getAgent(agentId);
+    if (!agent) return null;
+
+    const normalizedThreadRootId = normalizeChannelThreadRootId(threadRootId);
+    if (!normalizedThreadRootId) return null;
+
+    const existing = userId
+      ? this.db.prepare(
+          `SELECT id, channel_id as channelId, title, agent_type as agentType,
+                  reply_target as replyTarget,
+                  thread_kind as threadKind, is_primary_thread as isPrimaryThread,
+                  thread_root_id as threadRootId,
+                  workspace_path as workspacePath, status, node_id as nodeId,
+                  agent_id as agentId, user_id as userId, created_at as createdAt, updated_at as updatedAt
+           FROM conversations
+           WHERE agent_id = ? AND user_id = ? AND thread_kind = 'direct' AND is_primary_thread = 0 AND thread_root_id = ?
+           ORDER BY updated_at DESC
+           LIMIT 1`,
+        ).get(agentId, userId, normalizedThreadRootId) as ConversationInfo | undefined
+      : this.db.prepare(
+          `SELECT id, channel_id as channelId, title, agent_type as agentType,
+                  reply_target as replyTarget,
+                  thread_kind as threadKind, is_primary_thread as isPrimaryThread,
+                  thread_root_id as threadRootId,
+                  workspace_path as workspacePath, status, node_id as nodeId,
+                  agent_id as agentId, user_id as userId, created_at as createdAt, updated_at as updatedAt
+           FROM conversations
+           WHERE agent_id = ? AND user_id IS NULL AND thread_kind = 'direct' AND is_primary_thread = 0 AND thread_root_id = ?
+           ORDER BY updated_at DESC
+           LIMIT 1`,
+        ).get(agentId, normalizedThreadRootId) as ConversationInfo | undefined;
+
+    if (existing) {
+      const canonicalReplyTarget = this.computeReplyTarget({
+        conversationId: existing.id,
+        channelId: existing.channelId,
+        threadKind: existing.threadKind,
+        isPrimaryThread: false,
+        threadRootId: existing.threadRootId ?? normalizedThreadRootId,
+        userId: existing.userId ?? userId ?? null,
+      });
+      if ((existing.replyTarget ?? '').trim() !== canonicalReplyTarget) {
+        this.db.prepare(
+          `UPDATE conversations
+           SET reply_target = ?, updated_at = ?
+           WHERE id = ?`,
+        ).run(canonicalReplyTarget, Date.now(), existing.id);
+        existing.replyTarget = canonicalReplyTarget;
+      }
+      return {
+        ...existing,
+        isPrimaryThread: !!existing.isPrimaryThread,
+        threadRootId: existing.threadRootId ?? normalizedThreadRootId,
+        userId: existing.userId ?? userId ?? null,
+      };
+    }
+
+    return this.createConversation({
+      agentId,
+      agentType: agent.agentType,
+      workspacePath: agent.workspacePath ?? undefined,
+      channelId: agent.channelId,
+      nodeId: agent.nodeId ?? undefined,
+      threadKind: 'direct',
+      isPrimaryThread: false,
+      threadRootId: normalizedThreadRootId,
+      title: '',
+      userId: userId ?? null,
+    });
+  }
+
   openAgentChannelThread(agentId: string, channelId: string, threadRootId?: string | null): ConversationInfo | null {
     const agent = this.getAgent(agentId);
     if (!agent) return null;
@@ -745,8 +817,23 @@ export class ConversationManager {
     if (rows.length === 0) return [];
 
     const now = Date.now();
+    const dmChannelId = `dm:${agentId}`;
     this.db.prepare('DELETE FROM conversation_prompt_queue WHERE agent_id = ?').run(agentId);
-    this.db.prepare(`DELETE FROM channel_messages WHERE channel_id = ?`).run(`dm:${agentId}`);
+    this.db.prepare(`DELETE FROM channel_messages WHERE channel_id = ?`).run(dmChannelId);
+    this.db.prepare(`DELETE FROM tasks WHERE channel_id = ?`).run(dmChannelId);
+    this.db.prepare(`DELETE FROM channel_task_sequences WHERE channel_id = ?`).run(dmChannelId);
+    deleteTargetParticipantsForChannel(this.db, dmChannelId);
+    const hasDmThreadContextSnapshots = this.db
+      .prepare(
+        `SELECT 1 as hasRow
+         FROM sqlite_master
+         WHERE type = 'table' AND name = 'dm_thread_context_snapshots'
+         LIMIT 1`,
+      )
+      .get() as { hasRow: number } | undefined;
+    if (hasDmThreadContextSnapshots) {
+      this.db.prepare(`DELETE FROM dm_thread_context_snapshots WHERE channel_id = ?`).run(dmChannelId);
+    }
     this.db.prepare(`DELETE FROM agent_message_checkpoints WHERE agent_id = ?`).run(agentId);
 
     for (const row of rows) {
@@ -1022,9 +1109,9 @@ export class ConversationManager {
     if (params.threadKind === 'direct') {
       const userName = resolveDirectUserName(this.db, params.userId, this.config.humanUserName);
       return buildDirectReplyTarget({
-        conversationId: params.conversationId,
         isPrimaryThread: params.isPrimaryThread,
         userName,
+        threadRootId: params.threadRootId,
       });
     }
 

@@ -13,13 +13,15 @@ export function resolveDirectUserName(
 }
 
 export function buildDirectReplyTarget(params: {
-  conversationId: string;
   isPrimaryThread: boolean;
   userName: string;
+  threadRootId?: string | null;
 }): string {
   return params.isPrimaryThread
     ? `dm:@${params.userName}`
-    : `dm:@${params.userName}:${params.conversationId.slice(0, 8)}`;
+    : params.threadRootId?.trim()
+      ? `dm:@${params.userName}:${params.threadRootId.trim().slice(0, 8)}`
+      : `dm:@${params.userName}`;
 }
 
 export function resolveConversationReplyTarget(
@@ -55,9 +57,9 @@ export function resolveConversationReplyTarget(
   if (row.threadKind === 'direct') {
     const userName = resolveDirectUserName(db, row.userId, fallbackHumanUserName);
     return buildDirectReplyTarget({
-      conversationId: row.conversationId,
       isPrimaryThread: row.isPrimaryThread !== 0,
       userName,
+      threadRootId: row.threadRootId,
     });
   }
 

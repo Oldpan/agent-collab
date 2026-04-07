@@ -246,6 +246,44 @@ describe('internalAgentRouter', () => {
     expect(row.target).toBe('dm:@yanzong');
   });
 
+  it('显式无法解析的 DM target 应返回 400 且不落库', async () => {
+    const agent = manager.createAgent({
+      name: 'GhostTargetBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/ghost-target-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-ghost-target',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'reply ghost',
+    });
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target: 'dm:@ghost',
+        content: 'hello ghost',
+        conversationId: conv.id,
+      }),
+    });
+
+    expect(res.status).toBe(400);
+    const body = await res.json() as { error?: string };
+    expect(body.error).toBe('Cannot resolve DM target: dm:@ghost');
+
+    const row = db.prepare(
+      'SELECT COUNT(*) as count FROM channel_messages WHERE sender_id = ?',
+    ).get(agent.agentId) as { count: number };
+    expect(row.count).toBe(0);
+  });
+
   it('send_message 应拒绝纯空白内容', async () => {
     const agent = manager.createAgent({
       name: 'WhitespaceBob',
@@ -273,6 +311,224 @@ describe('internalAgentRouter', () => {
       'SELECT COUNT(*) as count FROM channel_messages WHERE sender_id = ?',
     ).get(agent.agentId) as { count: number };
     expect(row.count).toBe(0);
+  });
+
+  it('DM claim current 后未提供 target 时应默认把后续发送路由到 task-thread', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'DmThreadSendBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/dm-thread-send-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const dmChannelId = `dm:${agent.agentId}`;
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-dm-thread-send',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'claim current then work in thread',
+    });
+
+    const seq = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('currtask-0000-0000-0000-000000000000', ?, 'user', 'oldpan', 'user', 'dm:@oldpan', 'Check memory usage and treat it as a task', ?, ?)`,
+    ).run(dmChannelId, seq, now);
+
+    const claimRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: 'dm:@oldpan',
+        message_ids: ['current'],
+        description: 'Inspect current memory usage and summarize the result in the task thread.',
+        conversationId: conv.id,
+      }),
+    });
+    expect(claimRes.status).toBe(200);
+
+    const sendRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'Memory check complete.',
+        conversationId: conv.id,
+      }),
+    });
+
+    expect(sendRes.status).toBe(200);
+    const sendBody = await sendRes.json() as { target?: string };
+    expect(sendBody.target).toBe('dm:@oldpan:currtask');
+
+    const row = db.prepare(
+      `SELECT target, thread_root_id as threadRootId, run_id as runId
+       FROM channel_messages
+       WHERE sender_id = ?
+       ORDER BY created_at DESC, seq DESC
+       LIMIT 1`,
+    ).get(agent.agentId) as { target: string; threadRootId: string | null; runId: string | null };
+    expect(row).toEqual({
+      target: 'dm:@oldpan:currtask',
+      threadRootId: 'currtask',
+      runId: 'run-router-dm-thread-send',
+    });
+  });
+
+  it('显式非法 thread target 返回 400 时不应污染既有 DM task-thread override', async () => {
+    const now = Date.now();
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-oldpan', 'oldpan', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+    const agent = manager.createAgent({
+      name: 'DmThreadOverrideBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/dm-thread-override-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const dmChannelId = `dm:${agent.agentId}`;
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-dm-thread-override',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'keep valid override after invalid thread send',
+    });
+
+    const seq = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('keepovrd-0000-0000-0000-000000000000', ?, 'user', 'oldpan', 'user', 'dm:@oldpan', 'Turn this into a task and keep the thread target', ?, ?)`,
+    ).run(dmChannelId, seq, now);
+
+    const claimRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: 'dm:@oldpan',
+        message_ids: ['current'],
+        description: 'Do the requested work and keep subsequent updates in the task thread.',
+        conversationId: conv.id,
+      }),
+    });
+    expect(claimRes.status).toBe(200);
+
+    const invalidSendRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target: 'dm:@oldpan:missing00',
+        content: 'this should fail',
+        conversationId: conv.id,
+      }),
+    });
+    expect(invalidSendRes.status).toBe(400);
+    expect(await invalidSendRes.json()).toEqual({
+      error: 'Thread root not found for target: dm:@oldpan:missing00',
+    });
+
+    const followUpRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'still posting to the claimed task thread',
+        conversationId: conv.id,
+      }),
+    });
+    expect(followUpRes.status).toBe(200);
+    const followUpBody = await followUpRes.json() as { target?: string };
+    expect(followUpBody.target).toBe('dm:@oldpan:keepovrd');
+
+    const rows = db.prepare(
+      `SELECT target
+       FROM channel_messages
+       WHERE sender_id = ?
+       ORDER BY created_at ASC, seq ASC`,
+    ).all(agent.agentId) as Array<{ target: string }>;
+    expect(rows).toEqual([{ target: 'dm:@oldpan:keepovrd' }]);
+  });
+
+  it('显式非 thread target 应清除既有 DM task-thread override', async () => {
+    const now = Date.now();
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-oldpan', 'oldpan', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+    const agent = manager.createAgent({
+      name: 'DmThreadClearBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/dm-thread-clear-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const dmChannelId = `dm:${agent.agentId}`;
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-dm-thread-clear',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'clear thread override after explicit mainline reply',
+    });
+
+    const seq = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('clearovr-0000-0000-0000-000000000000', ?, 'user', 'oldpan', 'user', 'dm:@oldpan', 'Please treat this as a task', ?, ?)`,
+    ).run(dmChannelId, seq, now);
+
+    const claimRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: 'dm:@oldpan',
+        message_ids: ['current'],
+        description: 'Handle the task, but allow an explicit mainline reply to clear the override.',
+        conversationId: conv.id,
+      }),
+    });
+    expect(claimRes.status).toBe(200);
+
+    const explicitRootRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target: 'dm:@oldpan',
+        content: 'Starting work. Detailed updates will stay in the task thread.',
+        conversationId: conv.id,
+      }),
+    });
+    expect(explicitRootRes.status).toBe(200);
+    const explicitRootBody = await explicitRootRes.json() as { target?: string };
+    expect(explicitRootBody.target).toBe('dm:@oldpan');
+
+    const followUpRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'Mainline follow-up after clearing the override.',
+        conversationId: conv.id,
+      }),
+    });
+    expect(followUpRes.status).toBe(200);
+    const followUpBody = await followUpRes.json() as { target?: string };
+    expect(followUpBody.target).toBe('dm:@oldpan');
+
+    const rows = db.prepare(
+      `SELECT target
+       FROM channel_messages
+       WHERE sender_id = ?
+       ORDER BY created_at ASC, seq ASC`,
+    ).all(agent.agentId) as Array<{ target: string }>;
+    expect(rows).toEqual([
+      { target: 'dm:@oldpan' },
+      { target: 'dm:@oldpan' },
+    ]);
   });
 
   it('同一 run 在 final 之后仍允许继续发送；final 只保留消息语义', async () => {

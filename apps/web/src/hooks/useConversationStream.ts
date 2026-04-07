@@ -112,6 +112,15 @@ function toLiveChannelMessage(message: Awaited<ReturnType<typeof api.getConversa
     text: message.content,
     createdAt: new Date(message.createdAt).getTime(),
     isStreaming: false,
+    ...(message.threadRootId ? { threadRootId: message.threadRootId } : {}),
+    ...(typeof message.replyCount === "number" ? { replyCount: message.replyCount } : {}),
+    ...(message.taskNumber != null
+      ? {
+          taskNumber: message.taskNumber,
+          taskStatus: message.taskStatus,
+          taskAssigneeName: message.taskAssigneeName ?? null,
+        }
+      : {}),
     ...(message.messageSource ? { messageSource: message.messageSource } : {}),
     ...(message.attachmentIds?.length ? { attachmentIds: message.attachmentIds } : {}),
   };
@@ -124,6 +133,8 @@ type UseConversationStreamOptions = {
   onSeenSeq?: (seq: number) => void;
 };
 
+type ConversationContextSnapshot = Awaited<ReturnType<typeof api.getConversationChannelMessages>>["contextSnapshot"];
+
 type UseConversationStreamReturn = {
   messages: LiveMessage[];
   runs: LiveRun[];
@@ -131,6 +142,7 @@ type UseConversationStreamReturn = {
   connectionReady: boolean;
   hasActiveRun: boolean;
   pendingApproval: PendingApproval | null;
+  contextSnapshot: ConversationContextSnapshot | null;
   sendPrompt: (text: string, attachmentIds?: string[]) => boolean;
   respondApproval: (requestId: string, decision: "allow" | "deny") => void;
   cancel: () => void;
@@ -153,6 +165,7 @@ export function useConversationStream(
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [connectionReady, setConnectionReady] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
+  const [contextSnapshot, setContextSnapshot] = useState<ConversationContextSnapshot | null>(null);
   const hasActiveRun = runs.some((run) => run.isActive);
 
   // Refs for streaming accumulators
@@ -177,6 +190,7 @@ export function useConversationStream(
     syncInFlightRef.current = true;
     try {
       const data = await api.getConversationChannelMessages(conversationId, 100);
+      setContextSnapshot(data.contextSnapshot ?? null);
       if (!data.messages?.length) return;
       const latestSeq = data.messages.reduce(
         (max, message) => Math.max(max, Number(message.seq ?? 0)),
@@ -239,6 +253,7 @@ export function useConversationStream(
         setMessages([]);
         setRuns([]);
         setPendingApproval(null);
+        setContextSnapshot(null);
         textRef.current = "";
         thinkingRef.current = "";
         currentToolCallsRef.current = [];
@@ -282,17 +297,37 @@ export function useConversationStream(
           // (e.g. memory writes) after send_message. Let turn.end handle finalization.
           const { id, senderType, content, createdAt, messageSource } = event.message;
           const role = senderType === "user" ? "user" : "assistant";
-          setMessages((prev) => [
-            ...prev,
-            {
-              id,
-              role,
-              text: content,
-              createdAt: new Date(createdAt).getTime(),
-              isStreaming: false,
-              ...(messageSource ? { messageSource } : {}),
-            },
-          ]);
+          const liveMessage = {
+            id,
+            role,
+            text: content,
+            createdAt: new Date(createdAt).getTime(),
+            isStreaming: false,
+            ...(messageSource ? { messageSource } : {}),
+            ...(("threadRootId" in event.message && typeof event.message.threadRootId === "string")
+              ? { threadRootId: event.message.threadRootId }
+              : {}),
+            ...(("replyCount" in event.message && typeof event.message.replyCount === "number")
+              ? { replyCount: event.message.replyCount }
+              : {}),
+            ...(("taskNumber" in event.message && typeof event.message.taskNumber === "number")
+              ? {
+                  taskNumber: event.message.taskNumber,
+                  taskStatus: "taskStatus" in event.message ? event.message.taskStatus : undefined,
+                  taskAssigneeName: "taskAssigneeName" in event.message ? event.message.taskAssigneeName ?? null : null,
+                }
+              : {}),
+          } satisfies LiveMessage;
+          setMessages((prev) => {
+            const index = prev.findIndex((message) => message.id === liveMessage.id);
+            if (index < 0) return [...prev, liveMessage];
+            const next = [...prev];
+            next[index] = {
+              ...prev[index],
+              ...liveMessage,
+            };
+            return next;
+          });
           if (typeof event.message.seq === "number" && canMarkSeen()) {
             onSeenSeqRef.current?.(event.message.seq);
           }
@@ -691,6 +726,7 @@ export function useConversationStream(
     setStatus("idle");
     setConnectionReady(false);
     setPendingApproval(null);
+    setContextSnapshot(null);
     textRef.current = "";
     thinkingRef.current = "";
     currentToolCallsRef.current = [];
@@ -742,7 +778,9 @@ export function useConversationStream(
       api
         .getConversationChannelMessages(conversationId, 100)
         .then((data) => {
-          if (cancelled || !data.messages) return;
+          if (cancelled) return;
+          setContextSnapshot(data.contextSnapshot ?? null);
+          if (!data.messages) return;
           const latestSeq = data.messages.reduce(
             (max, message) => Math.max(max, Number(message.seq ?? 0)),
             0,
@@ -975,6 +1013,7 @@ export function useConversationStream(
     connectionReady,
     hasActiveRun,
     pendingApproval,
+    contextSnapshot,
     sendPrompt,
     respondApproval,
     cancel,

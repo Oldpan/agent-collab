@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 53;
+const LATEST_VERSION = 54;
 
 export function migrate(db: Db): void {
   db.exec(
@@ -1059,6 +1059,30 @@ export function migrate(db: Db): void {
     `);
     if (current < 53) {
       db.exec(`UPDATE schema_version SET version = 53;`);
+    }
+  }
+
+  const dmThreadContextSnapshotTableExists = !!db.prepare(
+    `SELECT 1 FROM sqlite_master
+     WHERE type = 'table' AND name = 'dm_thread_context_snapshots'
+     LIMIT 1`,
+  ).get();
+  const effectiveVersionRow = db.prepare('SELECT version FROM schema_version').get() as { version: number };
+  if (effectiveVersionRow.version < 54 || !dmThreadContextSnapshotTableExists) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS dm_thread_context_snapshots (
+        channel_id         TEXT NOT NULL,
+        thread_root_id     TEXT NOT NULL,
+        trigger_message_id TEXT,
+        snapshot_json      TEXT NOT NULL,
+        created_at         INTEGER NOT NULL,
+        PRIMARY KEY (channel_id, thread_root_id),
+        FOREIGN KEY(trigger_message_id) REFERENCES channel_messages(message_id) ON DELETE SET NULL
+      );
+    `);
+
+    if (effectiveVersionRow.version < 54) {
+      db.exec(`UPDATE schema_version SET version = 54;`);
     }
   }
 }

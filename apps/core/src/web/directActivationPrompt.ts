@@ -1,4 +1,4 @@
-import type { ActivationContextMessage } from './activationContext.js';
+import type { ActivationContextMessage, DmThreadContextSnapshot } from './activationContext.js';
 import { buildExactTargetHistoryContextText } from './channelActivationPrompt.js';
 
 type DirectActivationPromptParams = {
@@ -13,6 +13,8 @@ type DirectActivationContextParams = {
   recentMessages?: ActivationContextMessage[];
   unreadCount?: number;
   oldestVisibleSeq?: number;
+  rootMessage?: ActivationContextMessage;
+  dmContextSnapshot?: DmThreadContextSnapshot;
 };
 
 export function buildDirectActivationPrompt(params: DirectActivationPromptParams): string {
@@ -38,5 +40,33 @@ export function buildDirectActivationPrompt(params: DirectActivationPromptParams
 }
 
 export function buildDirectActivationContextText(params: DirectActivationContextParams): string {
-  return buildExactTargetHistoryContextText(params);
+  const sections: string[] = [];
+  if (params.rootMessage) {
+    const triggerTag = params.dmContextSnapshot?.triggerMessageId === params.rootMessage.messageId ? ' [Trigger]' : '';
+    sections.push(
+      [
+        '[Thread root message]',
+        `@${params.rootMessage.senderName}${triggerTag}: ${params.rootMessage.content}`,
+      ].join('\n'),
+    );
+  }
+
+  const exactHistory = buildExactTargetHistoryContextText(params);
+  if (exactHistory.trim()) {
+    sections.push(exactHistory);
+  }
+
+  if (params.dmContextSnapshot?.messages.length) {
+    sections.push(
+      [
+        '[Context from DM]',
+        ...params.dmContextSnapshot.messages.map((message) => {
+          const triggerTag = params.dmContextSnapshot?.triggerMessageId === message.messageId ? ' [Trigger]' : '';
+          return `@${message.senderName}${triggerTag}: ${message.content}`;
+        }),
+      ].join('\n'),
+    );
+  }
+
+  return sections.join('\n\n');
 }

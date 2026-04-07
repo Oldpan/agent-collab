@@ -47,6 +47,24 @@ type MessageRow = {
   threadRootId: string | null;
 };
 
+type BroadcastChannelMessage = ServerEvent & {
+  type: 'channel.message';
+  message: {
+    id: string;
+    senderName: string;
+    senderType: 'user' | 'agent' | 'system';
+    content: string;
+    createdAt: string;
+    seq?: number;
+    threadRootId?: string;
+    messageSource?: string;
+    taskNumber?: number;
+    taskStatus?: string;
+    taskAssigneeName?: string | null;
+    attachmentIds?: string[];
+  };
+};
+
 type TaskRow = {
   taskId: string;
   channelId: string;
@@ -119,6 +137,32 @@ function fetchTaskContext(db: Db, channelId: string, messageId: string, limit = 
   ).all(channelId, seqRow.seq, limit) as ContextMsg[]).reverse();
 }
 
+function doesThreadRootExist(db: Db, channelId: string, threadRootId: string): boolean {
+  const row = db.prepare(
+    `SELECT 1
+     FROM channel_messages
+     WHERE channel_id = ?
+       AND thread_root_id IS NULL
+       AND SUBSTR(message_id, 1, 8) = ?
+     LIMIT 1`,
+  ).get(channelId, threadRootId) as { 1: number } | undefined;
+  return Boolean(row);
+}
+
+function isKnownDmTargetPeer(db: Db, target: string): boolean {
+  const match = target.match(/^dm:@([^:]+)(?::[a-zA-Z0-9-]+)?$/);
+  if (!match) return false;
+  const name = match[1];
+  const userRow = db.prepare(
+    `SELECT 1 FROM users WHERE username = ? LIMIT 1`,
+  ).get(name) as { 1: number } | undefined;
+  if (userRow) return true;
+  const agentRow = db.prepare(
+    `SELECT 1 FROM agents WHERE name = ? LIMIT 1`,
+  ).get(name) as { 1: number } | undefined;
+  return Boolean(agentRow);
+}
+
 /**
  * Registers internal agent API routes — used by channel-bridge MCP server.
  *
@@ -136,6 +180,8 @@ export function registerInternalAgentRoutes(
   internalAuthToken?: string,
   attachmentsDir?: string,
 ): void {
+  const runThreadSendOverrides = new Map<string, string>();
+
   const broadcastChannelTasksChanged = (channelId: string) => {
     broadcastToChannel(channelId, {
       type: 'channel.tasks.changed',
@@ -199,6 +245,7 @@ export function registerInternalAgentRoutes(
     }
 
     const { target, content, kind, conversationId, attachmentIds } = req.body ?? {};
+    const explicitTarget = target?.trim() || null;
     const normalizedContent = typeof content === 'string' ? content.trim() : '';
     if (!normalizedContent) {
       reply.code(400);
@@ -217,8 +264,9 @@ export function registerInternalAgentRoutes(
       }
     }
 
+    const activeRunId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
     const defaultTarget = conversationId ? resolveDefaultReplyTarget(db, conversationId, humanUserName) : null;
-    const initialTarget = target?.trim() || defaultTarget;
+    const initialTarget = target?.trim() || (activeRunId ? runThreadSendOverrides.get(activeRunId) : null) || defaultTarget;
     if (!initialTarget) {
       reply.code(400);
       return { error: 'target is required unless conversationId is provided for the current conversation reply' };
@@ -226,6 +274,11 @@ export function registerInternalAgentRoutes(
     const resolvedTarget = conversationId
       ? normalizeTargetForConversation(db, conversationId, initialTarget)
       : initialTarget;
+
+    if (explicitTarget !== null && resolvedTarget.startsWith('dm:') && !isKnownDmTargetPeer(db, resolvedTarget)) {
+      reply.code(400);
+      return { error: `Cannot resolve DM target: ${resolvedTarget}` };
+    }
 
     // For DM targets that don't resolve to a known agent (e.g. dm:@User — a human),
     // fall back to the sending agent's own DM channel so the reply is visible to frontend.
@@ -238,8 +291,19 @@ export function registerInternalAgentRoutes(
     const now = Date.now();
     const messageId = randomUUID();
     const seq = allocateNextChannelMessageSeq(db, channelId);
-    const runId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
+    const runId = activeRunId;
     const threadRootId = resolveThreadRootId(resolvedTarget);
+    if (threadRootId && !doesThreadRootExist(db, channelId, threadRootId)) {
+      reply.code(400);
+      return { error: `Thread root not found for target: ${resolvedTarget}` };
+    }
+    if (activeRunId && explicitTarget !== null) {
+      if (threadRootId) {
+        runThreadSendOverrides.set(activeRunId, resolvedTarget);
+      } else {
+        runThreadSendOverrides.delete(activeRunId);
+      }
+    }
 
     const attachmentIdsJson = Array.isArray(attachmentIds) && attachmentIds.length > 0
       ? JSON.stringify(attachmentIds)
@@ -286,7 +350,15 @@ export function registerInternalAgentRoutes(
       },
     };
 
-    broadcastToAgent(agentId, channelMessageEvent, conversationId);
+    const targetConversationId = ensureConversationIdForReplyTarget(
+      db,
+      conversationManager,
+      agentId,
+      resolvedTarget,
+    );
+    if (targetConversationId) {
+      broadcastToAgent(agentId, channelMessageEvent, targetConversationId);
+    }
 
     // Public channels (not DMs) also broadcast to channel-level WS subscribers
     if (!channelId.startsWith('dm:')) {
@@ -1008,7 +1080,7 @@ export function registerInternalAgentRoutes(
    */
   app.post<{
     Params: { agentId: string };
-    Body: { channel: string; tasks: Array<{ title: string; description?: string }> };
+    Body: { channel: string; tasks: Array<{ title: string; description?: string }>; conversationId?: string };
   }>('/api/internal/agent/:agentId/tasks', async (req, reply) => {
     const { agentId } = req.params;
     const agent = conversationManager.getAgent(agentId);
@@ -1017,7 +1089,7 @@ export function registerInternalAgentRoutes(
       return { error: 'Agent not found' };
     }
 
-    const { channel, tasks } = req.body ?? {};
+    const { channel, tasks, conversationId } = req.body ?? {};
     if (!channel || !Array.isArray(tasks) || tasks.length === 0) {
       reply.code(400);
       return { error: 'channel and non-empty tasks array are required' };
@@ -1042,9 +1114,17 @@ export function registerInternalAgentRoutes(
 
     const now = Date.now();
     const created: Array<{ taskId: string; taskNumber: number; title: string; messageId: string }> = [];
-
-    const channelRow = db.prepare('SELECT name FROM channels WHERE channel_id = ?').get(channelId) as { name: string } | undefined;
-    const channelName = channelRow?.name ?? channelId;
+    const currentConversation = typeof conversationId === 'string' && conversationId.trim()
+      ? conversationManager.getConversation(conversationId.trim())
+      : null;
+    const currentPrimaryDmTarget = currentConversation
+      && currentConversation.agentId === agentId
+      && currentConversation.threadKind === 'direct'
+      && currentConversation.isPrimaryThread
+      && channelId === `dm:${agentId}`
+      ? (currentConversation.replyTarget ?? resolveDefaultReplyTarget(db, currentConversation.id, humanUserName) ?? '').trim()
+      : '';
+    const currentConversationRunId = currentConversation ? findActiveConversationRunId(db, currentConversation.id) : null;
 
     const insertMessage = db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
@@ -1063,20 +1143,40 @@ export function registerInternalAgentRoutes(
         const messageId = randomUUID();
         const taskNumber = allocateNextTaskNumber(db, channelId);
         const seq = allocateNextChannelMessageSeq(db, channelId);
-        const target = `#${channelName}`;
+        const target = canonicalTaskTarget(channelId, channel, db);
         insertMessage.run(messageId, channelId, agentId, agent.name, target, taskDef.title, seq, now);
         insertTask.run(taskId, channelId, taskNumber, taskDef.title, taskDef.description, messageId, agentId, agent.name, now, now);
         created.push({ taskId, taskNumber, title: taskDef.title, messageId });
-        broadcastToChannel(channelId, {
+        const taskMessageEvent: ServerEvent = {
           type: 'channel.message',
           message: {
             id: messageId, senderName: agent.name, senderType: 'agent', content: taskDef.title,
             createdAt: new Date(now).toISOString(), seq,
             taskNumber, taskStatus: 'todo', taskAssigneeName: null,
           },
-        });
+        };
+        if (channelId.startsWith('dm:')) {
+          const targetConversationId = ensureConversationIdForReplyTarget(
+            db,
+            conversationManager,
+            agentId,
+            target,
+          );
+          if (targetConversationId) {
+            broadcastToAgent(agentId, taskMessageEvent, targetConversationId);
+          }
+        } else {
+          broadcastToChannel(channelId, taskMessageEvent);
+        }
       }
     })();
+
+    if (created.length === 1 && currentPrimaryDmTarget && currentConversationRunId) {
+      runThreadSendOverrides.set(
+        currentConversationRunId,
+        `${currentPrimaryDmTarget}:${created[0].messageId.slice(0, 8)}`,
+      );
+    }
 
     if (created.length > 0) broadcastChannelTasksChanged(channelId);
 
@@ -1260,7 +1360,7 @@ export function registerInternalAgentRoutes(
       return { error: 'Agent not found' };
     }
 
-    const { channel, task_numbers, message_ids, title, description } = req.body ?? {};
+    const { channel, task_numbers, message_ids, title, description, conversationId } = req.body ?? {};
     if (
       !channel
       || ((!Array.isArray(task_numbers) || task_numbers.length === 0)
@@ -1279,6 +1379,84 @@ export function registerInternalAgentRoutes(
       reply.code(400);
       return { error: `Cannot resolve channel: ${channel}` };
     }
+
+    const currentConversation = typeof conversationId === 'string' && conversationId.trim()
+      ? conversationManager.getConversation(conversationId.trim())
+      : null;
+    const currentPrimaryDmTarget = currentConversation
+      && currentConversation.agentId === agentId
+      && currentConversation.threadKind === 'direct'
+      && currentConversation.isPrimaryThread
+      && channelId === `dm:${agentId}`
+      ? (currentConversation.replyTarget ?? resolveDefaultReplyTarget(db, currentConversation.id, humanUserName) ?? '').trim()
+      : '';
+    const currentConversationRunId = currentConversation ? findActiveConversationRunId(db, currentConversation.id) : null;
+    const setCurrentDmThreadOverride = (messageId?: string | null) => {
+      if (!currentPrimaryDmTarget || !currentConversationRunId || !messageId) return;
+      runThreadSendOverrides.set(
+        currentConversationRunId,
+        `${currentPrimaryDmTarget}:${messageId.slice(0, 8)}`,
+      );
+    };
+    const normalizedDescription = description?.trim() ?? '';
+
+    const resolveClaimMessageRow = (messageIdPrefix: string) => {
+      const normalizedPrefix = messageIdPrefix.trim();
+      if (!normalizedPrefix) {
+        return { reason: 'Message ID is required' } as const;
+      }
+      if (/^(current|trigger)$/i.test(normalizedPrefix)) {
+        if (!currentPrimaryDmTarget) {
+          return { reason: '"current" is only available in the current primary DM conversation' } as const;
+        }
+        const row = db.prepare(
+          `SELECT message_id as messageId, content, thread_root_id as threadRootId, sender_type as senderType, sender_name as senderName,
+                  target, seq, created_at as createdAt, attachment_ids as attachmentIds
+           FROM channel_messages
+           WHERE channel_id = ?
+             AND target = ?
+             AND thread_root_id IS NULL
+             AND sender_type = 'user'
+           ORDER BY seq DESC
+           LIMIT 1`,
+        ).get(channelId, currentPrimaryDmTarget) as {
+          messageId: string;
+          content: string;
+          threadRootId: string | null;
+          senderType: string;
+          senderName: string;
+          target: string;
+          seq: number;
+          createdAt: number;
+          attachmentIds: string | null;
+        } | undefined;
+        if (!row) {
+          return { reason: 'No current user DM message is available to claim' } as const;
+        }
+        return { row } as const;
+      }
+
+      const row = db.prepare(
+        `SELECT message_id as messageId, content, thread_root_id as threadRootId, sender_type as senderType, sender_name as senderName,
+                target, seq, created_at as createdAt, attachment_ids as attachmentIds
+         FROM channel_messages
+         WHERE message_id LIKE ? AND channel_id = ?`,
+      ).get(`${normalizedPrefix}%`, channelId) as {
+        messageId: string;
+        content: string;
+        threadRootId: string | null;
+        senderType: string;
+        senderName: string;
+        target: string;
+        seq: number;
+        createdAt: number;
+        attachmentIds: string | null;
+      } | undefined;
+      if (!row) {
+        return { reason: 'Message not found' } as const;
+      }
+      return { row } as const;
+    };
 
     const now = Date.now();
     const results: Array<{ taskNumber?: number; success: boolean; reason?: string; messageId?: string | null; context?: ContextMsg[] }> = [];
@@ -1329,21 +1507,23 @@ export function registerInternalAgentRoutes(
         taskNumber, success: true, messageId: row.messageId ?? null,
         context: row.messageId ? fetchTaskContext(db, channelId, row.messageId) : [],
       });
+      setCurrentDmThreadOverride(row.messageId);
     }
 
     for (const messageIdPrefix of message_ids ?? []) {
-      const messageRow = db.prepare(
-        `SELECT message_id as messageId, content, thread_root_id as threadRootId
-         FROM channel_messages
-         WHERE message_id LIKE ? AND channel_id = ?`,
-      ).get(`${messageIdPrefix}%`, channelId) as {
-        messageId: string;
-        content: string;
-        threadRootId: string | null;
-      } | undefined;
+      const resolvedMessage = resolveClaimMessageRow(messageIdPrefix);
+      if (!('row' in resolvedMessage)) {
+        results.push({ success: false, messageId: messageIdPrefix, reason: resolvedMessage.reason });
+        continue;
+      }
+      const messageRow = resolvedMessage.row;
 
-      if (!messageRow) {
-        results.push({ success: false, messageId: messageIdPrefix, reason: 'Message not found' });
+      if (currentPrimaryDmTarget && messageRow.senderType !== 'user') {
+        results.push({
+          success: false,
+          messageId: messageRow.messageId,
+          reason: 'In a primary DM, claim by message_ids must use a user message. Use message_ids=["current"] for the current request.',
+        });
         continue;
       }
       if (messageRow.threadRootId) {
@@ -1385,7 +1565,13 @@ export function registerInternalAgentRoutes(
           `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
                              claimed_by_agent_id, claimed_by_name, created_at, updated_at)
            VALUES(?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?)`,
-        ).run(taskId, channelId, taskNumber, taskTitle, description!.trim(), messageRow.messageId, agentId, agent.name, now, now);
+        ).run(taskId, channelId, taskNumber, taskTitle, normalizedDescription, messageRow.messageId, agentId, agent.name, now, now);
+
+        db.prepare(
+          `UPDATE channel_messages
+           SET message_kind = 'task'
+           WHERE message_id = ?`,
+        ).run(messageRow.messageId);
 
         syncTaskThreadOwner(db, {
           taskId,
@@ -1401,6 +1587,34 @@ export function registerInternalAgentRoutes(
         messageId: messageRow.messageId,
         context: fetchTaskContext(db, channelId, messageRow.messageId),
       });
+      setCurrentDmThreadOverride(messageRow.messageId);
+
+      if (currentPrimaryDmTarget && messageRow.target === currentPrimaryDmTarget) {
+        const taskRootEvent: BroadcastChannelMessage = {
+          type: 'channel.message',
+          message: {
+            id: messageRow.messageId,
+            senderName: messageRow.senderName,
+            senderType: messageRow.senderType as 'user' | 'agent' | 'system',
+            content: messageRow.content,
+            createdAt: new Date(messageRow.createdAt).toISOString(),
+            seq: messageRow.seq,
+            taskNumber,
+            taskStatus: 'in_progress',
+            taskAssigneeName: agent.name,
+            ...(messageRow.attachmentIds ? { attachmentIds: JSON.parse(messageRow.attachmentIds) as string[] } : {}),
+          },
+        };
+        const targetConversationId = ensureConversationIdForReplyTarget(
+          db,
+          conversationManager,
+          agentId,
+          currentPrimaryDmTarget,
+        );
+        if (targetConversationId) {
+          broadcastToAgent(agentId, taskRootEvent, targetConversationId);
+        }
+      }
     }
 
     if (changed) broadcastChannelTasksChanged(channelId);
@@ -1606,6 +1820,17 @@ function resolveDefaultReplyTarget(db: Db, conversationId: string, humanUserName
   return resolveConversationReplyTarget(db, conversationId, humanUserName);
 }
 
+function canonicalTaskTarget(channelId: string, requestedTarget: string, db: Db): string {
+  if (channelId.startsWith('dm:')) {
+    const dmMatch = requestedTarget.trim().match(/^dm:@[^:]+/);
+    return dmMatch ? dmMatch[0] : requestedTarget.trim();
+  }
+
+  const channelRow = db.prepare('SELECT name FROM channels WHERE channel_id = ?').get(channelId) as { name: string } | undefined;
+  const channelName = channelRow?.name ?? channelId;
+  return `#${channelName}`;
+}
+
 function normalizeTargetForConversation(db: Db, conversationId: string, target: string): string {
   const row = db.prepare(
     `SELECT c.channel_id as channelId, c.thread_kind as threadKind, c.thread_root_id as threadRootId,
@@ -1624,7 +1849,7 @@ function normalizeTargetForConversation(db: Db, conversationId: string, target: 
 
   const channelName = row.channelName ?? row.channelId;
   const canonicalBaseTarget = `#${channelName}`;
-  const sameChannelThread = target.match(/^#([^:]+):([a-zA-Z0-9]+)$/);
+  const sameChannelThread = target.match(/^#([^:]+):([a-zA-Z0-9-]+)$/);
   if (sameChannelThread) {
     const [, targetChannel] = sameChannelThread;
     if (targetChannel === channelName || targetChannel === row.channelId) {
@@ -1637,7 +1862,7 @@ function normalizeTargetForConversation(db: Db, conversationId: string, target: 
 
 /** Extracts the thread shortId from targets like "#general:a1b2c3d4". Returns null for non-thread targets. */
 function resolveThreadRootId(target: string): string | null {
-  const match = target.match(/^(?:#[^:]+|dm:@[^:]+):([a-zA-Z0-9]+)$/);
+  const match = target.match(/^(?:#[^:]+|dm:@[^:]+):([a-zA-Z0-9-]+)$/);
   return match ? match[1] : null;
 }
 
@@ -1654,4 +1879,49 @@ function findActiveConversationRunId(db: Db, conversationId: string): string | n
     )
     .get(conversationId) as { runId: string } | undefined;
   return row?.runId ?? null;
+}
+
+function findConversationIdForReplyTarget(db: Db, agentId: string, replyTarget: string): string | null {
+  const row = db.prepare(
+    `SELECT id
+     FROM conversations
+     WHERE agent_id = ? AND reply_target = ?
+     ORDER BY updated_at DESC
+     LIMIT 1`,
+  ).get(agentId, replyTarget) as { id: string } | undefined;
+  return row?.id ?? null;
+}
+
+function ensureConversationIdForReplyTarget(
+  db: Db,
+  conversationManager: ConversationManager,
+  agentId: string,
+  replyTarget: string,
+): string | null {
+  const existingId = findConversationIdForReplyTarget(db, agentId, replyTarget);
+  if (existingId) return existingId;
+
+  const threadRootId = resolveThreadRootId(replyTarget);
+  const dmMatch = replyTarget.match(/^dm:@([^:]+)(?::([a-zA-Z0-9-]+))?$/);
+  if (dmMatch) {
+    const userName = dmMatch[1];
+    const userRow = db.prepare(
+      `SELECT id FROM users WHERE username = ? LIMIT 1`,
+    ).get(userName) as { id: string } | undefined;
+    if (!userRow) return null;
+    if (threadRootId) {
+      if (!doesThreadRootExist(db, `dm:${agentId}`, threadRootId)) return null;
+      return conversationManager.openAgentDirectThread(agentId, userRow?.id ?? null, threadRootId)?.id ?? null;
+    }
+    return conversationManager.openAgentThread(agentId, userRow.id)?.id ?? null;
+  }
+
+  if (threadRootId) {
+    const channelId = resolveChannelFromTarget(replyTarget, db);
+    if (!channelId) return null;
+    if (!doesThreadRootExist(db, channelId, threadRootId)) return null;
+    return conversationManager.openAgentChannelThread(agentId, channelId, threadRootId)?.id ?? null;
+  }
+
+  return null;
 }

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { createTestDb, createTestConfig } from './helpers.js';
 import { ConversationManager } from '../web/conversationManager.js';
 import { listTargetParticipants, upsertTargetParticipant } from '../web/targetParticipants.js';
+import { allocateNextTaskNumber } from '../web/taskNumbers.js';
 import type { Db } from '@agent-collab/runtime-acp';
 
 describe('ConversationManager', () => {
@@ -297,19 +298,46 @@ describe('ConversationManager', () => {
 
   describe('resetAgent', () => {
     it('应重置 agent workspace 相关会话历史并换新 session_key', () => {
+      const now = Date.now();
+      db.prepare(
+        `INSERT INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+         VALUES(?, ?, ?, 0, ?, ?)`,
+      ).run('user-yanzong', 'yanzong', 'hash', now, now);
       const agent = manager.createAgent({
         name: 'Resettable',
         agentType: 'claude_acp',
         nodeId: 'node-1',
         workspacePath: '/tmp/resettable-agent',
       });
-      const conv = manager.openAgentThread(agent.agentId);
+      const conv = manager.openAgentThread(agent.agentId, 'user-yanzong');
       expect(conv).not.toBeNull();
       if (!conv) throw new Error('missing conversation');
+      const dmChannelId = `dm:${agent.agentId}`;
 
       const before = db.prepare(
         'SELECT session_key as sessionKey FROM conversations WHERE id = ?',
       ).get(conv.id) as { sessionKey: string };
+
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run('dm-reset-msg-1', dmChannelId, 'user-yanzong', 'yanzong', 'user', 'dm:@yanzong', 'reset me', 1, now);
+      db.prepare(
+        `INSERT INTO tasks(task_id, channel_id, task_number, title, status, message_id, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, ?, ?, ?)`,
+      ).run('dm-reset-task-1', dmChannelId, 1, 'reset dm task', 'in_progress', 'dm-reset-msg-1', now, now);
+      db.prepare(
+        `INSERT INTO channel_task_sequences(channel_id, next_task_number)
+         VALUES(?, ?)`,
+      ).run(dmChannelId, 2);
+      db.prepare(
+        `INSERT INTO target_participants(agent_id, channel_id, thread_root_id, role, joined_at, last_active_at)
+         VALUES(?, ?, ?, ?, ?, ?)`,
+      ).run(agent.agentId, dmChannelId, 'dm-reset-msg-1', 'owner', now, now);
+      db.prepare(
+        `INSERT INTO dm_thread_context_snapshots(channel_id, thread_root_id, trigger_message_id, snapshot_json, created_at)
+         VALUES(?, ?, ?, ?, ?)`,
+      ).run(dmChannelId, 'dm-reset-msg-1', 'dm-reset-msg-1', '[]', now);
 
       db.prepare(
         'INSERT INTO runs(run_id, session_key, prompt_text, started_at) VALUES(?, ?, ?, ?)',
@@ -353,6 +381,21 @@ describe('ConversationManager', () => {
       const queueRows = db.prepare(
         'SELECT count(*) as count FROM conversation_prompt_queue WHERE agent_id = ?',
       ).get(agent.agentId) as { count: number };
+      const dmMessages = db.prepare(
+        'SELECT count(*) as count FROM channel_messages WHERE channel_id = ?',
+      ).get(dmChannelId) as { count: number };
+      const dmTasks = db.prepare(
+        'SELECT count(*) as count FROM tasks WHERE channel_id = ?',
+      ).get(dmChannelId) as { count: number };
+      const dmTaskSequences = db.prepare(
+        'SELECT count(*) as count FROM channel_task_sequences WHERE channel_id = ?',
+      ).get(dmChannelId) as { count: number };
+      const dmParticipants = db.prepare(
+        'SELECT count(*) as count FROM target_participants WHERE channel_id = ?',
+      ).get(dmChannelId) as { count: number };
+      const dmSnapshots = db.prepare(
+        'SELECT count(*) as count FROM dm_thread_context_snapshots WHERE channel_id = ?',
+      ).get(dmChannelId) as { count: number };
       const newSession = db.prepare(
         'SELECT count(*) as count FROM sessions WHERE session_key = ?',
       ).get(after.sessionKey) as { count: number };
@@ -361,7 +404,13 @@ describe('ConversationManager', () => {
       expect(oldEvents.count).toBe(0);
       expect(oldDebugInputs.count).toBe(0);
       expect(queueRows.count).toBe(0);
+      expect(dmMessages.count).toBe(0);
+      expect(dmTasks.count).toBe(0);
+      expect(dmTaskSequences.count).toBe(0);
+      expect(dmParticipants.count).toBe(0);
+      expect(dmSnapshots.count).toBe(0);
       expect(newSession.count).toBe(1);
+      expect(allocateNextTaskNumber(db, dmChannelId)).toBe(1);
     });
   });
 

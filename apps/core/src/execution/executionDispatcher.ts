@@ -161,6 +161,8 @@ export class ExecutionDispatcher {
               recentMessages: dmActivationContext.recentMessages,
               unreadCount: dmActivationContext.unreadCount,
               oldestVisibleSeq: dmActivationContext.oldestVisibleSeq,
+              rootMessage: dmActivationContext.rootMessage,
+              dmContextSnapshot: dmActivationContext.dmContextSnapshot,
             });
           }
         }

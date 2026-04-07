@@ -1,7 +1,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AgentInfo, TaskInfo } from "@agent-collab/protocol";
+import type { AgentInfo, ConversationInfo, TaskInfo } from "@agent-collab/protocol";
 import { Button } from "@/components/ui/button";
 import {
+  getConversationTasks,
   getAgentTasks,
   type AgentTask,
   unclaimAgentDmTask,
@@ -16,10 +17,12 @@ import { TaskEditorDialog, type TaskEditorValues } from "@/features/channel/Task
 
 type AgentTasksPanelProps = {
   agent: AgentInfo | null;
+  conversation?: ConversationInfo | null;
   onOpenTask?: (task: AgentTask) => void;
 };
 
 type TaskScopeFilter = "all" | "channel" | "dm";
+type ConversationTaskView = "current_dm" | "all_agent";
 
 function formatStatus(status: TaskInfo["status"]): string {
   switch (status) {
@@ -72,17 +75,19 @@ function replaceTask(items: AgentTask[], updated: AgentTask): AgentTask[] {
   return sortTasks(items.map((item) => (item.taskId === updated.taskId ? updated : item)));
 }
 
-export function AgentTasksPanel({ agent, onOpenTask }: AgentTasksPanelProps) {
+export function AgentTasksPanel({ agent, conversation, onOpenTask }: AgentTasksPanelProps) {
   const [tasks, setTasks] = useState<AgentTask[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<TaskInfo["status"] | "all">("all");
   const [scopeFilter, setScopeFilter] = useState<TaskScopeFilter>("all");
+  const [conversationView, setConversationView] = useState<ConversationTaskView>("current_dm");
   const [editingTask, setEditingTask] = useState<AgentTask | null>(null);
   const [editing, setEditing] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [updatingTaskId, setUpdatingTaskId] = useState<string | null>(null);
   const [unclaimingTaskId, setUnclaimingTaskId] = useState<string | null>(null);
+  const isPrimaryDirectConversation = Boolean(conversation?.threadKind === "direct" && conversation?.isPrimaryThread);
 
   const loadTasks = useCallback(async () => {
     if (!agent) {
@@ -94,18 +99,25 @@ export function AgentTasksPanel({ agent, onOpenTask }: AgentTasksPanelProps) {
     setLoading(true);
     setError(null);
     try {
-      const result = await getAgentTasks(agent.agentId, statusFilter, scopeFilter);
+      const result = isPrimaryDirectConversation && conversation
+        ? await getConversationTasks(conversation.id, conversationView, statusFilter)
+        : await getAgentTasks(agent.agentId, statusFilter, scopeFilter);
       setTasks(sortTasks(result.tasks));
     } catch (err) {
       setError(String((err as Error)?.message ?? err));
     } finally {
       setLoading(false);
     }
-  }, [agent, scopeFilter, statusFilter]);
+  }, [agent, conversation, conversationView, isPrimaryDirectConversation, scopeFilter, statusFilter]);
 
   useEffect(() => {
     void loadTasks();
   }, [loadTasks]);
+
+  useEffect(() => {
+    if (!isPrimaryDirectConversation) return;
+    setConversationView("current_dm");
+  }, [conversation?.id, isPrimaryDirectConversation]);
 
   const counts = useMemo(() => {
     const done = tasks.filter((task) => task.status === "done").length;
@@ -189,21 +201,53 @@ export function AgentTasksPanel({ agent, onOpenTask }: AgentTasksPanelProps) {
           </span>
           <span className="text-zinc-500">{counts.total} total</span>
         </div>
-        <div className="grid gap-2 md:grid-cols-2">
-          <label className="space-y-1">
-            <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
-              Scope
-            </span>
-            <select
-              value={scopeFilter}
-              onChange={(event) => setScopeFilter(event.target.value as TaskScopeFilter)}
-              className="h-9 w-full rounded-sm border-2 border-zinc-900 bg-white px-3 text-sm text-zinc-900"
-            >
-              <option value="all">All tasks</option>
-              <option value="channel">Channel only</option>
-              <option value="dm">DM only</option>
-            </select>
-          </label>
+        <div className={cn("grid gap-2", isPrimaryDirectConversation ? "md:grid-cols-[minmax(0,1fr)_220px]" : "md:grid-cols-2")}>
+          {isPrimaryDirectConversation ? (
+            <div className="space-y-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
+                View
+              </span>
+              <div className="flex flex-wrap gap-2">
+                <Button
+                  size="sm"
+                  variant={conversationView === "current_dm" ? "default" : "outline"}
+                  className={cn(
+                    "h-9 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+                    conversationView === "current_dm" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-white text-zinc-700 hover:bg-[#fff1a9]",
+                  )}
+                  onClick={() => setConversationView("current_dm")}
+                >
+                  Current DM
+                </Button>
+                <Button
+                  size="sm"
+                  variant={conversationView === "all_agent" ? "default" : "outline"}
+                  className={cn(
+                    "h-9 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+                    conversationView === "all_agent" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-white text-zinc-700 hover:bg-[#fff1a9]",
+                  )}
+                  onClick={() => setConversationView("all_agent")}
+                >
+                  All agent tasks
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <label className="space-y-1">
+              <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
+                Scope
+              </span>
+              <select
+                value={scopeFilter}
+                onChange={(event) => setScopeFilter(event.target.value as TaskScopeFilter)}
+                className="h-9 w-full rounded-sm border-2 border-zinc-900 bg-white px-3 text-sm text-zinc-900"
+              >
+                <option value="all">All tasks</option>
+                <option value="channel">Channel only</option>
+                <option value="dm">DM only</option>
+              </select>
+            </label>
+          )}
           <label className="space-y-1">
             <span className="text-[11px] font-semibold uppercase tracking-wide text-zinc-600">
               Status

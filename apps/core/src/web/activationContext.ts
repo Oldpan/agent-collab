@@ -17,6 +17,11 @@ export type ActivationContextMessage = {
   createdAt: number;
 };
 
+export type DmThreadContextSnapshot = {
+  triggerMessageId: string | null;
+  messages: ActivationContextMessage[];
+};
+
 export type TargetActivationContext = {
   replyTarget: string;
   recentMessages: ActivationContextMessage[];
@@ -26,7 +31,197 @@ export type TargetActivationContext = {
   boundTask?: { taskNumber: number; title: string; description?: string | null; status: string; claimedByName: string | null };
   openTasks: Array<{ taskNumber: number; title: string; status: string; claimedByName: string | null }>;
   rootMessage?: ActivationContextMessage;
+  dmContextSnapshot?: DmThreadContextSnapshot;
 };
+
+const DM_THREAD_CONTEXT_SNAPSHOT_LIMIT = 6;
+
+function ensureDmThreadContextSnapshotTable(db: Db): void {
+  db.exec(`
+    CREATE TABLE IF NOT EXISTS dm_thread_context_snapshots (
+      channel_id TEXT NOT NULL,
+      thread_root_id TEXT NOT NULL,
+      trigger_message_id TEXT,
+      snapshot_json TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      PRIMARY KEY (channel_id, thread_root_id)
+    );
+  `);
+}
+
+function loadActivationMessageById(
+  db: Db,
+  channelId: string,
+  messageId: string,
+): ActivationContextMessage | undefined {
+  return db.prepare(
+    `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
+            content, created_at as createdAt
+     FROM channel_messages
+     WHERE channel_id = ? AND message_id = ?
+     LIMIT 1`,
+  ).get(channelId, messageId) as ActivationContextMessage | undefined;
+}
+
+function loadThreadRootMessage(
+  db: Db,
+  channelId: string,
+  threadRootId: string,
+  rootMessageId?: string,
+): ActivationContextMessage | undefined {
+  if (rootMessageId) {
+    const exact = loadActivationMessageById(db, channelId, rootMessageId);
+    if (exact) return exact;
+  }
+  return db.prepare(
+    `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
+            content, created_at as createdAt
+     FROM channel_messages
+     WHERE channel_id = ? AND substr(message_id, 1, 8) = ? AND thread_root_id IS NULL
+     ORDER BY created_at ASC, seq ASC
+     LIMIT 1`,
+  ).get(channelId, threadRootId) as ActivationContextMessage | undefined;
+}
+
+function parseDmThreadContextSnapshot(raw: string): ActivationContextMessage[] {
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((value): value is ActivationContextMessage => (
+        !!value
+        && typeof value === 'object'
+        && typeof (value as ActivationContextMessage).messageId === 'string'
+        && typeof (value as ActivationContextMessage).seq === 'number'
+        && typeof (value as ActivationContextMessage).target === 'string'
+        && typeof (value as ActivationContextMessage).senderName === 'string'
+        && typeof (value as ActivationContextMessage).senderType === 'string'
+        && typeof (value as ActivationContextMessage).content === 'string'
+        && typeof (value as ActivationContextMessage).createdAt === 'number'
+      ))
+      .sort((a, b) => a.seq - b.seq);
+  } catch {
+    return [];
+  }
+}
+
+export function getDmThreadContextSnapshot(
+  db: Db,
+  params: {
+    channelId: string;
+    threadRootId: string;
+  },
+): DmThreadContextSnapshot | undefined {
+  ensureDmThreadContextSnapshotTable(db);
+  const row = db.prepare(
+    `SELECT trigger_message_id as triggerMessageId, snapshot_json as snapshotJson
+     FROM dm_thread_context_snapshots
+     WHERE channel_id = ? AND thread_root_id = ?
+     LIMIT 1`,
+  ).get(params.channelId, params.threadRootId) as {
+    triggerMessageId: string | null;
+    snapshotJson: string;
+  } | undefined;
+  if (!row) return undefined;
+  return {
+    triggerMessageId: row.triggerMessageId,
+    messages: parseDmThreadContextSnapshot(row.snapshotJson),
+  };
+}
+
+export function ensureDmThreadContextSnapshot(
+  db: Db,
+  params: {
+    channelId: string;
+    directTarget: string;
+    threadRootId: string;
+    rootMessageId?: string;
+    recentLimit?: number;
+  },
+): DmThreadContextSnapshot | undefined {
+  ensureDmThreadContextSnapshotTable(db);
+  const existing = getDmThreadContextSnapshot(db, {
+    channelId: params.channelId,
+    threadRootId: params.threadRootId,
+  });
+  if (existing) return existing;
+
+  const rootMessage = loadThreadRootMessage(db, params.channelId, params.threadRootId, params.rootMessageId);
+  if (!rootMessage) return undefined;
+
+  const recentLimit = Math.max(1, params.recentLimit ?? DM_THREAD_CONTEXT_SNAPSHOT_LIMIT);
+  const recentMessages = (
+    db.prepare(
+      `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
+              content, created_at as createdAt
+       FROM channel_messages
+       WHERE channel_id = ?
+         AND target = ?
+         AND thread_root_id IS NULL
+         AND seq < ?
+       ORDER BY seq DESC
+       LIMIT ?`,
+    ).all(params.channelId, params.directTarget, rootMessage.seq, recentLimit) as ActivationContextMessage[]
+  ).reverse();
+
+  const latestUserMessage = db.prepare(
+    `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
+            content, created_at as createdAt
+     FROM channel_messages
+     WHERE channel_id = ?
+       AND target = ?
+       AND thread_root_id IS NULL
+       AND sender_type = 'user'
+       AND seq < ?
+     ORDER BY seq DESC
+     LIMIT 1`,
+  ).get(params.channelId, params.directTarget, rootMessage.seq) as ActivationContextMessage | undefined;
+
+  const fallbackTriggerMessage = latestUserMessage ?? db.prepare(
+    `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
+            content, created_at as createdAt
+     FROM channel_messages
+     WHERE channel_id = ?
+       AND target = ?
+       AND thread_root_id IS NULL
+       AND seq < ?
+     ORDER BY seq DESC
+     LIMIT 1`,
+  ).get(params.channelId, params.directTarget, rootMessage.seq) as ActivationContextMessage | undefined;
+
+  const triggerMessageId = rootMessage.senderType === 'user' && rootMessage.target === params.directTarget
+    ? rootMessage.messageId
+    : fallbackTriggerMessage?.messageId ?? null;
+
+  const messageMap = new Map(recentMessages.map((message) => [message.messageId, message]));
+  if (triggerMessageId && triggerMessageId !== rootMessage.messageId && !messageMap.has(triggerMessageId)) {
+    const triggerMessage = loadActivationMessageById(db, params.channelId, triggerMessageId);
+    if (triggerMessage && triggerMessage.target === params.directTarget) {
+      messageMap.set(triggerMessage.messageId, triggerMessage);
+    }
+  }
+
+  const snapshot: DmThreadContextSnapshot = {
+    triggerMessageId,
+    messages: [...messageMap.values()].sort((a, b) => a.seq - b.seq),
+  };
+
+  db.prepare(
+    `INSERT INTO dm_thread_context_snapshots(channel_id, thread_root_id, trigger_message_id, snapshot_json, created_at)
+     VALUES(?, ?, ?, ?, ?)
+     ON CONFLICT(channel_id, thread_root_id) DO UPDATE SET
+       trigger_message_id = excluded.trigger_message_id,
+       snapshot_json = excluded.snapshot_json`,
+  ).run(
+    params.channelId,
+    params.threadRootId,
+    snapshot.triggerMessageId,
+    JSON.stringify(snapshot.messages),
+    Date.now(),
+  );
+
+  return snapshot;
+}
 
 export function buildTargetActivationContext(
   db: Db,
@@ -82,6 +277,17 @@ export function buildTargetActivationContext(
        ORDER BY created_at ASC, seq ASC
        LIMIT 1`,
     ).get(params.channelId, normalizedThreadRootId) as ActivationContextMessage | undefined
+    : undefined;
+  const directTarget = normalizedThreadRootId && params.replyTarget.startsWith('dm:@')
+    ? params.replyTarget.replace(/:[^:]+$/, '')
+    : null;
+  const dmContextSnapshot = normalizedThreadRootId && directTarget
+    ? ensureDmThreadContextSnapshot(db, {
+        channelId: params.channelId,
+        directTarget,
+        threadRootId: normalizedThreadRootId,
+        rootMessageId: rootMessage?.messageId,
+      })
     : undefined;
 
   const recentParticipants = listRecentTargetParticipants(db, {
@@ -143,5 +349,6 @@ export function buildTargetActivationContext(
     ...(boundTask ? { boundTask } : {}),
     openTasks: boundTask ? [] : openTasks,
     ...(rootMessage ? { rootMessage } : {}),
+    ...(dmContextSnapshot ? { dmContextSnapshot } : {}),
   };
 }

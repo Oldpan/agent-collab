@@ -186,7 +186,7 @@ export async function getCodexConversationDebug(id: string): Promise<CodexConver
 export async function getConversationChannelMessages(
   id: string,
   limit = 100,
-): Promise<{ messages: ChannelMessage[] }> {
+): Promise<{ messages: ChannelMessage[]; contextSnapshot?: ConversationContextSnapshot }> {
   const res = await fetch(`${API_BASE}/conversations/${id}/channel-messages?limit=${limit}`, {
     headers: withAuthHeaders(),
   });
@@ -224,6 +224,21 @@ export type ChannelMessage = {
   attachmentIds?: string[];
 };
 
+export type ConversationContextSnapshotMessage = {
+  messageId: string;
+  seq: number;
+  target: string;
+  senderName: string;
+  senderType: 'user' | 'agent' | 'system';
+  content: string;
+  createdAt: string;
+};
+
+export type ConversationContextSnapshot = {
+  triggerMessageId?: string | null;
+  messages: ConversationContextSnapshotMessage[];
+};
+
 export type ChannelMessagesResult = {
   messages: ChannelMessage[];
   hasOlder?: boolean;
@@ -253,6 +268,8 @@ export type AgentTask = ChannelTask & {
   sourceLabel: string;
   channelName?: string | null;
 };
+
+export type ConversationTaskView = "current_dm" | "all_agent";
 
 export type ThreadCollaborationSummary = {
   boundTask?: ChannelTask;
@@ -389,6 +406,24 @@ export async function getAgentTasks(
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(err.error ?? `Failed to get agent tasks: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function getConversationTasks(
+  conversationId: string,
+  view: ConversationTaskView,
+  status?: TaskInfo["status"] | "all",
+): Promise<{ tasks: AgentTask[] }> {
+  const params = new URLSearchParams();
+  params.set("view", view);
+  if (status) params.set("status", status);
+  const res = await fetch(`${API_BASE}/conversations/${encodeURIComponent(conversationId)}/tasks?${params.toString()}`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Failed to get conversation tasks: ${res.statusText}`);
   }
   return res.json();
 }
@@ -559,6 +594,31 @@ export async function unclaimAgentDmTask(
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { error?: string };
     throw new Error(err.error ?? `Failed to unclaim DM task: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function openConversationThread(
+  conversationId: string,
+  params: { messageId?: string; threadRootId?: string },
+): Promise<ConversationInfo> {
+  const res = await fetch(`${API_BASE}/conversations/${encodeURIComponent(conversationId)}/open-thread`, {
+    method: "POST",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const raw = await res.text().catch(() => '');
+    let detail = '';
+    if (raw) {
+      try {
+        const err = JSON.parse(raw) as { error?: string };
+        detail = err.error ?? '';
+      } catch {
+        detail = raw.trim();
+      }
+    }
+    throw new Error(detail || `Failed to open conversation thread${res.statusText ? `: ${res.statusText}` : ''}`);
   }
   return res.json();
 }

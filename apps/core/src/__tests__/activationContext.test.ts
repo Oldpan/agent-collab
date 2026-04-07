@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createTestDb } from './helpers.js';
-import { buildTargetActivationContext } from '../web/activationContext.js';
+import { buildTargetActivationContext, ensureDmThreadContextSnapshot } from '../web/activationContext.js';
 import { buildChannelActivationContextText } from '../web/channelActivationPrompt.js';
 import { TARGET_PARTICIPANT_ACTIVE_WINDOW_MS, upsertTargetParticipant } from '../web/targetParticipants.js';
 
@@ -292,6 +292,74 @@ describe('activationContext', () => {
     expect(text).toContain('#18 [done] @TaskOwner — Done thread task');
     expect(text).toContain('@TaskOwner (participant)');
     expect(text).not.toContain('@TaskOwner (owner)');
+
+    db.close();
+  });
+
+  it('DM task-thread context snapshot 应固定保留触发消息，并只截取主 DM 顶层历史', () => {
+    const db = createTestDb();
+    const now = Date.now();
+    const agentId = 'agent-kimi';
+    const channelId = `dm:${agentId}`;
+    const directTarget = 'dm:@oldpan';
+    const threadRootId = 'deadbead';
+    const rootMessageId = `${threadRootId}-0000-0000-0000-000000000000`;
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, message_kind)
+       VALUES
+       ('trigger-msg-0000-0000-0000-000000000000', ?, 'user-1', 'oldpan', 'user', ?, '请帮我检查一下当前系统显存占用。', 1, ?, NULL, NULL),
+       ('agent-msg-2', ?, ?, 'Kimi', 'agent', ?, '我先看看。', 2, ?, NULL, NULL),
+       ('agent-msg-3', ?, ?, 'Kimi', 'agent', ?, '正在确认 GPU 进程。', 3, ?, NULL, NULL),
+       ('agent-msg-4', ?, ?, 'Kimi', 'agent', ?, '继续收集环境信息。', 4, ?, NULL, NULL),
+       ('agent-msg-5', ?, ?, 'Kimi', 'agent', ?, '再看一下显存明细。', 5, ?, NULL, NULL),
+       ('agent-msg-6', ?, ?, 'Kimi', 'agent', ?, '确认是否还有残留任务。', 6, ?, NULL, NULL),
+       ('agent-msg-7', ?, ?, 'Kimi', 'agent', ?, '整理一下结果。', 7, ?, NULL, NULL),
+       ('agent-msg-8', ?, ?, 'Kimi', 'agent', ?, '准备创建任务线程。', 8, ?, NULL, NULL),
+       (?, ?, ?, 'Kimi', 'agent', ?, '查看系统显存使用情况', 9, ?, NULL, 'task'),
+       ('thread-reply-1', ?, ?, 'Kimi', 'agent', ?, '这是 thread 内的执行更新。', 10, ?, ?, NULL)`,
+    ).run(
+      channelId, directTarget, now,
+      channelId, agentId, directTarget, now + 1,
+      channelId, agentId, directTarget, now + 2,
+      channelId, agentId, directTarget, now + 3,
+      channelId, agentId, directTarget, now + 4,
+      channelId, agentId, directTarget, now + 5,
+      channelId, agentId, directTarget, now + 6,
+      channelId, agentId, directTarget, now + 7,
+      rootMessageId, channelId, agentId, `#${channelId}`, now + 8,
+      channelId, agentId, `${directTarget}:${threadRootId}`, now + 9, threadRootId,
+    );
+
+    const snapshot = ensureDmThreadContextSnapshot(db, {
+      channelId,
+      directTarget,
+      threadRootId,
+      rootMessageId,
+    });
+    const context = buildTargetActivationContext(db, {
+      agentId,
+      channelId,
+      replyTarget: `${directTarget}:${threadRootId}`,
+      triggerSeq: 11,
+      threadRootId,
+    });
+
+    expect(snapshot?.triggerMessageId).toBe('trigger-msg-0000-0000-0000-000000000000');
+    expect(snapshot?.messages.map((message) => message.messageId)).toEqual([
+      'trigger-msg-0000-0000-0000-000000000000',
+      'agent-msg-3',
+      'agent-msg-4',
+      'agent-msg-5',
+      'agent-msg-6',
+      'agent-msg-7',
+      'agent-msg-8',
+    ]);
+    expect(context.dmContextSnapshot?.triggerMessageId).toBe('trigger-msg-0000-0000-0000-000000000000');
+    expect(context.dmContextSnapshot?.messages.map((message) => message.messageId)).toEqual(
+      snapshot?.messages.map((message) => message.messageId),
+    );
+    expect(context.dmContextSnapshot?.messages.some((message) => message.messageId === 'thread-reply-1')).toBe(false);
 
     db.close();
   });
