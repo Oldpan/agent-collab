@@ -29,6 +29,7 @@ import { findMentionedAgents } from './channelMentions.js';
 import { buildChannelActivationPrompt, buildChannelActivationContextText } from './channelActivationPrompt.js';
 import { appendChannelResetMarkers } from './channelMemoryNotes.js';
 import { buildTargetActivationContext, ensureDmThreadContextSnapshot } from './activationContext.js';
+import { resolveDirectThreadRootMessage } from './directThreadResolver.js';
 import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
 import { deleteChannelSubscription, listChannelSubscriptions, upsertChannelSubscription } from './channelSubscriptions.js';
 import {
@@ -1685,83 +1686,27 @@ export async function startServer(params: {
       }
 
       const dmChannelId = `dm:${conv.agentId}`;
-      let resolvedThreadRootId = requestedThreadRootId;
-      if (!resolvedThreadRootId && requestedMessageId) {
-        const exactMessage = db.prepare(
-          `SELECT message_id as messageId, thread_root_id as threadRootId, message_kind as messageKind
-           FROM channel_messages
-           WHERE channel_id = ?
-             AND (message_id = ? OR message_id LIKE ?)
-           ORDER BY CASE WHEN message_id = ? THEN 0 ELSE 1 END, seq ASC
-           LIMIT 1`,
-        ).get(dmChannelId, requestedMessageId, `${requestedMessageId.slice(0, 8)}%`, requestedMessageId) as {
-          messageId: string;
-          threadRootId: string | null;
-          messageKind: string | null;
-        } | undefined;
-        if (exactMessage?.threadRootId) {
-          resolvedThreadRootId = exactMessage.threadRootId;
-        } else if (exactMessage?.messageKind === 'task') {
-          resolvedThreadRootId = exactMessage.messageId.slice(0, 8);
-        } else {
-          const snapshotRow = db.prepare(
-            `SELECT thread_root_id as threadRootId
-             FROM dm_thread_context_snapshots
-             WHERE channel_id = ?
-               AND (trigger_message_id = ? OR trigger_message_id LIKE ?)
-             ORDER BY created_at DESC
-             LIMIT 1`,
-          ).get(dmChannelId, requestedMessageId, `${requestedMessageId.slice(0, 8)}%`) as { threadRootId: string } | undefined;
-          if (snapshotRow?.threadRootId) {
-            resolvedThreadRootId = snapshotRow.threadRootId.slice(0, 8);
-          } else if (exactMessage?.messageId) {
-            resolvedThreadRootId = exactMessage.messageId.slice(0, 8);
-          }
-        }
-      }
-      if (!resolvedThreadRootId) {
-        reply.code(404);
-        return { error: 'Thread root not found in this DM' };
-      }
-
-      const rootRow = db.prepare(
-        `SELECT message_id as messageId
-         FROM channel_messages
-         WHERE channel_id = ?
-           AND (
-             target = ?
-             OR (
-               message_kind = 'task'
-               AND target = ?
-               AND EXISTS(
-                 SELECT 1
-                 FROM channel_messages thread_msgs
-                 WHERE thread_msgs.channel_id = channel_messages.channel_id
-                   AND thread_msgs.thread_root_id = SUBSTR(channel_messages.message_id, 1, 8)
-                   AND thread_msgs.target LIKE ?
-                 LIMIT 1
-               )
-             )
-           )
-           AND thread_root_id IS NULL
-           AND message_id LIKE ?
-         LIMIT 1`,
-      ).get(dmChannelId, directTarget, `#${dmChannelId}`, `${directTarget}:%`, `${resolvedThreadRootId}%`) as { messageId: string } | undefined;
-      if (!rootRow) {
+      const resolvedRoot = resolveDirectThreadRootMessage(db, {
+        agentId: conv.agentId,
+        directTarget,
+        requestedThreadRootId,
+        requestedMessageId,
+      });
+      if (!resolvedRoot) {
         reply.code(404);
         return { error: 'Thread root not found in this DM' };
       }
       ensureDmThreadContextSnapshot(db, {
         channelId: dmChannelId,
         directTarget,
-        threadRootId: rootRow.messageId.slice(0, 8),
-        rootMessageId: rootRow.messageId,
+        threadRootId: resolvedRoot.threadRootId,
+        rootMessageId: resolvedRoot.messageId,
       });
 
       const thread = conversationManager.openAgentDirectThread(
         conv.agentId,
         conv.userId ?? null,
-        rootRow.messageId.slice(0, 8),
+        resolvedRoot.threadRootId,
       );
       if (!thread) {
         reply.code(404);
