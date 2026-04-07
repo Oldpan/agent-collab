@@ -137,18 +137,18 @@ export function App() {
   const handleRestartConversation = useCallback(
     async (conversationId: string) => {
       const result = await api.restartConversation(conversationId);
-      upsertConversation(result.conversation);
+      upsertConversation(result.conversation, { select: selectedId === conversationId });
     },
-    [upsertConversation],
+    [selectedId, upsertConversation],
   );
 
   const handleClearConversationChat = useCallback(
     async (conversationId: string) => {
       const result = await api.clearConversationChat(conversationId);
-      upsertConversation(result.conversation);
+      upsertConversation(result.conversation, { select: selectedId === conversationId });
       setViewMode("chat");
     },
-    [upsertConversation],
+    [selectedId, upsertConversation],
   );
 
   const handleResetAgent = useCallback(
@@ -165,13 +165,17 @@ export function App() {
 
   const handleOpenAgentThread = useCallback(
     (agentId: string) => {
-      openAgentThread(agentId);
+      const existingDirectConversation = conversations.find(
+        (conversation) => conversation.agentId === agentId && conversation.threadKind === "direct" && conversation.isPrimaryThread,
+      ) ?? null;
+      selectConversation(existingDirectConversation?.id ?? null);
+      void openAgentThread(agentId);
       setSelectedChannelId(null);
       setSearchFocusTarget(null);
       setChannelTaskContextAgent(null);
       setViewMode("chat");
     },
-    [openAgentThread],
+    [conversations, openAgentThread, selectConversation],
   );
 
   const handleOpenAgentChannelSession = useCallback(
@@ -235,7 +239,11 @@ export function App() {
 
   const handleOpenAgentTask = useCallback((agent: { agentId: string; name: string }, task: AgentTask) => {
     if (task.sourceType === "dm") {
-      openAgentThread(agent.agentId);
+      const existingDirectConversation = conversations.find(
+        (conversation) => conversation.agentId === agent.agentId && conversation.threadKind === "direct" && conversation.isPrimaryThread,
+      ) ?? null;
+      selectConversation(existingDirectConversation?.id ?? null);
+      void openAgentThread(agent.agentId);
       setSelectedChannelId(null);
       setSearchFocusTarget(null);
       setChannelTaskContextAgent(null);
@@ -255,7 +263,7 @@ export function App() {
     } : null);
     setViewMode("chat");
     setMobileSidebarOpen(false);
-  }, [openAgentThread, selectConversation]);
+  }, [conversations, openAgentThread, selectConversation]);
 
   const selectedChannel = useMemo(
     () => channels.find((c) => c.channelId === selectedChannelId) ?? null,

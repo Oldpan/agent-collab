@@ -313,8 +313,12 @@ describe('internalAgentRouter', () => {
     expect(row.count).toBe(0);
   });
 
-  it('DM claim current 后未提供 target 时应默认把后续发送路由到 task-thread', async () => {
+  it('DM claim current 后应自动启动 task-thread run、写入 lifecycle event 并阻止主 DM follow-up', async () => {
     const now = Date.now();
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-oldpan', 'oldpan', 'hash', 0, ?, ?)`,
+    ).run(now, now);
     const agent = manager.createAgent({
       name: 'DmThreadSendBob',
       agentType: 'claude_acp',
@@ -349,35 +353,70 @@ describe('internalAgentRouter', () => {
       }),
     });
     expect(claimRes.status).toBe(200);
+    const claimBody = await claimRes.json() as {
+      results: Array<{
+        taskNumber?: number;
+        success: boolean;
+        messageId?: string;
+        handoffStarted?: boolean;
+        threadConversationId?: string | null;
+        threadTarget?: string | null;
+      }>;
+    };
+    expect(claimBody.results[0]).toMatchObject({
+      success: true,
+      messageId: 'currtask-0000-0000-0000-000000000000',
+      handoffStarted: true,
+      threadTarget: 'dm:@oldpan:currtask',
+    });
+    expect(claimBody.results[0].threadConversationId).toBeTruthy();
+    await settleDispatches();
+    expect(dispatches.some((msg) => msg.type === 'run.cancel' && msg.runId === 'run-router-dm-thread-send')).toBe(true);
 
-    const sendRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+    const threadRun = db.prepare(
+      `SELECT r.prompt_text as promptText
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.id = ?
+       ORDER BY r.started_at DESC
+       LIMIT 1`,
+    ).get(claimBody.results[0].threadConversationId) as { promptText: string } | undefined;
+    expect(threadRun?.promptText).toContain('[DM Task Thread Handoff]');
+    expect(threadRun?.promptText).toContain('[Current conversation target]');
+    expect(threadRun?.promptText).toContain('reply_target: dm:@oldpan:currtask');
+    expect(threadRun?.promptText).toContain('Inspect current memory usage and summarize the result in the task thread.');
+
+    const blockedRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        content: 'Memory check complete.',
+        content: 'Memory usage looks healthy.\n- Total: 64 GB\n- Used: 31 GB\n- Free: 33 GB',
         conversationId: conv.id,
       }),
     });
 
-    expect(sendRes.status).toBe(200);
-    const sendBody = await sendRes.json() as { target?: string };
-    expect(sendBody.target).toBe('dm:@oldpan:currtask');
+    expect(blockedRes.status).toBe(409);
+    expect(await blockedRes.json()).toEqual({
+      error: 'This run already handed off DM task work to dm:@oldpan:currtask. Do not continue work in dm:@oldpan; the platform mirrors task status there and detailed execution belongs in the task thread conversation.',
+    });
 
-    const row = db.prepare(
-      `SELECT target, thread_root_id as threadRootId, run_id as runId
+    const lifecycleRow = db.prepare(
+      `SELECT sender_type as senderType, content, message_source as messageSource
        FROM channel_messages
-       WHERE sender_id = ?
+       WHERE channel_id = ?
+         AND target = 'dm:@oldpan'
+         AND message_source = 'task_lifecycle'
        ORDER BY created_at DESC, seq DESC
        LIMIT 1`,
-    ).get(agent.agentId) as { target: string; threadRootId: string | null; runId: string | null };
-    expect(row).toEqual({
-      target: 'dm:@oldpan:currtask',
-      threadRootId: 'currtask',
-      runId: 'run-router-dm-thread-send',
+    ).get(dmChannelId) as { senderType: string; content: string; messageSource: string } | undefined;
+    expect(lifecycleRow).toEqual({
+      senderType: 'system',
+      content: 'Started #1 "Check memory usage and treat it as a task". Detailed work continues in the task thread.',
+      messageSource: 'task_lifecycle',
     });
   });
 
-  it('显式非法 thread target 返回 400 时不应污染既有 DM task-thread override', async () => {
+  it('DM handoff 后任何显式 send 都会被 gate 拦住，不会再落回主 DM', async () => {
     const now = Date.now();
     db.prepare(
       `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
@@ -427,22 +466,10 @@ describe('internalAgentRouter', () => {
         conversationId: conv.id,
       }),
     });
-    expect(invalidSendRes.status).toBe(400);
+    expect(invalidSendRes.status).toBe(409);
     expect(await invalidSendRes.json()).toEqual({
-      error: 'Thread root not found for target: dm:@oldpan:missing00',
+      error: 'This run already handed off DM task work to dm:@oldpan:keepovrd. Do not continue work in dm:@oldpan; the platform mirrors task status there and detailed execution belongs in the task thread conversation.',
     });
-
-    const followUpRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        content: 'still posting to the claimed task thread',
-        conversationId: conv.id,
-      }),
-    });
-    expect(followUpRes.status).toBe(200);
-    const followUpBody = await followUpRes.json() as { target?: string };
-    expect(followUpBody.target).toBe('dm:@oldpan:keepovrd');
 
     const rows = db.prepare(
       `SELECT target
@@ -450,10 +477,10 @@ describe('internalAgentRouter', () => {
        WHERE sender_id = ?
        ORDER BY created_at ASC, seq ASC`,
     ).all(agent.agentId) as Array<{ target: string }>;
-    expect(rows).toEqual([{ target: 'dm:@oldpan:keepovrd' }]);
+    expect(rows).toEqual([]);
   });
 
-  it('显式非 thread target 应清除既有 DM task-thread override', async () => {
+  it('DM create_tasks 在 primary DM 中应自动启动 task-thread run', async () => {
     const now = Date.now();
     db.prepare(
       `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
@@ -471,64 +498,129 @@ describe('internalAgentRouter', () => {
     const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
       .get(conv.id) as { sessionKey: string };
     createRun(db, {
-      runId: 'run-router-dm-thread-clear',
+      runId: 'run-router-dm-task-create',
       sessionKey: sessionRow.sessionKey,
-      promptText: 'clear thread override after explicit mainline reply',
+      promptText: 'create a DM task and hand it off',
     });
 
     const seq = allocateNextChannelMessageSeq(db, dmChannelId);
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
-       VALUES('clearovr-0000-0000-0000-000000000000', ?, 'user', 'oldpan', 'user', 'dm:@oldpan', 'Please treat this as a task', ?, ?)`,
+       VALUES('createtg-0000-0000-0000-000000000000', ?, 'user', 'oldpan', 'user', 'dm:@oldpan', 'Please create a task for this work', ?, ?)`,
     ).run(dmChannelId, seq, now);
 
-    const claimRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+    const createRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         channel: 'dm:@oldpan',
-        message_ids: ['current'],
-        description: 'Handle the task, but allow an explicit mainline reply to clear the override.',
+        tasks: [{
+          title: 'Check memory usage',
+          description: 'Inspect memory usage and keep all substantive work in the task thread.',
+        }],
         conversationId: conv.id,
       }),
     });
-    expect(claimRes.status).toBe(200);
+    expect(createRes.status).toBe(201);
+    const createBody = await createRes.json() as {
+      tasks: Array<{
+        taskNumber: number;
+        messageId: string;
+        handoffStarted?: boolean;
+        threadConversationId?: string | null;
+        threadTarget?: string | null;
+      }>;
+    };
+    expect(createBody.tasks).toHaveLength(1);
+    expect(createBody.tasks[0].taskNumber).toBe(1);
+    expect(createBody.tasks[0].handoffStarted).toBe(true);
+    expect(createBody.tasks[0].threadConversationId).toBeTruthy();
+    expect(createBody.tasks[0].threadTarget).toBe(`dm:@oldpan:${createBody.tasks[0].messageId.slice(0, 8)}`);
+    const createdTaskRow = db.prepare(
+      `SELECT status, claimed_by_agent_id as claimedByAgentId
+       FROM tasks
+       WHERE message_id = ?`,
+    ).get(createBody.tasks[0].messageId) as { status: string; claimedByAgentId: string | null };
+    expect(createdTaskRow).toEqual({
+      status: 'in_progress',
+      claimedByAgentId: agent.agentId,
+    });
 
-    const explicitRootRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+    const threadRun = db.prepare(
+      `SELECT r.prompt_text as promptText
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.id = ?
+       ORDER BY r.started_at DESC
+       LIMIT 1`,
+    ).get(createBody.tasks[0].threadConversationId) as { promptText: string } | undefined;
+    expect(threadRun?.promptText).toContain('[DM Task Thread Handoff]');
+    expect(threadRun?.promptText).toContain('[Current conversation target]');
+    expect(threadRun?.promptText).toContain(`reply_target: ${createBody.tasks[0].threadTarget}`);
+    expect(threadRun?.promptText).toContain('Inspect memory usage and keep all substantive work in the task thread.');
+
+    const blockedRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        target: 'dm:@oldpan',
-        content: 'Starting work. Detailed updates will stay in the task thread.',
+        content: 'Memory usage inspected.\n- Used: 31 GB\n- Free: 33 GB',
         conversationId: conv.id,
       }),
     });
-    expect(explicitRootRes.status).toBe(200);
-    const explicitRootBody = await explicitRootRes.json() as { target?: string };
-    expect(explicitRootBody.target).toBe('dm:@oldpan');
+    expect(blockedRes.status).toBe(409);
+    expect(await blockedRes.json()).toEqual({
+      error: `This run already handed off DM task work to ${createBody.tasks[0].threadTarget}. Do not continue work in dm:@oldpan; the platform mirrors task status there and detailed execution belongs in the task thread conversation.`,
+    });
+  });
 
-    const followUpRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+  it('send_message 在仅有持久化 handoff 事件时仍应返回 409', async () => {
+    const now = Date.now();
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-oldpan', 'oldpan', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+    const agent = manager.createAgent({
+      name: 'PersistedGateBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/persisted-gate-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-persisted-handoff',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'already handed off',
+    });
+    db.prepare(
+      `INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, 1, 'platform/handoff', ?, ?)`,
+    ).run(
+      'run-router-persisted-handoff',
+      JSON.stringify({
+        status: 'started',
+        primaryTarget: 'dm:@oldpan',
+        threadTarget: 'dm:@oldpan:persist01',
+        taskNumber: 1,
+      }),
+      now,
+    );
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        content: 'Mainline follow-up after clearing the override.',
+        content: 'this should still be blocked',
         conversationId: conv.id,
       }),
     });
-    expect(followUpRes.status).toBe(200);
-    const followUpBody = await followUpRes.json() as { target?: string };
-    expect(followUpBody.target).toBe('dm:@oldpan');
 
-    const rows = db.prepare(
-      `SELECT target
-       FROM channel_messages
-       WHERE sender_id = ?
-       ORDER BY created_at ASC, seq ASC`,
-    ).all(agent.agentId) as Array<{ target: string }>;
-    expect(rows).toEqual([
-      { target: 'dm:@oldpan' },
-      { target: 'dm:@oldpan' },
-    ]);
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({
+      error: 'This run already handed off DM task work to dm:@oldpan:persist01. Do not continue work in dm:@oldpan; the platform mirrors task status there and detailed execution belongs in the task thread conversation.',
+    });
   });
 
   it('同一 run 在 final 之后仍允许继续发送；final 只保留消息语义', async () => {
@@ -1177,7 +1269,7 @@ describe('internalAgentRouter', () => {
       'SELECT prompt_text as promptText FROM runs WHERE session_key = ? ORDER BY started_at DESC LIMIT 1',
     ).get(bobSession.sessionKey) as { promptText: string } | undefined;
     expect(runRow?.promptText).toContain('Your collaborative thread in #default received a reply from RecentAlice.');
-    expect(runRow?.promptText).toContain('#default:recent123');
+    expect(runRow?.promptText).toContain(`#default:${threadRootId.slice(0, 8)}`);
   });
 
   it('agent 在线程 @ 多个 agent 且其中一个已 active 时，应让 active 目标先排队、其余目标正常派发，并保持 participants 一致', async () => {
@@ -1880,8 +1972,11 @@ describe('internalAgentRouter', () => {
       );
     }
 
+    const anchorRow = db.prepare(
+      `SELECT seq FROM channel_messages WHERE message_id = 'around-seq-three'`,
+    ).get() as { seq: number };
     const res = await fetch(
-      `${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent('#default')}&around=3&limit=3`,
+      `${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent('#default')}&around=${anchorRow.seq}&limit=3`,
     );
     expect(res.status).toBe(200);
 
@@ -2391,6 +2486,74 @@ describe('internalAgentRouter', () => {
        WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'c0ffee00'`,
     ).get(agent.agentId) as { role: string } | undefined;
     expect(participant?.role).toBe('owner');
+  });
+
+  it('claim_message 在 primary DM 中应复用 claim_tasks 的 handoff 逻辑', async () => {
+    const now = Date.now();
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-oldpan', 'oldpan', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+    const agent = manager.createAgent({
+      name: 'ClaimMsgDmBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/claim-msg-dm-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const dmChannelId = `dm:${agent.agentId}`;
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-claim-message-dm',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'claim message via alias',
+    });
+
+    const seq = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('claimmsgdm-0000-0000-0000-000000000000', ?, 'user', 'oldpan', 'user', 'dm:@oldpan', 'Treat this DM request as a task', ?, ?)`,
+    ).run(dmChannelId, seq, now);
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim-message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: 'dm:@oldpan',
+        message_ids: ['claimmsg'],
+        description: 'Do the work in the DM task thread, not in the main DM.',
+        conversationId: conv.id,
+      }),
+    });
+
+    expect(res.status).toBe(201);
+    const body = await res.json() as {
+      results: Array<{
+        taskNumber?: number;
+        success: boolean;
+        messageId?: string;
+        handoffStarted?: boolean;
+        threadTarget?: string | null;
+      }>;
+    };
+    expect(body.results[0]).toMatchObject({
+      success: true,
+      messageId: 'claimmsgdm-0000-0000-0000-000000000000',
+      handoffStarted: true,
+      threadTarget: 'dm:@oldpan:claimmsg',
+    });
+
+    const blockedRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        content: 'this should be blocked in the main DM',
+        conversationId: conv.id,
+      }),
+    });
+    expect(blockedRes.status).toBe(409);
   });
 
   it('claim_message 缺少 description 时应拒绝', async () => {

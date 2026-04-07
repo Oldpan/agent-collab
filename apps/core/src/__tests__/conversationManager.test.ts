@@ -28,7 +28,7 @@ describe('ConversationManager', () => {
 
       expect(conv.id).toBeTruthy();
       expect(conv.channelId).toBe('default');
-      expect(conv.replyTarget).toBe('dm:@oldpan:'.concat(conv.id.slice(0, 8)));
+      expect(conv.replyTarget).toBe('dm:@oldpan');
       expect(conv.title).toBe('Test');
       expect(conv.agentType).toBe('claude_acp'); // 默认
       expect(conv.status).toBe('idle');
@@ -61,7 +61,7 @@ describe('ConversationManager', () => {
       const conv = manager.createConversation({});
       expect(conv.agentType).toBe('claude_acp');
       expect(conv.title).toBe('');
-      expect(conv.replyTarget).toBe(`dm:@oldpan:${conv.id.slice(0, 8)}`);
+      expect(conv.replyTarget).toBe('dm:@oldpan');
     });
 
     it('agent 主私聊 thread 应绑定到稳定的 DM reply target', () => {

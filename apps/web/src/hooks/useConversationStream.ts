@@ -108,7 +108,7 @@ function mergeMessagesById(
 function toLiveChannelMessage(message: Awaited<ReturnType<typeof api.getConversationChannelMessages>>["messages"][number]): LiveMessage {
   return {
     id: message.id,
-    role: message.senderType === "user" ? "user" : "assistant",
+    role: message.senderType === "user" ? "user" : message.senderType === "system" ? "system" : "assistant",
     text: message.content,
     createdAt: new Date(message.createdAt).getTime(),
     isStreaming: false,
@@ -296,7 +296,7 @@ export function useConversationStream(
           // Do NOT finalize the run here — the agent may continue with tool calls
           // (e.g. memory writes) after send_message. Let turn.end handle finalization.
           const { id, senderType, content, createdAt, messageSource } = event.message;
-          const role = senderType === "user" ? "user" : "assistant";
+          const role = senderType === "user" ? "user" : senderType === "system" ? "system" : "assistant";
           const liveMessage = {
             id,
             role,

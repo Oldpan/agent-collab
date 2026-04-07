@@ -692,6 +692,117 @@ export async function startServer(params: {
      LIMIT 1`,
   ).get(taskId) as AgentTaskListRow | undefined;
 
+  const findAgentConversationIdByReplyTarget = (agentId: string, replyTarget: string): string | null => {
+    const row = db.prepare(
+      `SELECT id
+       FROM conversations
+       WHERE agent_id = ? AND reply_target = ?
+       ORDER BY updated_at DESC
+       LIMIT 1`,
+    ).get(agentId, replyTarget) as { id: string } | undefined;
+    return row?.id ?? null;
+  };
+
+  const fetchTaskRootMessageRow = (messageId: string) => db.prepare(
+    `SELECT message_id as messageId,
+            sender_name as senderName,
+            sender_type as senderType,
+            target,
+            content,
+            seq,
+            created_at as createdAt,
+            attachment_ids as attachmentIds
+     FROM channel_messages
+     WHERE message_id = ?
+     LIMIT 1`,
+  ).get(messageId) as {
+    messageId: string;
+    senderName: string;
+    senderType: 'user' | 'agent' | 'system';
+    target: string;
+    content: string;
+    seq: number;
+    createdAt: number;
+    attachmentIds: string | null;
+  } | undefined;
+
+  const buildDmTaskLifecycleText = (params: {
+    kind: 'in_review' | 'done';
+    taskNumber: number;
+    title: string;
+  }): string => {
+    const label = `#${params.taskNumber} "${params.title}"`;
+    return params.kind === 'done'
+      ? `${label} marked done.`
+      : `${label} moved to in review.`;
+  };
+
+  const emitDmTaskLifecycleEvent = (params: {
+    agentId: string;
+    primaryTarget: string;
+    taskNumber: number;
+    title: string;
+    taskStatus: string;
+    taskAssigneeName?: string | null;
+    kind: 'in_review' | 'done';
+  }) => {
+    const channelId = `dm:${params.agentId}`;
+    const now = Date.now();
+    const messageId = randomUUID();
+    const seq = allocateNextChannelMessageSeq(db, channelId);
+    const content = buildDmTaskLifecycleText(params);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, message_kind, message_source)
+       VALUES(?, ?, 'system', 'system', 'system', ?, ?, ?, ?, NULL, 'task_event', 'task_lifecycle')`,
+    ).run(messageId, channelId, params.primaryTarget, content, seq, now);
+    const conversationId = findAgentConversationIdByReplyTarget(params.agentId, params.primaryTarget);
+    if (conversationId) {
+      broadcastToAgent(params.agentId, {
+        type: 'channel.message',
+        message: {
+          id: messageId,
+          senderName: 'system',
+          senderType: 'system',
+          content,
+          createdAt: new Date(now).toISOString(),
+          seq,
+          messageSource: 'task_lifecycle',
+          taskNumber: params.taskNumber,
+          taskStatus: params.taskStatus,
+          taskAssigneeName: params.taskAssigneeName ?? null,
+        },
+      }, conversationId);
+    }
+  };
+
+  const broadcastDmTaskRootUpdate = (params: {
+    agentId: string;
+    messageId: string;
+    taskNumber: number;
+    taskStatus: string;
+    taskAssigneeName: string | null;
+  }) => {
+    const message = fetchTaskRootMessageRow(params.messageId);
+    if (!message) return;
+    const conversationId = findAgentConversationIdByReplyTarget(params.agentId, message.target);
+    if (!conversationId) return;
+    broadcastToAgent(params.agentId, {
+      type: 'channel.message',
+      message: {
+        id: message.messageId,
+        senderName: message.senderName,
+        senderType: message.senderType,
+        content: message.content,
+        createdAt: new Date(message.createdAt).toISOString(),
+        seq: message.seq,
+        taskNumber: params.taskNumber,
+        taskStatus: params.taskStatus,
+        taskAssigneeName: params.taskAssigneeName,
+        ...(message.attachmentIds ? { attachmentIds: JSON.parse(message.attachmentIds) as string[] } : {}),
+      },
+    }, conversationId);
+  };
+
   app.get<{ Params: { id: string }; Querystring: { status?: string; scope?: string } }>(
     '/api/agents/:id/tasks',
     async (req, reply) => {
@@ -830,7 +941,11 @@ export async function startServer(params: {
         `SELECT task_id as taskId,
                 channel_id as channelId,
                 status,
-                claimed_by_agent_id as assigneeId
+                claimed_by_agent_id as assigneeId,
+                claimed_by_name as assigneeName,
+                task_number as taskNumber,
+                title,
+                message_id as messageId
          FROM tasks
          WHERE task_id = ?
          LIMIT 1`,
@@ -839,6 +954,10 @@ export async function startServer(params: {
         channelId: string;
         status: 'todo' | 'in_progress' | 'in_review' | 'done';
         assigneeId: string | null;
+        assigneeName: string | null;
+        taskNumber: number;
+        title: string;
+        messageId: string | null;
       } | undefined;
       if (!current || current.channelId !== dmChannelId) {
         reply.code(404);
@@ -861,6 +980,27 @@ export async function startServer(params: {
       if (!updated) {
         reply.code(404);
         return { error: 'DM task not found' };
+      }
+      if (updated.messageId) {
+        broadcastDmTaskRootUpdate({
+          agentId: req.params.id,
+          messageId: updated.messageId,
+          taskNumber: updated.taskNumber,
+          taskStatus: updated.status,
+          taskAssigneeName: updated.assigneeName,
+        });
+        const rootMessage = fetchTaskRootMessageRow(updated.messageId);
+        if (rootMessage && (nextStatus === 'in_review' || nextStatus === 'done')) {
+          emitDmTaskLifecycleEvent({
+            agentId: req.params.id,
+            primaryTarget: rootMessage.target,
+            taskNumber: updated.taskNumber,
+            title: updated.title,
+            taskStatus: updated.status,
+            taskAssigneeName: updated.assigneeName,
+            kind: nextStatus,
+          });
+        }
       }
       return mapAgentTaskRow(updated, dmChannelId);
     },
@@ -902,6 +1042,15 @@ export async function startServer(params: {
       if (!updated) {
         reply.code(404);
         return { error: 'DM task not found' };
+      }
+      if (updated.messageId) {
+        broadcastDmTaskRootUpdate({
+          agentId: req.params.id,
+          messageId: updated.messageId,
+          taskNumber: updated.taskNumber,
+          taskStatus: updated.status,
+          taskAssigneeName: updated.assigneeName,
+        });
       }
       return mapAgentTaskRow(updated, dmChannelId);
     },

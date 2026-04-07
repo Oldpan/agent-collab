@@ -6,10 +6,11 @@ import { Button } from "@/components/ui/button";
 import { useConversationStream } from "@/hooks/useConversationStream";
 import type { LiveMessage } from "@/hooks/types";
 import type { AgentInfo, ConversationInfo } from "@agent-collab/protocol";
-import { XIcon } from "lucide-react";
+import { ChevronDownIcon, ChevronRightIcon, XIcon } from "lucide-react";
 import { PromptComposer } from "./PromptComposer";
 import { ChatAvatar, readStoredUserIdentity } from "./ChatAvatar";
 import { cn } from "@/lib/utils";
+import { CodexDebugPanel } from "./CodexDebugPanel";
 
 const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
   month: "2-digit",
@@ -43,6 +44,7 @@ type DmTaskThreadPanelProps = {
   conversation: ConversationInfo;
   agent: AgentInfo | null;
   rootMessage: LiveMessage;
+  isAdmin?: boolean;
   onClose: () => void;
 };
 
@@ -50,8 +52,11 @@ export function DmTaskThreadPanel({
   conversation,
   agent,
   rootMessage,
+  isAdmin = false,
   onClose,
 }: DmTaskThreadPanelProps) {
+  const [activeTab, setActiveTab] = useState<"chat" | "debug">("chat");
+  const [contextExpanded, setContextExpanded] = useState(false);
   const userIdentity = useMemo(() => readStoredUserIdentity(), []);
   const {
     messages,
@@ -71,6 +76,7 @@ export function DmTaskThreadPanel({
   );
   const contextMessages = contextSnapshot?.messages ?? [];
   const rootIsTrigger = contextSnapshot?.triggerMessageId === rootMessage.id;
+  const canShowCodexDebug = isAdmin && (conversation.agentType === "codex_acp" || conversation.agentType === "claude_acp");
   const statusTone = rootMessage.taskStatus === "done"
     ? "bg-[#d8f8c8] text-green-800"
     : rootMessage.taskStatus === "in_review"
@@ -78,6 +84,11 @@ export function DmTaskThreadPanel({
       : rootMessage.taskStatus === "in_progress"
         ? "bg-[#d8efff] text-blue-800"
         : "bg-[#fff8d8] text-zinc-700";
+
+  useEffect(() => {
+    setActiveTab("chat");
+    setContextExpanded(false);
+  }, [conversation.id]);
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-[#fff7cc]">
@@ -100,7 +111,40 @@ export function DmTaskThreadPanel({
             <XIcon className="size-4" />
           </Button>
         </div>
+        {canShowCodexDebug ? (
+          <div className="mt-3 flex items-center gap-2">
+            <Button
+              size="sm"
+              variant={activeTab === "chat" ? "default" : "outline"}
+              className={cn(
+                "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+                activeTab === "chat" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+              )}
+              onClick={() => setActiveTab("chat")}
+            >
+              Chat
+            </Button>
+            <Button
+              size="sm"
+              variant={activeTab === "debug" ? "default" : "outline"}
+              className={cn(
+                "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+                activeTab === "debug" ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]" : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+              )}
+              onClick={() => setActiveTab("debug")}
+            >
+              Debug
+            </Button>
+          </div>
+        ) : null}
       </div>
+
+      {activeTab === "debug" ? (
+        <div className="flex flex-1 flex-col overflow-hidden">
+          <CodexDebugPanel conversationId={conversation.id} />
+        </div>
+      ) : (
+        <>
 
       <div className="border-b-2 border-black bg-[#fff3b3] px-4 py-3">
         <div className="rounded-sm border-2 border-zinc-900 bg-[#fffdf4] px-3 py-3 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">
@@ -134,37 +178,55 @@ export function DmTaskThreadPanel({
 
       {contextMessages.length > 0 ? (
         <div className="border-b-2 border-black bg-[#fff7d6] px-4 py-3">
-          <div className="mb-2 text-[11px] uppercase tracking-[0.18em] text-zinc-600">
-            Context from DM
-          </div>
-          <div className="space-y-2">
-            {contextMessages.map((message) => {
-              const isTrigger = contextSnapshot?.triggerMessageId === message.messageId;
-              return (
-                <div
-                  key={message.messageId}
-                  className="rounded-sm border border-zinc-300 bg-[#fffdf4] px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.05)]"
-                >
-                  <div className="mb-1 flex flex-wrap items-center gap-2">
-                    <span className="text-[12px] font-semibold tracking-tight text-zinc-950">
-                      @{message.senderName}
-                    </span>
-                    {isTrigger ? (
-                      <span className="rounded-sm border border-zinc-900 bg-[#fff3b3] px-1.5 py-0.5 text-[10px] font-semibold text-zinc-900">
-                        Trigger
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-3 rounded-sm border border-zinc-300 bg-[#fffdf4] px-3 py-2 text-left shadow-[2px_2px_0_0_rgba(0,0,0,0.05)] hover:bg-[#fff8e6]"
+            onClick={() => setContextExpanded((prev) => !prev)}
+          >
+            <div className="min-w-0">
+              <div className="text-[11px] uppercase tracking-[0.18em] text-zinc-600">
+                Context from DM
+              </div>
+              <div className="mt-1 text-[11px] text-zinc-500">
+                {contextMessages.length} message{contextMessages.length === 1 ? "" : "s"}
+              </div>
+            </div>
+            {contextExpanded ? (
+              <ChevronDownIcon className="size-4 shrink-0 text-zinc-600" />
+            ) : (
+              <ChevronRightIcon className="size-4 shrink-0 text-zinc-600" />
+            )}
+          </button>
+          {contextExpanded ? (
+            <div className="mt-2 space-y-2">
+              {contextMessages.map((message) => {
+                const isTrigger = contextSnapshot?.triggerMessageId === message.messageId;
+                return (
+                  <div
+                    key={message.messageId}
+                    className="rounded-sm border border-zinc-300 bg-[#fffdf4] px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.05)]"
+                  >
+                    <div className="mb-1 flex flex-wrap items-center gap-2">
+                      <span className="text-[12px] font-semibold tracking-tight text-zinc-950">
+                        @{message.senderName}
                       </span>
-                    ) : null}
-                    <span className="text-[11px] text-zinc-500">
-                      {messageTimeFormatter.format(new Date(message.createdAt))}
-                    </span>
+                      {isTrigger ? (
+                        <span className="rounded-sm border border-zinc-900 bg-[#fff3b3] px-1.5 py-0.5 text-[10px] font-semibold text-zinc-900">
+                          Trigger
+                        </span>
+                      ) : null}
+                      <span className="text-[11px] text-zinc-500">
+                        {messageTimeFormatter.format(new Date(message.createdAt))}
+                      </span>
+                    </div>
+                    <div className="whitespace-pre-wrap break-words text-[13px] text-zinc-800">
+                      {message.content}
+                    </div>
                   </div>
-                  <div className="whitespace-pre-wrap break-words text-[13px] text-zinc-800">
-                    {message.content}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
+                );
+              })}
+            </div>
+          ) : null}
         </div>
       ) : null}
 
@@ -230,6 +292,8 @@ export function DmTaskThreadPanel({
         onSend={sendPrompt}
         onCancel={cancel}
       />
+        </>
+      )}
     </div>
   );
 }

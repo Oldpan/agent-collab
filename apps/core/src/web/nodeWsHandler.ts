@@ -75,6 +75,7 @@ const REPLAY_EVENT_TYPES = new Set([
   'plan.update',
   'task.update',
 ]);
+const DM_TASK_HANDOFF_EVENT_METHOD = 'platform/handoff';
 
 type EventBroadcaster = (conversationId: string, event: ServerEvent) => void;
 
@@ -403,9 +404,11 @@ function getRunEndError(
   db: Db,
   conversationId: string,
   runId: string,
+  wasHandedOff = false,
 ): string | null {
   if (msg.error) return msg.error;
   if (isCancelStopReason(msg.stopReason)) {
+    if (wasHandedOff) return null;
     if (hasRunFinalReplyMessage(db, runId)) return null;
     if (requiresMcpReplyContract(db, conversationId)) {
       return 'Agent run was cancelled before sending a final reply';
@@ -413,6 +416,16 @@ function getRunEndError(
     return 'Run cancelled before completion';
   }
   return null;
+}
+
+function wasRunHandedOff(db: Db, runId: string): boolean {
+  return Boolean(db.prepare(
+    `SELECT 1
+     FROM events
+     WHERE run_id = ?
+       AND method = ?
+     LIMIT 1`,
+  ).get(runId, DM_TASK_HANDOFF_EVENT_METHOD));
 }
 
 function updateConversationStatus(
@@ -626,7 +639,8 @@ export function handleNodeWebSocket(
           void manager.onConversationSettled(msg.conversationId);
           break;
         }
-        const runEndError = getRunEndError(msg, db, msg.conversationId, msg.runId);
+        const handedOff = isCancelStopReason(msg.stopReason) && wasRunHandedOff(db, msg.runId);
+        const runEndError = getRunEndError(msg, db, msg.conversationId, msg.runId, handedOff);
         if (!msg.error && !isCancelStopReason(msg.stopReason)) {
           const fallbackCount = persistDeltaFallbackMessages({
             db,
@@ -650,7 +664,7 @@ export function handleNodeWebSocket(
           manager,
           conversationId: msg.conversationId,
           runId: msg.runId,
-          stopReason: msg.stopReason,
+          stopReason: handedOff ? 'handoff' : msg.stopReason,
           error: runEndError ?? undefined,
         });
         break;

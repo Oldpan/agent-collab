@@ -150,7 +150,14 @@ export class CodexTranscriptService {
       const sessionCwd = parsed.cwd?.trim();
       if (!sessionCwd || sessionCwd !== conversation.workspacePath) continue;
 
-      const matchedTurns = parsed.turns.filter((turn) => (turn.replyTarget ?? '').trim() === replyTarget);
+      const exactSessionMatch = Boolean(acpSessionId) && parsed.sessionId === acpSessionId;
+      let matchedTurns = parsed.turns.filter((turn) => (turn.replyTarget ?? '').trim() === replyTarget);
+      if (matchedTurns.length === 0 && exactSessionMatch) {
+        matchedTurns = parsed.turns.filter((turn) => !(turn.replyTarget ?? '').trim());
+        if (matchedTurns.length === 0) {
+          matchedTurns = parsed.turns;
+        }
+      }
       if (matchedTurns.length === 0) continue;
 
       const matchedRollout: CodexDebugRollout = {
@@ -158,7 +165,7 @@ export class CodexTranscriptService {
         turns: matchedTurns,
       };
 
-      if (acpSessionId && parsed.sessionId === acpSessionId) {
+      if (exactSessionMatch) {
         exactSessionRollouts.push(matchedRollout);
       } else {
         heuristicRollouts.push(matchedRollout);

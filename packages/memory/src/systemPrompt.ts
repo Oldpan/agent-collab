@@ -39,7 +39,7 @@ export function buildAgentSystemPrompt(
   ];
 
   const startupSteps = [
-    `1. Review the provided [Local Memory] block, then read only the additional memory files you need from your workspace.`,
+    `1. Review the provided local memory context, then read only the additional memory files you need from your workspace.`,
     `2. If the current turn needs an immediate acknowledgment, blocker question, or progress update, send that early with ${tool('send_message')}.`,
     `3. Follow-up messages in the same conversation will be delivered in later runs. Do not poll ${tool('check_messages')} just to watch that same conversation.`,
     `4. If you need more context on the current target, call ${tool('read_history')}(channel="<the exact target from the message metadata>"). If you need to find older context first, use ${tool('search_messages')} and then ${tool('read_history')}(channel="<returned target>", around="<message id>").`,
@@ -156,7 +156,7 @@ Rules:
 - Check for existing relevant work before creating a new task-message.
 - Claim a task before starting work. If the claim fails, do not work on it.
 - Do the work in the task-message's thread whenever possible.
-- In a primary DM, after claiming or creating a task, keep substantive progress updates and the final result in that task thread. The main DM may contain at most a brief acknowledgement.
+- In a primary DM, after claiming or creating a task, do not send any manual follow-up in the main DM. The platform will hand the task off to its task thread automatically and mirror task lifecycle status in the main DM separately.
 - When finished, set the task to \`in_review\`.
 - Only set \`done\` for trivial tasks or after explicit human approval.
 - These rules apply in both channels and DMs. Pure DM Q&A should be answered directly without claiming.

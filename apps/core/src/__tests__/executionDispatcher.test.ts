@@ -371,6 +371,39 @@ describe('ExecutionDispatcher', () => {
     expect(secondDispatch.contextText ?? '').not.toContain('User: before reset');
   });
 
+  it('direct handoff 恢复时不应把已在 exact-target 中可见的旧历史重复 replay', async () => {
+    const agent = manager.createAgent({
+      name: 'Handoff Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/handoff-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    await manager.submitPrompt(conv.id, '查下当前系统显存状态，这个按照task来执行');
+    const firstDispatch = sent[0]?.msg;
+    if (!firstDispatch || firstDispatch.type !== 'run.dispatch') throw new Error('missing first dispatch');
+    finishRun(db, { runId: firstDispatch.runId, stopReason: 'handoff' });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', conv.id);
+
+    const dmChannelId = `dm:${agent.agentId}`;
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES(?, ?, 'system', 'system', 'system', 'dm:@oldpan', ?, ?, ?)`,
+    ).run('task-started-1', dmChannelId, 'Started #1 "查询系统显存状态". Detailed work continues in the task thread.', allocateNextChannelMessageSeq(db, dmChannelId), Date.now() + 10);
+
+    await manager.submitPrompt(conv.id, '我们刚才聊了什么');
+
+    const secondDispatch = sent[1]?.msg;
+    if (!secondDispatch || secondDispatch.type !== 'run.dispatch') throw new Error('missing second dispatch');
+    expect(secondDispatch.dispatchMode).toBe('resume');
+    expect(secondDispatch.contextText ?? '').toContain('[Recent messages on this exact target]');
+    expect(secondDispatch.contextText ?? '').toContain('Started #1 "查询系统显存状态". Detailed work continues in the task thread.');
+    expect(secondDispatch.contextText ?? '').not.toContain('Context (previous messages, for continuity after restart):');
+    expect(secondDispatch.contextText ?? '').not.toContain('[stop_reason] handoff');
+  });
+
   it('resume replay 应优先使用真实 agent 回复，不应回放空响应 delta 噪音', async () => {
     manager.close();
     db.close();

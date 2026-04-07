@@ -13,7 +13,8 @@ export type TargetParticipant = {
 export const TARGET_PARTICIPANT_ACTIVE_WINDOW_MS = 15 * 60 * 1000;
 
 function normalizeThreadRootId(threadRootId?: string | null): string {
-  return threadRootId ?? '';
+  if (!threadRootId) return '';
+  return threadRootId.slice(0, 8);
 }
 
 export function upsertTargetParticipant(

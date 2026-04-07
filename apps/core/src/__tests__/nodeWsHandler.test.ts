@@ -759,6 +759,71 @@ describe('nodeWsHandler', () => {
     expect(dispatches).toHaveLength(0);
   });
 
+  it('被标记为 dm task handoff 的主 DM run 在 cancel 后应按 handoff 成功收口', () => {
+    const agent = manager.createAgent({
+      name: 'CancelHandoffBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/cancel-handoff-bob-contract',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const socket = new FakeSocket();
+    const events: any[] = [];
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(socket as any, registry as any, (_conversationId, event) => {
+      events.push(event);
+    }, db, manager);
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-cancel-handoff-1',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'handoff then stop',
+    });
+    db.prepare(
+      `INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, 1, 'platform/handoff', ?, ?)`,
+    ).run(
+      'run-cancel-handoff-1',
+      JSON.stringify({
+        status: 'started',
+        primaryTarget: 'dm:@oldpan',
+        threadTarget: 'dm:@oldpan:abc12345',
+        taskNumber: 7,
+      }),
+      Date.now(),
+    );
+
+    socket.emit('message', JSON.stringify({
+      type: 'run.end',
+      runId: 'run-cancel-handoff-1',
+      conversationId: conv.id,
+      stopReason: 'cancelled',
+    }));
+
+    const runRow = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
+      .get('run-cancel-handoff-1') as { error: string | null; stopReason: string | null };
+    expect(runRow).toEqual({
+      error: null,
+      stopReason: 'handoff',
+    });
+    expect(events).toContainEqual({
+      type: 'turn.end',
+      turnId: 'run-cancel-handoff-1',
+      stopReason: 'handoff',
+      endedAt: expect.any(Number),
+      error: undefined,
+    });
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+  });
+
   it('仅发送 progress 消息且后续仍有大量输出时应追加 delta_fallback 消息并正常收口', () => {
     const agent = manager.createAgent({
       name: 'Charlie',

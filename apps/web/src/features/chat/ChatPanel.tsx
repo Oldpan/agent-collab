@@ -395,6 +395,11 @@ export function ChatPanel({
         </div>
       ) : activeTab === "debug" ? (
         <div className="flex flex-1 flex-col overflow-hidden">
+          {isPrimaryDirectConversation ? (
+            <div className="mx-4 mt-4 rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              This debug view shows the main DM conversation run. If a task was handed off to a task thread, detailed work and debug appear in that thread.
+            </div>
+          ) : null}
           <CodexDebugPanel conversationId={conversation.id} />
         </div>
       ) : (
@@ -474,6 +479,7 @@ export function ChatPanel({
                   conversation={dmThreadConversation}
                   agent={agent}
                   rootMessage={dmThreadRootMessage}
+                  isAdmin={isAdmin}
                   onClose={() => {
                     setDmThreadConversation(null);
                     setDmThreadRootMessage(null);
@@ -571,6 +577,16 @@ function MessageRow({
   onOpenThread?: () => void;
   openingThread?: boolean;
 }) {
+  if (message.messageSource === "task_lifecycle") {
+    return (
+      <div className="px-1 py-2">
+        <div className="mx-auto max-w-[720px] rounded-sm border border-zinc-900/15 bg-[#fff6cc] px-3 py-1.5 text-center text-[12px] text-zinc-700">
+          {message.text}
+        </div>
+      </div>
+    );
+  }
+
   if (message.role === "system") {
     return (
       <div className="flex items-center gap-2 py-2 px-1">

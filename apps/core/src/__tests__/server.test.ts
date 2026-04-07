@@ -1440,6 +1440,42 @@ describe('REST API', () => {
     expect(messageRow.content).toBe('Updated DM task title');
   });
 
+  it('PATCH /api/agents/:id/tasks/:taskId/status 应更新 DM task 状态', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'DmStatusAlice',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/dm-status-alice',
+      channelId: 'default',
+    });
+    const dmChannelId = `dm:${agent.agentId}`;
+    const seq = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('dmstatus01-0000-0000-0000-000000000000', ?, 'system', 'system', 'system', 'dm:@User', 'DM task root', ?, ?, 'task')`,
+    ).run(dmChannelId, seq, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
+       VALUES('agent-dm-status-task', ?, 13, 'DM task root', 'DM brief', 'in_review', ?, ?, 'dmstatus01-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(dmChannelId, agent.agentId, agent.name, now, now);
+
+    const result = await fetchJson(`/api/agents/${agent.agentId}/tasks/agent-dm-status-task/status`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status: 'done' }),
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.status).toBe('done');
+    const taskRow = db.prepare(
+      `SELECT status
+       FROM tasks
+       WHERE task_id = 'agent-dm-status-task'`,
+    ).get() as { status: string };
+    expect(taskRow.status).toBe('done');
+  });
+
   it('POST /api/agents/:id/tasks/:taskId/unclaim 应释放 DM task claim 并回到 todo', async () => {
     const now = Date.now();
     const agent = manager.createAgent({

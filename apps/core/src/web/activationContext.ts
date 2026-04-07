@@ -22,6 +22,14 @@ export type DmThreadContextSnapshot = {
   messages: ActivationContextMessage[];
 };
 
+export type DmActiveTaskThreadSummary = {
+  taskNumber: number;
+  title: string;
+  status: string;
+  claimedByName: string | null;
+  threadTarget: string;
+};
+
 export type TargetActivationContext = {
   replyTarget: string;
   recentMessages: ActivationContextMessage[];
@@ -32,6 +40,7 @@ export type TargetActivationContext = {
   openTasks: Array<{ taskNumber: number; title: string; status: string; claimedByName: string | null }>;
   rootMessage?: ActivationContextMessage;
   dmContextSnapshot?: DmThreadContextSnapshot;
+  dmActiveTaskThreads?: DmActiveTaskThreadSummary[];
 };
 
 const DM_THREAD_CONTEXT_SNAPSHOT_LIMIT = 6;
@@ -246,10 +255,10 @@ export function buildTargetActivationContext(
       `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
               content, created_at as createdAt
        FROM channel_messages
-       WHERE channel_id = ? AND ${threadClause} AND seq < ?
+       WHERE channel_id = ? AND target = ? AND ${threadClause} AND seq < ?
        ORDER BY seq DESC
        LIMIT ?`,
-    ).all(params.channelId, ...threadArgs, params.triggerSeq, recentLimit) as ActivationContextMessage[]
+    ).all(params.channelId, params.replyTarget, ...threadArgs, params.triggerSeq, recentLimit) as ActivationContextMessage[]
   ).reverse();
 
   const checkpoint = getAgentMessageCheckpoint(db, params.agentId, params.channelId, normalizedThreadRootId);
@@ -262,11 +271,12 @@ export function buildTargetActivationContext(
     `SELECT COUNT(*) as count
      FROM channel_messages
      WHERE channel_id = ?
+       AND target = ?
        AND ${threadClause}
        AND seq > ?
        AND seq < ?
        AND sender_id != ?`,
-  ).get(params.channelId, ...threadArgs, checkpoint, unreadUpperBound, params.agentId) as { count: number };
+  ).get(params.channelId, params.replyTarget, ...threadArgs, checkpoint, unreadUpperBound, params.agentId) as { count: number };
 
   const rootMessage = normalizedThreadRootId
     ? db.prepare(
@@ -340,6 +350,35 @@ export function buildTargetActivationContext(
     claimedByName: string | null;
   }>;
 
+  const dmActiveTaskThreads = normalizedThreadRootId === null && params.replyTarget.startsWith('dm:@')
+    ? (db.prepare(
+      `SELECT t.task_number as taskNumber,
+              t.title,
+              t.status,
+              t.claimed_by_name as claimedByName,
+              cm.message_id as messageId
+       FROM tasks t
+       JOIN channel_messages cm ON cm.message_id = t.message_id
+       WHERE t.channel_id = ?
+         AND cm.target = ?
+         AND cm.thread_root_id IS NULL
+         AND t.status IN ('todo', 'in_progress', 'in_review')
+       ORDER BY t.updated_at DESC, t.task_number DESC`,
+    ).all(params.channelId, params.replyTarget) as Array<{
+      taskNumber: number;
+      title: string;
+      status: string;
+      claimedByName: string | null;
+      messageId: string;
+    }>).map((task) => ({
+      taskNumber: task.taskNumber,
+      title: task.title,
+      status: task.status,
+      claimedByName: task.claimedByName,
+      threadTarget: `${params.replyTarget}:${task.messageId.slice(0, 8)}`,
+    }))
+    : [];
+
   return {
     replyTarget: params.replyTarget,
     recentMessages,
@@ -350,5 +389,6 @@ export function buildTargetActivationContext(
     openTasks: boundTask ? [] : openTasks,
     ...(rootMessage ? { rootMessage } : {}),
     ...(dmContextSnapshot ? { dmContextSnapshot } : {}),
+    ...(dmActiveTaskThreads.length > 0 ? { dmActiveTaskThreads } : {}),
   };
 }

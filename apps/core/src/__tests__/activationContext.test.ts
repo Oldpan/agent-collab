@@ -363,4 +363,77 @@ describe('activationContext', () => {
 
     db.close();
   });
+
+  it('主 DM activation context 应包含活跃 DM task threads 摘要', () => {
+    const db = createTestDb();
+    const now = Date.now();
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, message_kind)
+       VALUES
+       ('dm-task-root-11111111-0000-0000-000000000000', 'dm:agent-kimi', 'user-1', 'oldpan', 'user', 'dm:@oldpan', 'Check memory usage', 1, ?, NULL, 'task'),
+       ('dm-task-root-22222222-0000-0000-000000000000', 'dm:agent-kimi', 'user-1', 'oldpan', 'user', 'dm:@oldpan', 'Inspect gpu status', 2, ?, NULL, 'task')`,
+    ).run(now, now + 1);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, status, claimed_by_name, message_id, created_at, updated_at)
+       VALUES
+       ('task-1', 'dm:agent-kimi', 1, 'Check memory usage', 'in_progress', 'Kimi', 'dm-task-root-11111111-0000-0000-000000000000', ?, ?),
+       ('task-2', 'dm:agent-kimi', 2, 'Inspect gpu status', 'in_review', 'Kimi', 'dm-task-root-22222222-0000-0000-000000000000', ?, ?)`,
+    ).run(now, now + 10, now, now + 20);
+
+    const context = buildTargetActivationContext(db, {
+      agentId: 'agent-kimi',
+      channelId: 'dm:agent-kimi',
+      replyTarget: 'dm:@oldpan',
+      triggerSeq: 3,
+      threadRootId: null,
+    });
+
+    expect(context.dmActiveTaskThreads).toEqual([
+      {
+        taskNumber: 2,
+        title: 'Inspect gpu status',
+        status: 'in_review',
+        claimedByName: 'Kimi',
+        threadTarget: 'dm:@oldpan:dm-task-',
+      },
+      {
+        taskNumber: 1,
+        title: 'Check memory usage',
+        status: 'in_progress',
+        claimedByName: 'Kimi',
+        threadTarget: 'dm:@oldpan:dm-task-',
+      },
+    ]);
+
+    db.close();
+  });
+
+  it('主 DM exact-target recent messages 和 unread 统计不应混入其他 target', () => {
+    const db = createTestDb();
+    const now = Date.now();
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES
+       ('branch-msg-1', 'dm:agent-kimi', 'user-1', 'oldpan', 'user', '#default', 'branch hello', 1, ?),
+       ('dm-msg-1', 'dm:agent-kimi', 'user-1', 'oldpan', 'user', 'dm:@oldpan', 'dm hello', 2, ?),
+       ('dm-msg-2', 'dm:agent-kimi', 'agent-kimi', 'kimi', 'agent', 'dm:@oldpan', 'dm reply', 3, ?)`,
+    ).run(now, now + 1, now + 2);
+
+    const context = buildTargetActivationContext(db, {
+      agentId: 'agent-kimi',
+      channelId: 'dm:agent-kimi',
+      replyTarget: 'dm:@oldpan',
+      triggerSeq: 4,
+      threadRootId: null,
+    });
+
+    expect(context.recentMessages.map((message) => message.messageId)).toEqual(['dm-msg-1', 'dm-msg-2']);
+    expect(context.recentMessages.every((message) => message.target === 'dm:@oldpan')).toBe(true);
+    expect(context.oldestVisibleSeq).toBe(2);
+    expect(context.unreadCount).toBe(0);
+
+    db.close();
+  });
 });

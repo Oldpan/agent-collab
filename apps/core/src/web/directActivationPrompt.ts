@@ -1,4 +1,8 @@
-import type { ActivationContextMessage, DmThreadContextSnapshot } from './activationContext.js';
+import type {
+  ActivationContextMessage,
+  DmActiveTaskThreadSummary,
+  DmThreadContextSnapshot,
+} from './activationContext.js';
 import { buildExactTargetHistoryContextText } from './channelActivationPrompt.js';
 
 type DirectActivationPromptParams = {
@@ -15,6 +19,7 @@ type DirectActivationContextParams = {
   oldestVisibleSeq?: number;
   rootMessage?: ActivationContextMessage;
   dmContextSnapshot?: DmThreadContextSnapshot;
+  dmActiveTaskThreads?: DmActiveTaskThreadSummary[];
 };
 
 export function buildDirectActivationPrompt(params: DirectActivationPromptParams): string {
@@ -63,6 +68,18 @@ export function buildDirectActivationContextText(params: DirectActivationContext
         ...params.dmContextSnapshot.messages.map((message) => {
           const triggerTag = params.dmContextSnapshot?.triggerMessageId === message.messageId ? ' [Trigger]' : '';
           return `@${message.senderName}${triggerTag}: ${message.content}`;
+        }),
+      ].join('\n'),
+    );
+  }
+
+  if (params.dmActiveTaskThreads?.length) {
+    sections.push(
+      [
+        '[Active DM task threads]',
+        ...params.dmActiveTaskThreads.map((task) => {
+          const assignee = task.claimedByName ? ` @${task.claimedByName}` : '';
+          return `#${task.taskNumber} [${task.status}]${assignee} -> ${task.threadTarget} — ${task.title}`;
         }),
       ].join('\n'),
     );

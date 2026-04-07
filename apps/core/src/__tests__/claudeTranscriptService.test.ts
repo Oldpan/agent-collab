@@ -254,4 +254,139 @@ describe('ClaudeTranscriptService', () => {
     expect(result.rollouts[0]?.turns[0]?.tokenUsage?.modelContextWindow).toBe(256000);
     expect(result.rollouts[0]?.turns[0]?.platformInput?.systemPromptText).toBe('SYSTEM PROMPT');
   });
+
+  it('应在 acp_session_id 精确命中时回退接纳缺少 reply_target 的 thread transcript turns', async () => {
+    const db = createTestDb();
+    const conversation: ConversationInfo = {
+      id: 'conv-thread-1',
+      channelId: 'dm:agent-1',
+      replyTarget: 'dm:@yanzong:client-d',
+      title: 'Yanzong DM Thread',
+      agentType: 'claude_acp',
+      threadKind: 'direct',
+      isPrimaryThread: false,
+      workspacePath: '/root/.agent-collab/agents/kimi',
+      status: 'idle',
+      createdAt: 1,
+      updatedAt: 1,
+      nodeId: 'node-1',
+      agentId: 'agent-1',
+      userId: 'user-1',
+      threadRootId: 'client-d',
+    };
+    const agent: AgentInfo = {
+      agentId: 'agent-1',
+      name: 'Kimi',
+      agentType: 'claude_acp',
+      channelId: 'dm:agent-1',
+      channelIds: ['dm:agent-1'],
+      workspacePath: '/root/.agent-collab/agents/kimi',
+      createdAt: 1,
+      updatedAt: 1,
+      description: 'Helpful agent',
+      systemPrompt: 'Stay sharp.',
+    };
+
+    insertConversationFixtures(db, {
+      conversation,
+      sessionKey: 'session-thread-1',
+      acpSessionId: 'thread-session-1',
+      systemPromptText: 'SYSTEM PROMPT',
+      agent,
+    });
+    db.prepare(
+      `INSERT INTO runs(run_id, session_key, prompt_text, started_at, ended_at, stop_reason, error)
+       VALUES(?, ?, ?, ?, ?, ?, NULL)`,
+    ).run('run-thread-1', 'session-thread-1', 'thread handoff prompt', 1000, 1100, 'end_turn');
+    db.prepare(
+      `INSERT INTO run_debug_inputs(
+         run_id, conversation_id, session_key, dispatch_mode, reply_target,
+         acp_session_id, is_fresh_session, is_exact, system_prompt_text, context_text,
+         prompt_text, dispatched_prompt_text, created_at, updated_at
+       )
+       VALUES(?, ?, ?, 'cold_start', ?, ?, 1, 1, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'run-thread-1',
+      conversation.id,
+      'session-thread-1',
+      conversation.replyTarget,
+      'thread-session-1',
+      'SYSTEM PROMPT',
+      'CONTEXT TEXT',
+      '[DM Task Thread Handoff]\nTask thread target: dm:@yanzong:client-d',
+      '[DM Task Thread Handoff]\nTask thread target: dm:@yanzong:client-d',
+      1000,
+      1000,
+    );
+
+    const transcript = [
+      JSON.stringify({
+        type: 'queue-operation',
+        operation: 'dequeue',
+        timestamp: '2026-04-07T10:00:00.000Z',
+        sessionId: 'thread-session-1',
+      }),
+      JSON.stringify({
+        type: 'user',
+        uuid: 'turn-thread-1',
+        timestamp: '2026-04-07T10:00:01.000Z',
+        sessionId: 'thread-session-1',
+        cwd: '/root/.agent-collab/agents/kimi',
+        message: {
+          role: 'user',
+          content: [
+            { type: 'text', text: '[DM Task Thread Handoff]\nA task was handed off here.' },
+          ],
+        },
+      }),
+      JSON.stringify({
+        type: 'assistant',
+        uuid: 'assistant-thread-1',
+        timestamp: '2026-04-07T10:00:05.000Z',
+        sessionId: 'thread-session-1',
+        cwd: '/root/.agent-collab/agents/kimi',
+        message: {
+          role: 'assistant',
+          stop_reason: 'end_turn',
+          content: [
+            { type: 'text', text: 'Working in the task thread.' },
+          ],
+        },
+      }),
+    ].join('\n');
+
+    const service = new ClaudeTranscriptService({
+      db,
+      broker: {
+        listFiles: async () => ({
+          rootPath: '/root/.agent-collab/agents/kimi/.claude-runtime/projects',
+          truncated: false,
+          files: [
+            {
+              path: 'project/thread.jsonl',
+              size: transcript.length,
+              modifiedAt: 2000,
+            },
+          ],
+        }),
+        readFile: async () => ({
+          rootPath: '/root/.agent-collab/agents/kimi/.claude-runtime/projects',
+          path: 'project/thread.jsonl',
+          content: transcript,
+          size: transcript.length,
+          modifiedAt: 2000,
+        }),
+      } as any,
+      getConversationById: () => conversation,
+      getAgentById: () => agent,
+      getAcpSessionIdByConversationId: () => 'thread-session-1',
+    });
+
+    const result = await service.getConversationDebug(conversation.id);
+    expect(result.matchMode).toBe('acp_session_id');
+    expect(result.sessionMatchMissed).toBe(false);
+    expect(result.rollouts).toHaveLength(1);
+    expect(result.rollouts[0]?.turns).toHaveLength(1);
+    expect(result.rollouts[0]?.turns[0]?.assistantOutputs[0]?.text).toContain('Working in the task thread.');
+  });
 });

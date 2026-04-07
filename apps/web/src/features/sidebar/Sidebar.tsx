@@ -360,7 +360,9 @@ export function Sidebar({
             const selectedConversation = selectedId
               ? conversations.find((conversation) => conversation.id === selectedId)
               : null;
-            const selectedAgentId = selectedConversation?.agentId ?? null;
+            const selectedAgentId = selectedConversation?.threadKind === "direct"
+              ? (selectedConversation.agentId ?? null)
+              : null;
 
             return (
               <div key={machine.nodeId}>

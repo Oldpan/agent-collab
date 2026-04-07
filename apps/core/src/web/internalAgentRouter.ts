@@ -33,6 +33,8 @@ import { allocateNextTaskNumber } from './taskNumbers.js';
 import { isValidTransition } from './taskStatusTransitions.js';
 
 const AGENT_MENTION_COOLDOWN_MS = 60_000;
+const DM_TASK_HANDOFF_EVENT_METHOD = 'platform/handoff';
+const DM_TASK_LIFECYCLE_SOURCE = 'task_lifecycle';
 
 type MessageRow = {
   messageId: string;
@@ -82,6 +84,38 @@ type TaskRow = {
 
 type ContextMsg = { senderName: string; senderType: string; content: string; seq: number };
 type MessageScope = { clause: string; params: Array<string | number> };
+type ClaimableMessageRow = {
+  messageId: string;
+  content: string;
+  threadRootId: string | null;
+  senderType: string;
+  senderName: string;
+  target: string;
+  seq: number;
+  createdAt: number;
+  attachmentIds: string | null;
+};
+
+type TaskMessageBroadcastRow = {
+  messageId: string;
+  senderName: string;
+  senderType: 'user' | 'agent' | 'system';
+  target: string;
+  content: string;
+  seq: number;
+  createdAt: number;
+  attachmentIds: string | null;
+};
+
+type DmTaskHandoffState = {
+  primaryConversationId: string;
+  primaryTarget: string;
+  threadTarget: string;
+  threadConversationId: string | null;
+  taskNumber: number;
+  handoffStarted: boolean;
+  handoffError?: string | null;
+};
 
 function parseBoundedPositiveInt(value: string | undefined, fallback: number, max: number): number {
   const parsed = Number(value);
@@ -149,6 +183,25 @@ function doesThreadRootExist(db: Db, channelId: string, threadRootId: string): b
   return Boolean(row);
 }
 
+function fetchLatestTopLevelUserMessageForTarget(
+  db: Db,
+  channelId: string,
+  target: string,
+): ClaimableMessageRow | null {
+  const row = db.prepare(
+    `SELECT message_id as messageId, content, thread_root_id as threadRootId, sender_type as senderType, sender_name as senderName,
+            target, seq, created_at as createdAt, attachment_ids as attachmentIds
+     FROM channel_messages
+     WHERE channel_id = ?
+       AND target = ?
+       AND thread_root_id IS NULL
+       AND sender_type = 'user'
+     ORDER BY seq DESC
+     LIMIT 1`,
+  ).get(channelId, target) as ClaimableMessageRow | undefined;
+  return row ?? null;
+}
+
 function isKnownDmTargetPeer(db: Db, target: string): boolean {
   const match = target.match(/^dm:@([^:]+)(?::[a-zA-Z0-9-]+)?$/);
   if (!match) return false;
@@ -181,6 +234,406 @@ export function registerInternalAgentRoutes(
   attachmentsDir?: string,
 ): void {
   const runThreadSendOverrides = new Map<string, string>();
+  const runDmTaskHandoffs = new Map<string, DmTaskHandoffState>();
+
+  const buildDmTaskThreadTarget = (primaryTarget: string, messageId: string) => `${primaryTarget}:${messageId.slice(0, 8)}`;
+
+  const nextSyntheticRunEventSeq = (runId: string): number => {
+    const row = db.prepare(
+      `SELECT COALESCE(MAX(seq), 0) as maxSeq
+       FROM events
+       WHERE run_id = ?`,
+    ).get(runId) as { maxSeq: number } | undefined;
+    return (row?.maxSeq ?? 0) + 1;
+  };
+
+  const markRunAsDmTaskHandedOff = (params: {
+    runId: string;
+    status: 'started' | 'failed';
+    primaryTarget: string;
+    threadTarget: string;
+    threadConversationId: string | null;
+    taskNumber: number;
+    error?: string | null;
+  }) => {
+    db.prepare(
+      `INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, ?, ?, ?, ?)`,
+    ).run(
+      params.runId,
+      nextSyntheticRunEventSeq(params.runId),
+      DM_TASK_HANDOFF_EVENT_METHOD,
+      JSON.stringify({
+        status: params.status,
+        primaryTarget: params.primaryTarget,
+        threadTarget: params.threadTarget,
+        threadConversationId: params.threadConversationId,
+        taskNumber: params.taskNumber,
+        ...(params.error ? { error: params.error } : {}),
+      }),
+      Date.now(),
+    );
+  };
+
+  const buildDmTaskHandoffBlockedError = (handoff: DmTaskHandoffState): string => {
+    if (handoff.handoffStarted) {
+      return `This run already handed off DM task work to ${handoff.threadTarget}. Do not continue work in ${handoff.primaryTarget}; the platform mirrors task status there and detailed execution belongs in the task thread conversation.`;
+    }
+    return `This run already attempted DM task handoff for ${handoff.threadTarget}, but the handoff failed (${handoff.handoffError ?? 'unknown error'}). Do not continue detailed work in ${handoff.primaryTarget}; ask the user to retry or open the task thread instead.`;
+  };
+
+  const fetchPersistedRunDmTaskHandoff = (runId: string, conversationId: string): DmTaskHandoffState | null => {
+    const row = db.prepare(
+      `SELECT payload_json as payloadJson
+       FROM events
+       WHERE run_id = ? AND method = ?
+       ORDER BY seq DESC
+       LIMIT 1`,
+    ).get(runId, DM_TASK_HANDOFF_EVENT_METHOD) as { payloadJson: string } | undefined;
+    if (!row?.payloadJson) return null;
+    try {
+      const payload = JSON.parse(row.payloadJson) as {
+        status?: unknown;
+        primaryTarget?: unknown;
+        threadTarget?: unknown;
+        threadConversationId?: unknown;
+        taskNumber?: unknown;
+        error?: unknown;
+      };
+      if (payload.status !== 'started' && payload.status !== 'failed') return null;
+      if (typeof payload.primaryTarget !== 'string' || !payload.primaryTarget.trim()) return null;
+      if (typeof payload.threadTarget !== 'string' || !payload.threadTarget.trim()) return null;
+      if (typeof payload.taskNumber !== 'number' || !Number.isFinite(payload.taskNumber)) return null;
+      return {
+        primaryConversationId: conversationId,
+        primaryTarget: payload.primaryTarget,
+        threadTarget: payload.threadTarget,
+        threadConversationId: typeof payload.threadConversationId === 'string' ? payload.threadConversationId : null,
+        taskNumber: Math.floor(payload.taskNumber),
+        handoffStarted: payload.status === 'started',
+        ...(typeof payload.error === 'string' && payload.error.trim() ? { handoffError: payload.error } : {}),
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  const getActiveRunHandoff = (conversationId?: string | null): { runId: string; handoff: DmTaskHandoffState } | null => {
+    if (!conversationId) return null;
+    const runId = findActiveConversationRunId(db, conversationId);
+    if (!runId) return null;
+    const handoff = runDmTaskHandoffs.get(runId) ?? fetchPersistedRunDmTaskHandoff(runId, conversationId);
+    if (!handoff) return null;
+    runDmTaskHandoffs.set(runId, handoff);
+    return { runId, handoff };
+  };
+
+  const getLatestConversationDispatchState = (conversationId: string): { queueId: number | null; runId: string | null } => {
+    const queuedPrompt = db.prepare(
+      `SELECT queue_id as queueId
+       FROM conversation_prompt_queue
+       WHERE conversation_id = ?
+       ORDER BY queue_id DESC
+       LIMIT 1`,
+    ).get(conversationId) as { queueId: number } | undefined;
+    const existingRun = db.prepare(
+      `SELECT r.run_id as runId
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.id = ?
+       ORDER BY r.started_at DESC
+       LIMIT 1`,
+    ).get(conversationId) as { runId: string } | undefined;
+    return {
+      queueId: queuedPrompt?.queueId ?? null,
+      runId: existingRun?.runId ?? null,
+    };
+  };
+
+  const fetchTaskMessageBroadcastRow = (messageId: string): TaskMessageBroadcastRow | null => {
+    const row = db.prepare(
+      `SELECT message_id as messageId,
+              sender_name as senderName,
+              sender_type as senderType,
+              target,
+              content,
+              seq,
+              created_at as createdAt,
+              attachment_ids as attachmentIds
+       FROM channel_messages
+       WHERE message_id = ?
+       LIMIT 1`,
+    ).get(messageId) as TaskMessageBroadcastRow | undefined;
+    return row ?? null;
+  };
+
+  const broadcastPrimaryDmEvent = (agentId: string, primaryTarget: string, event: BroadcastChannelMessage) => {
+    const conversationId = findConversationIdForReplyTarget(db, agentId, primaryTarget);
+    if (conversationId) {
+      broadcastToAgent(agentId, event, conversationId);
+    }
+  };
+
+  const broadcastDmTaskRootUpdate = (params: {
+    agentId: string;
+    primaryTarget: string;
+    messageId: string;
+    taskNumber: number;
+    taskStatus: string;
+    taskAssigneeName: string | null;
+  }) => {
+    const message = fetchTaskMessageBroadcastRow(params.messageId);
+    if (!message) return;
+    broadcastPrimaryDmEvent(params.agentId, params.primaryTarget, {
+      type: 'channel.message',
+      message: {
+        id: message.messageId,
+        senderName: message.senderName,
+        senderType: message.senderType,
+        content: message.content,
+        createdAt: new Date(message.createdAt).toISOString(),
+        seq: message.seq,
+        taskNumber: params.taskNumber,
+        taskStatus: params.taskStatus,
+        taskAssigneeName: params.taskAssigneeName,
+        ...(message.attachmentIds ? { attachmentIds: JSON.parse(message.attachmentIds) as string[] } : {}),
+      },
+    });
+  };
+
+  const buildDmTaskLifecycleText = (params: {
+    kind: 'started' | 'in_review' | 'done' | 'handoff_failed';
+    taskNumber: number;
+    title: string;
+  }): string => {
+    const label = `#${params.taskNumber} "${params.title}"`;
+    switch (params.kind) {
+      case 'started':
+        return `Started ${label}. Detailed work continues in the task thread.`;
+      case 'in_review':
+        return `${label} moved to in review.`;
+      case 'done':
+        return `${label} marked done.`;
+      case 'handoff_failed':
+        return `${label} could not start its task thread automatically.`;
+      default:
+        return label;
+    }
+  };
+
+  const emitDmTaskLifecycleEvent = (params: {
+    agentId: string;
+    primaryTarget: string;
+    taskNumber: number;
+    title: string;
+    taskStatus: string;
+    kind: 'started' | 'in_review' | 'done' | 'handoff_failed';
+    taskAssigneeName?: string | null;
+  }) => {
+    const channelId = `dm:${params.agentId}`;
+    const now = Date.now();
+    const messageId = randomUUID();
+    const seq = allocateNextChannelMessageSeq(db, channelId);
+    const content = buildDmTaskLifecycleText(params);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, message_kind, message_source)
+       VALUES(?, ?, 'system', 'system', 'system', ?, ?, ?, ?, NULL, 'task_event', ?)`,
+    ).run(
+      messageId,
+      channelId,
+      params.primaryTarget,
+      content,
+      seq,
+      now,
+      DM_TASK_LIFECYCLE_SOURCE,
+    );
+    broadcastPrimaryDmEvent(params.agentId, params.primaryTarget, {
+      type: 'channel.message',
+      message: {
+        id: messageId,
+        senderName: 'system',
+        senderType: 'system',
+        content,
+        createdAt: new Date(now).toISOString(),
+        seq,
+        messageSource: DM_TASK_LIFECYCLE_SOURCE,
+        taskNumber: params.taskNumber,
+        taskStatus: params.taskStatus,
+        taskAssigneeName: params.taskAssigneeName ?? null,
+      },
+    });
+  };
+
+  const buildDmTaskHandoffPrompt = (params: {
+    taskNumber: number;
+    title: string;
+    description: string;
+    threadTarget: string;
+    rootMessageId: string;
+    triggerMessage?: ClaimableMessageRow | null;
+  }): string => {
+    const lines = [
+      '[DM Task Thread Handoff]',
+      'A task was just created or claimed from the main DM and has been handed off to this task thread.',
+      '',
+      '[Current conversation target]',
+      `reply_target: ${params.threadTarget}`,
+      `Task: #${params.taskNumber} ${params.title}`,
+      `Task thread target: ${params.threadTarget}`,
+      `Task root message id: ${params.rootMessageId}`,
+      '',
+      'Task brief / goal / done criteria:',
+      params.description,
+    ];
+    if (params.triggerMessage?.content?.trim()) {
+      lines.push(
+        '',
+        '[Triggered message metadata]',
+        `target: ${params.triggerMessage.target}`,
+        `sender: @${params.triggerMessage.senderName}`,
+        '',
+        '[Triggered message body]',
+        params.triggerMessage.content,
+      );
+    }
+    lines.push(
+      '',
+      'Rules:',
+      '- This task thread is now the primary work surface for the task.',
+      '- Put substantive progress updates, tool results, and the final answer in this thread.',
+      '- Do not send any manual follow-up in the main DM after this handoff.',
+      '- The platform will mirror task lifecycle status in the main DM separately.',
+      '- Start working on the task now.',
+    );
+    return lines.join('\n');
+  };
+
+  const startDmTaskHandoff = async (params: {
+    agentId: string;
+    currentConversationId: string | null;
+    currentConversationRunId: string | null;
+    currentPrimaryDmTarget: string;
+    taskNumber: number;
+    title: string;
+    description: string;
+    messageId: string;
+    triggerMessage?: ClaimableMessageRow | null;
+  }): Promise<{
+    handoffStarted: boolean;
+    threadConversationId: string | null;
+    threadTarget: string;
+    handoffError?: string;
+  }> => {
+    const threadTarget = buildDmTaskThreadTarget(params.currentPrimaryDmTarget, params.messageId);
+    let threadConversationId: string | null = null;
+    const closePrimaryRun = (handoffStarted: boolean, handoffError?: string) => {
+      if (!params.currentConversationId || !params.currentConversationRunId) return;
+      runThreadSendOverrides.delete(params.currentConversationRunId);
+      runDmTaskHandoffs.set(params.currentConversationRunId, {
+        primaryConversationId: params.currentConversationId,
+        primaryTarget: params.currentPrimaryDmTarget,
+        threadTarget,
+        threadConversationId,
+        taskNumber: params.taskNumber,
+        handoffStarted,
+        ...(handoffError ? { handoffError } : {}),
+      });
+      markRunAsDmTaskHandedOff({
+        runId: params.currentConversationRunId,
+        status: handoffStarted ? 'started' : 'failed',
+        primaryTarget: params.currentPrimaryDmTarget,
+        threadTarget,
+        threadConversationId,
+        taskNumber: params.taskNumber,
+        ...(handoffError ? { error: handoffError } : {}),
+      });
+      conversationManager.cancelConversationRun(params.currentConversationId);
+    };
+    threadConversationId = ensureConversationIdForReplyTarget(
+      db,
+      conversationManager,
+      params.agentId,
+      threadTarget,
+    );
+    if (!threadConversationId) {
+      const handoffError = `Failed to open task thread conversation for ${threadTarget}`;
+      emitDmTaskLifecycleEvent({
+        agentId: params.agentId,
+        primaryTarget: params.currentPrimaryDmTarget,
+        taskNumber: params.taskNumber,
+        title: params.title,
+        taskStatus: 'in_progress',
+        kind: 'handoff_failed',
+      });
+      closePrimaryRun(false, handoffError);
+      return {
+        handoffStarted: false,
+        threadConversationId: null,
+        threadTarget,
+        handoffError,
+      };
+    }
+    const beforeDispatchState = getLatestConversationDispatchState(threadConversationId);
+    try {
+      await conversationManager.submitPrompt(
+        threadConversationId,
+        buildDmTaskHandoffPrompt({
+          taskNumber: params.taskNumber,
+          title: params.title,
+          description: params.description,
+          threadTarget,
+          rootMessageId: params.messageId,
+          triggerMessage: params.triggerMessage,
+        }),
+        { recordAsUserMessage: false },
+      );
+      emitDmTaskLifecycleEvent({
+        agentId: params.agentId,
+        primaryTarget: params.currentPrimaryDmTarget,
+        taskNumber: params.taskNumber,
+        title: params.title,
+        taskStatus: 'in_progress',
+        kind: 'started',
+        taskAssigneeName: conversationManager.getAgent(params.agentId)?.name ?? null,
+      });
+      closePrimaryRun(true);
+      return { handoffStarted: true, threadConversationId, threadTarget };
+    } catch (error) {
+      const afterDispatchState = getLatestConversationDispatchState(threadConversationId);
+      if (
+        (afterDispatchState.queueId !== null && afterDispatchState.queueId !== beforeDispatchState.queueId)
+        || (afterDispatchState.runId !== null && afterDispatchState.runId !== beforeDispatchState.runId)
+      ) {
+        emitDmTaskLifecycleEvent({
+          agentId: params.agentId,
+          primaryTarget: params.currentPrimaryDmTarget,
+          taskNumber: params.taskNumber,
+          title: params.title,
+          taskStatus: 'in_progress',
+          kind: 'started',
+          taskAssigneeName: conversationManager.getAgent(params.agentId)?.name ?? null,
+        });
+        closePrimaryRun(true);
+        return { handoffStarted: true, threadConversationId, threadTarget };
+      }
+      const handoffError = String((error as Error)?.message ?? error);
+      emitDmTaskLifecycleEvent({
+        agentId: params.agentId,
+        primaryTarget: params.currentPrimaryDmTarget,
+        taskNumber: params.taskNumber,
+        title: params.title,
+        taskStatus: 'in_progress',
+        kind: 'handoff_failed',
+      });
+      closePrimaryRun(false, handoffError);
+      return {
+        handoffStarted: false,
+        threadConversationId,
+        threadTarget,
+        handoffError,
+      };
+    }
+  };
 
   const broadcastChannelTasksChanged = (channelId: string) => {
     broadcastToChannel(channelId, {
@@ -265,6 +718,11 @@ export function registerInternalAgentRoutes(
     }
 
     const activeRunId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
+    const activeConversationHandoff = getActiveRunHandoff(conversationId);
+    if (activeConversationHandoff) {
+      reply.code(409);
+      return { error: buildDmTaskHandoffBlockedError(activeConversationHandoff.handoff) };
+    }
     const defaultTarget = conversationId ? resolveDefaultReplyTarget(db, conversationId, humanUserName) : null;
     const initialTarget = target?.trim() || (activeRunId ? runThreadSendOverrides.get(activeRunId) : null) || defaultTarget;
     if (!initialTarget) {
@@ -293,7 +751,8 @@ export function registerInternalAgentRoutes(
     const seq = allocateNextChannelMessageSeq(db, channelId);
     const runId = activeRunId;
     const threadRootId = resolveThreadRootId(resolvedTarget);
-    if (threadRootId && !doesThreadRootExist(db, channelId, threadRootId)) {
+    const isCurrentConversationTarget = Boolean(conversationId && defaultTarget && resolvedTarget === defaultTarget);
+    if (threadRootId && !isCurrentConversationTarget && !doesThreadRootExist(db, channelId, threadRootId)) {
       reply.code(400);
       return { error: `Thread root not found for target: ${resolvedTarget}` };
     }
@@ -350,12 +809,14 @@ export function registerInternalAgentRoutes(
       },
     };
 
-    const targetConversationId = ensureConversationIdForReplyTarget(
-      db,
-      conversationManager,
-      agentId,
-      resolvedTarget,
-    );
+    const targetConversationId = isCurrentConversationTarget && conversationId
+      ? conversationId
+      : ensureConversationIdForReplyTarget(
+        db,
+        conversationManager,
+        agentId,
+        resolvedTarget,
+      );
     if (targetConversationId) {
       broadcastToAgent(agentId, channelMessageEvent, targetConversationId);
     }
@@ -1113,7 +1574,17 @@ export function registerInternalAgentRoutes(
     }
 
     const now = Date.now();
-    const created: Array<{ taskId: string; taskNumber: number; title: string; messageId: string }> = [];
+    const created: Array<{
+      taskId: string;
+      taskNumber: number;
+      title: string;
+      description: string;
+      messageId: string;
+      handoffStarted?: boolean;
+      threadConversationId?: string | null;
+      threadTarget?: string | null;
+      handoffError?: string;
+    }> = [];
     const currentConversation = typeof conversationId === 'string' && conversationId.trim()
       ? conversationManager.getConversation(conversationId.trim())
       : null;
@@ -1125,6 +1596,16 @@ export function registerInternalAgentRoutes(
       ? (currentConversation.replyTarget ?? resolveDefaultReplyTarget(db, currentConversation.id, humanUserName) ?? '').trim()
       : '';
     const currentConversationRunId = currentConversation ? findActiveConversationRunId(db, currentConversation.id) : null;
+    const activeConversationHandoff = getActiveRunHandoff(currentConversation?.id);
+    if (activeConversationHandoff) {
+      reply.code(409);
+      return { error: buildDmTaskHandoffBlockedError(activeConversationHandoff.handoff) };
+    }
+    const autoClaimInPrimaryDm = Boolean(currentPrimaryDmTarget);
+    if (autoClaimInPrimaryDm && normalizedTasks.length > 1) {
+      reply.code(400);
+      return { error: 'A primary DM can only create one task per request before handing work off to its task thread' };
+    }
 
     const insertMessage = db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
@@ -1136,6 +1617,12 @@ export function registerInternalAgentRoutes(
                          created_by_agent_id, created_by_name, created_at, updated_at)
        VALUES(?, ?, ?, ?, ?, 'todo', ?, ?, ?, ?, ?)`,
     );
+    const insertClaimedTask = db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
+                         claimed_by_agent_id, claimed_by_name,
+                         created_by_agent_id, created_by_name, created_at, updated_at)
+       VALUES(?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?)`,
+    );
 
     db.transaction(() => {
       for (const taskDef of normalizedTasks) {
@@ -1145,14 +1632,38 @@ export function registerInternalAgentRoutes(
         const seq = allocateNextChannelMessageSeq(db, channelId);
         const target = canonicalTaskTarget(channelId, channel, db);
         insertMessage.run(messageId, channelId, agentId, agent.name, target, taskDef.title, seq, now);
-        insertTask.run(taskId, channelId, taskNumber, taskDef.title, taskDef.description, messageId, agentId, agent.name, now, now);
-        created.push({ taskId, taskNumber, title: taskDef.title, messageId });
+        if (autoClaimInPrimaryDm) {
+          insertClaimedTask.run(
+            taskId,
+            channelId,
+            taskNumber,
+            taskDef.title,
+            taskDef.description,
+            messageId,
+            agentId,
+            agent.name,
+            agentId,
+            agent.name,
+            now,
+            now,
+          );
+          syncTaskThreadOwner(db, {
+            taskId,
+            agentId,
+            lastActiveAt: now,
+          });
+        } else {
+          insertTask.run(taskId, channelId, taskNumber, taskDef.title, taskDef.description, messageId, agentId, agent.name, now, now);
+        }
+        created.push({ taskId, taskNumber, title: taskDef.title, description: taskDef.description, messageId });
         const taskMessageEvent: ServerEvent = {
           type: 'channel.message',
           message: {
             id: messageId, senderName: agent.name, senderType: 'agent', content: taskDef.title,
             createdAt: new Date(now).toISOString(), seq,
-            taskNumber, taskStatus: 'todo', taskAssigneeName: null,
+            taskNumber,
+            taskStatus: autoClaimInPrimaryDm ? 'in_progress' : 'todo',
+            taskAssigneeName: autoClaimInPrimaryDm ? agent.name : null,
           },
         };
         if (channelId.startsWith('dm:')) {
@@ -1171,11 +1682,25 @@ export function registerInternalAgentRoutes(
       }
     })();
 
-    if (created.length === 1 && currentPrimaryDmTarget && currentConversationRunId) {
-      runThreadSendOverrides.set(
-        currentConversationRunId,
-        `${currentPrimaryDmTarget}:${created[0].messageId.slice(0, 8)}`,
-      );
+    if (currentPrimaryDmTarget) {
+      const triggerMessage = fetchLatestTopLevelUserMessageForTarget(db, channelId, currentPrimaryDmTarget);
+      for (const task of created) {
+        const handoff = await startDmTaskHandoff({
+          agentId,
+          currentConversationId: currentConversation?.id ?? null,
+          currentConversationRunId,
+          currentPrimaryDmTarget,
+          taskNumber: task.taskNumber,
+          title: task.title,
+          description: task.description,
+          messageId: task.messageId,
+          triggerMessage,
+        });
+        task.handoffStarted = handoff.handoffStarted;
+        task.threadConversationId = handoff.threadConversationId;
+        task.threadTarget = handoff.threadTarget;
+        task.handoffError = handoff.handoffError;
+      }
     }
 
     if (created.length > 0) broadcastChannelTasksChanged(channelId);
@@ -1191,13 +1716,13 @@ export function registerInternalAgentRoutes(
    */
   app.post<{
     Params: { agentId: string };
-    Body: { channel: string; message_ids: string[]; title?: string; description?: string };
+    Body: { channel: string; message_ids: string[]; title?: string; description?: string; conversationId?: string };
   }>('/api/internal/agent/:agentId/tasks/claim-message', async (req, reply) => {
     const { agentId } = req.params;
     const agent = conversationManager.getAgent(agentId);
     if (!agent) { reply.code(404); return { error: 'Agent not found' }; }
 
-    const { channel, message_ids, title, description } = req.body ?? {};
+    const { channel, message_ids, title, description, conversationId } = req.body ?? {};
     if (!channel || !Array.isArray(message_ids) || message_ids.length === 0) {
       reply.code(400);
       return { error: 'channel and non-empty message_ids array are required' };
@@ -1210,39 +1735,108 @@ export function registerInternalAgentRoutes(
       reply.code(400);
       return { error: 'description is required' };
     }
+    const currentConversation = typeof conversationId === 'string' && conversationId.trim()
+      ? conversationManager.getConversation(conversationId.trim())
+      : null;
+    const currentPrimaryDmTarget = currentConversation
+      && currentConversation.agentId === agentId
+      && currentConversation.threadKind === 'direct'
+      && currentConversation.isPrimaryThread
+      && channelId === `dm:${agentId}`
+      ? (currentConversation.replyTarget ?? resolveDefaultReplyTarget(db, currentConversation.id, humanUserName) ?? '').trim()
+      : '';
+    const currentConversationRunId = currentConversation ? findActiveConversationRunId(db, currentConversation.id) : null;
+    const activeConversationHandoff = getActiveRunHandoff(currentConversation?.id);
+    if (activeConversationHandoff) {
+      reply.code(409);
+      return { error: buildDmTaskHandoffBlockedError(activeConversationHandoff.handoff) };
+    }
+    if (currentPrimaryDmTarget && message_ids.length > 1) {
+      reply.code(400);
+      return { error: 'A primary DM can only hand off one task per request' };
+    }
 
     const now = Date.now();
-    const results: Array<{ messageId: string; taskNumber?: number; success: boolean; reason?: string; context?: ContextMsg[] }> = [];
+    const results: Array<{
+      messageId: string;
+      taskNumber?: number;
+      success: boolean;
+      reason?: string;
+      context?: ContextMsg[];
+      handoffStarted?: boolean;
+      threadConversationId?: string | null;
+      threadTarget?: string | null;
+      handoffError?: string;
+    }> = [];
     let changed = false;
 
     for (const msgShortId of message_ids) {
-      // Accept both full UUIDs and 8-char short IDs
       const msg = db.prepare(
-        `SELECT message_id, content, thread_root_id FROM channel_messages WHERE message_id LIKE ? AND channel_id = ?`,
-      ).get(`${msgShortId}%`, channelId) as { message_id: string; content: string; thread_root_id: string | null } | undefined;
+        `SELECT message_id as messageId,
+                content,
+                thread_root_id as threadRootId,
+                sender_type as senderType,
+                sender_name as senderName,
+                target,
+                seq,
+                created_at as createdAt,
+                attachment_ids as attachmentIds
+         FROM channel_messages
+         WHERE message_id LIKE ? AND channel_id = ?`,
+      ).get(`${msgShortId}%`, channelId) as ClaimableMessageRow | undefined;
 
-      if (!msg) { results.push({ messageId: msgShortId, success: false, reason: 'Message not found' }); continue; }
-      if (msg.thread_root_id) { results.push({ messageId: msgShortId, success: false, reason: 'Cannot promote a thread reply to task' }); continue; }
-
-      const existing = db.prepare(`SELECT task_id FROM tasks WHERE message_id = ?`).get(msg.message_id) as { task_id: string } | undefined;
-      if (existing) { results.push({ messageId: msgShortId, success: false, reason: 'Message is already a task' }); continue; }
-
-      const taskId = randomUUID();
-      let taskNumber = 0;
-      const taskTitle = deriveTaskTitle(title, msg.content);
-      if (!taskTitle) {
-        results.push({ messageId: msgShortId, success: false, reason: 'title is required' });
+      if (!msg) {
+        results.push({ messageId: msgShortId, success: false, reason: 'Message not found' });
         continue;
       }
+      if (currentPrimaryDmTarget && msg.senderType !== 'user') {
+        results.push({
+          messageId: msg.messageId,
+          success: false,
+          reason: 'In a primary DM, claim by message_ids must use a user message. Use message_ids=["current"] for the current request.',
+        });
+        continue;
+      }
+      if (msg.threadRootId) {
+        results.push({ messageId: msg.messageId, success: false, reason: 'Cannot promote a thread reply to task' });
+        continue;
+      }
+
+      const existing = db.prepare(
+        `SELECT task_id as taskId, task_number as taskNumber, claimed_by_agent_id as claimedByAgentId
+         FROM tasks WHERE message_id = ?`,
+      ).get(msg.messageId) as { taskId: string; taskNumber: number; claimedByAgentId: string | null } | undefined;
+      if (existing) {
+        results.push({
+          messageId: msg.messageId,
+          taskNumber: existing.taskNumber,
+          success: false,
+          reason: existing.claimedByAgentId && existing.claimedByAgentId !== agentId
+            ? 'Already claimed by another agent'
+            : 'Message is already a task',
+        });
+        continue;
+      }
+
+      const taskTitle = deriveTaskTitle(title, msg.content);
+      if (!taskTitle) {
+        results.push({ messageId: msg.messageId, success: false, reason: 'title is required' });
+        continue;
+      }
+
+      const nextTaskNumberRow = db.prepare(
+        `SELECT COALESCE(MAX(task_number), 0) + 1 as nextTaskNumber FROM tasks WHERE channel_id = ?`,
+      ).get(channelId) as { nextTaskNumber: number };
+      const taskId = randomUUID();
+      const taskNumber = nextTaskNumberRow.nextTaskNumber;
       db.transaction(() => {
-        taskNumber = allocateNextTaskNumber(db, channelId);
         db.prepare(
           `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
                              claimed_by_agent_id, claimed_by_name,
                              created_by_agent_id, created_by_name, created_at, updated_at)
            VALUES(?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(taskId, channelId, taskNumber, taskTitle, normalizedDescription, msg.message_id, agentId, agent.name, agentId, agent.name, now, now);
-        db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.message_id);
+        ).run(taskId, channelId, taskNumber, taskTitle, normalizedDescription, msg.messageId, agentId, agent.name, agentId, agent.name, now, now);
+        db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.messageId);
         syncTaskThreadOwner(db, {
           taskId,
           agentId,
@@ -1251,10 +1845,42 @@ export function registerInternalAgentRoutes(
       })();
       changed = true;
 
-      results.push({
-        messageId: msg.message_id, taskNumber, success: true,
-        context: fetchTaskContext(db, channelId, msg.message_id),
-      });
+      const result: {
+        messageId: string;
+        taskNumber?: number;
+        success: boolean;
+        reason?: string;
+        context?: ContextMsg[];
+        handoffStarted?: boolean;
+        threadConversationId?: string | null;
+        threadTarget?: string | null;
+        handoffError?: string;
+      } = {
+        messageId: msg.messageId,
+        taskNumber,
+        success: true,
+        context: fetchTaskContext(db, channelId, msg.messageId),
+      };
+
+      if (currentPrimaryDmTarget && msg.target === currentPrimaryDmTarget) {
+        const handoff = await startDmTaskHandoff({
+          agentId,
+          currentConversationId: currentConversation?.id ?? null,
+          currentConversationRunId,
+          currentPrimaryDmTarget,
+          taskNumber,
+          title: taskTitle,
+          description: normalizedDescription,
+          messageId: msg.messageId,
+          triggerMessage: msg,
+        });
+        result.handoffStarted = handoff.handoffStarted;
+        result.threadConversationId = handoff.threadConversationId;
+        result.threadTarget = handoff.threadTarget;
+        result.handoffError = handoff.handoffError;
+      }
+
+      results.push(result);
     }
 
     if (changed) broadcastChannelTasksChanged(channelId);
@@ -1270,7 +1896,7 @@ export function registerInternalAgentRoutes(
    */
   app.post<{
     Params: { agentId: string };
-    Body: { channel: string; task_number: number; title: string; description: string };
+    Body: { channel: string; task_number: number; title: string; description: string; conversationId?: string };
   }>('/api/internal/agent/:agentId/tasks/update-details', async (req, reply) => {
     const { agentId } = req.params;
     if (!conversationManager.getAgent(agentId)) {
@@ -1278,7 +1904,7 @@ export function registerInternalAgentRoutes(
       return { error: 'Agent not found' };
     }
 
-    const { channel, task_number, title, description } = req.body ?? {};
+    const { channel, task_number, title, description, conversationId } = req.body ?? {};
     if (!channel || task_number == null) {
       reply.code(400);
       return { error: 'channel, task_number, title, and description are required' };
@@ -1295,6 +1921,11 @@ export function registerInternalAgentRoutes(
     if (!channelId) {
       reply.code(400);
       return { error: `Cannot resolve channel: ${channel}` };
+    }
+    const activeConversationHandoff = getActiveRunHandoff(conversationId);
+    if (activeConversationHandoff) {
+      reply.code(409);
+      return { error: buildDmTaskHandoffBlockedError(activeConversationHandoff.handoff) };
     }
 
     const row = db.prepare(
@@ -1391,14 +2022,17 @@ export function registerInternalAgentRoutes(
       ? (currentConversation.replyTarget ?? resolveDefaultReplyTarget(db, currentConversation.id, humanUserName) ?? '').trim()
       : '';
     const currentConversationRunId = currentConversation ? findActiveConversationRunId(db, currentConversation.id) : null;
-    const setCurrentDmThreadOverride = (messageId?: string | null) => {
-      if (!currentPrimaryDmTarget || !currentConversationRunId || !messageId) return;
-      runThreadSendOverrides.set(
-        currentConversationRunId,
-        `${currentPrimaryDmTarget}:${messageId.slice(0, 8)}`,
-      );
-    };
     const normalizedDescription = description?.trim() ?? '';
+    const activeConversationHandoff = getActiveRunHandoff(currentConversation?.id);
+    if (activeConversationHandoff) {
+      reply.code(409);
+      return { error: buildDmTaskHandoffBlockedError(activeConversationHandoff.handoff) };
+    }
+    const requestedClaimCount = (task_numbers?.length ?? 0) + (message_ids?.length ?? 0);
+    if (currentPrimaryDmTarget && requestedClaimCount > 1) {
+      reply.code(400);
+      return { error: 'A primary DM can only hand off one task per request' };
+    }
 
     const resolveClaimMessageRow = (messageIdPrefix: string) => {
       const normalizedPrefix = messageIdPrefix.trim();
@@ -1419,17 +2053,7 @@ export function registerInternalAgentRoutes(
              AND sender_type = 'user'
            ORDER BY seq DESC
            LIMIT 1`,
-        ).get(channelId, currentPrimaryDmTarget) as {
-          messageId: string;
-          content: string;
-          threadRootId: string | null;
-          senderType: string;
-          senderName: string;
-          target: string;
-          seq: number;
-          createdAt: number;
-          attachmentIds: string | null;
-        } | undefined;
+        ).get(channelId, currentPrimaryDmTarget) as ClaimableMessageRow | undefined;
         if (!row) {
           return { reason: 'No current user DM message is available to claim' } as const;
         }
@@ -1441,17 +2065,7 @@ export function registerInternalAgentRoutes(
                 target, seq, created_at as createdAt, attachment_ids as attachmentIds
          FROM channel_messages
          WHERE message_id LIKE ? AND channel_id = ?`,
-      ).get(`${normalizedPrefix}%`, channelId) as {
-        messageId: string;
-        content: string;
-        threadRootId: string | null;
-        senderType: string;
-        senderName: string;
-        target: string;
-        seq: number;
-        createdAt: number;
-        attachmentIds: string | null;
-      } | undefined;
+      ).get(`${normalizedPrefix}%`, channelId) as ClaimableMessageRow | undefined;
       if (!row) {
         return { reason: 'Message not found' } as const;
       }
@@ -1459,20 +2073,36 @@ export function registerInternalAgentRoutes(
     };
 
     const now = Date.now();
-    const results: Array<{ taskNumber?: number; success: boolean; reason?: string; messageId?: string | null; context?: ContextMsg[] }> = [];
+    const results: Array<{
+      taskNumber?: number;
+      success: boolean;
+      reason?: string;
+      messageId?: string | null;
+      context?: ContextMsg[];
+      handoffStarted?: boolean;
+      threadConversationId?: string | null;
+      threadTarget?: string | null;
+      handoffError?: string;
+    }> = [];
     let changed = false;
 
     for (const taskNumber of task_numbers ?? []) {
       const row = db
         .prepare(
-          `SELECT task_id as taskId, status, claimed_by_agent_id as claimedByAgentId, message_id as messageId
-           FROM tasks WHERE channel_id = ? AND task_number = ?`,
+          `SELECT t.task_id as taskId, t.status, t.claimed_by_agent_id as claimedByAgentId, t.message_id as messageId,
+                  t.title, t.description, cm.target as messageTarget
+           FROM tasks t
+           LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
+           WHERE t.channel_id = ? AND t.task_number = ?`,
         )
         .get(channelId, taskNumber) as {
           taskId: string;
           status: string;
           claimedByAgentId: string | null;
           messageId: string | null;
+          title: string;
+          description: string | null;
+          messageTarget: string | null;
         } | undefined;
 
       if (!row) {
@@ -1503,11 +2133,45 @@ export function registerInternalAgentRoutes(
       })();
       changed = true;
 
-      results.push({
+      const claimResult: {
+        taskNumber?: number;
+        success: boolean;
+        reason?: string;
+        messageId?: string | null;
+        context?: ContextMsg[];
+        handoffStarted?: boolean;
+        threadConversationId?: string | null;
+        threadTarget?: string | null;
+        handoffError?: string;
+      } = {
         taskNumber, success: true, messageId: row.messageId ?? null,
         context: row.messageId ? fetchTaskContext(db, channelId, row.messageId) : [],
-      });
-      setCurrentDmThreadOverride(row.messageId);
+      };
+      if (currentPrimaryDmTarget && row.messageId && row.messageTarget === currentPrimaryDmTarget) {
+        broadcastDmTaskRootUpdate({
+          agentId,
+          primaryTarget: currentPrimaryDmTarget,
+          messageId: row.messageId,
+          taskNumber,
+          taskStatus: newStatus,
+          taskAssigneeName: agent.name,
+        });
+        const handoff = await startDmTaskHandoff({
+          agentId,
+          currentConversationId: currentConversation?.id ?? null,
+          currentConversationRunId,
+          currentPrimaryDmTarget,
+          taskNumber,
+          title: row.title,
+          description: row.description?.trim() || row.title,
+          messageId: row.messageId,
+        });
+        claimResult.handoffStarted = handoff.handoffStarted;
+        claimResult.threadConversationId = handoff.threadConversationId;
+        claimResult.threadTarget = handoff.threadTarget;
+        claimResult.handoffError = handoff.handoffError;
+      }
+      results.push(claimResult);
     }
 
     for (const messageIdPrefix of message_ids ?? []) {
@@ -1516,7 +2180,7 @@ export function registerInternalAgentRoutes(
         results.push({ success: false, messageId: messageIdPrefix, reason: resolvedMessage.reason });
         continue;
       }
-      const messageRow = resolvedMessage.row;
+      const messageRow = resolvedMessage.row as ClaimableMessageRow;
 
       if (currentPrimaryDmTarget && messageRow.senderType !== 'user') {
         results.push({
@@ -1581,13 +2245,40 @@ export function registerInternalAgentRoutes(
       })();
       changed = true;
 
-      results.push({
+      const claimResult: {
+        taskNumber?: number;
+        success: boolean;
+        reason?: string;
+        messageId?: string | null;
+        context?: ContextMsg[];
+        handoffStarted?: boolean;
+        threadConversationId?: string | null;
+        threadTarget?: string | null;
+        handoffError?: string;
+      } = {
         taskNumber,
         success: true,
         messageId: messageRow.messageId,
         context: fetchTaskContext(db, channelId, messageRow.messageId),
-      });
-      setCurrentDmThreadOverride(messageRow.messageId);
+      };
+      if (currentPrimaryDmTarget && messageRow.target === currentPrimaryDmTarget) {
+        const handoff = await startDmTaskHandoff({
+          agentId,
+          currentConversationId: currentConversation?.id ?? null,
+          currentConversationRunId,
+          currentPrimaryDmTarget,
+          taskNumber,
+          title: taskTitle,
+          description: normalizedDescription,
+          messageId: messageRow.messageId,
+          triggerMessage: messageRow,
+        });
+        claimResult.handoffStarted = handoff.handoffStarted;
+        claimResult.threadConversationId = handoff.threadConversationId;
+        claimResult.threadTarget = handoff.threadTarget;
+        claimResult.handoffError = handoff.handoffError;
+      }
+      results.push(claimResult);
 
       if (currentPrimaryDmTarget && messageRow.target === currentPrimaryDmTarget) {
         const taskRootEvent: BroadcastChannelMessage = {
@@ -1629,7 +2320,7 @@ export function registerInternalAgentRoutes(
    */
   app.post<{
     Params: { agentId: string };
-    Body: { channel: string; task_number: number };
+    Body: { channel: string; task_number: number; conversationId?: string };
   }>('/api/internal/agent/:agentId/tasks/unclaim', async (req, reply) => {
     const { agentId } = req.params;
     if (!conversationManager.getAgent(agentId)) {
@@ -1637,7 +2328,7 @@ export function registerInternalAgentRoutes(
       return { error: 'Agent not found' };
     }
 
-    const { channel, task_number } = req.body ?? {};
+    const { channel, task_number, conversationId } = req.body ?? {};
     if (!channel || task_number == null) {
       reply.code(400);
       return { error: 'channel and task_number are required' };
@@ -1647,6 +2338,11 @@ export function registerInternalAgentRoutes(
     if (!channelId) {
       reply.code(400);
       return { error: `Cannot resolve channel: ${channel}` };
+    }
+    const activeConversationHandoff = getActiveRunHandoff(conversationId);
+    if (activeConversationHandoff) {
+      reply.code(409);
+      return { error: buildDmTaskHandoffBlockedError(activeConversationHandoff.handoff) };
     }
 
     const row = db
@@ -1694,15 +2390,16 @@ export function registerInternalAgentRoutes(
    */
   app.post<{
     Params: { agentId: string };
-    Body: { channel: string; task_number: number; status: string };
+    Body: { channel: string; task_number: number; status: string; conversationId?: string };
   }>('/api/internal/agent/:agentId/tasks/update-status', async (req, reply) => {
     const { agentId } = req.params;
-    if (!conversationManager.getAgent(agentId)) {
+    const agent = conversationManager.getAgent(agentId);
+    if (!agent) {
       reply.code(404);
       return { error: 'Agent not found' };
     }
 
-    const { channel, task_number, status } = req.body ?? {};
+    const { channel, task_number, status, conversationId } = req.body ?? {};
     if (!channel || task_number == null || !status) {
       reply.code(400);
       return { error: 'channel, task_number, and status are required' };
@@ -1720,16 +2417,31 @@ export function registerInternalAgentRoutes(
       reply.code(400);
       return { error: `Cannot resolve channel: ${channel}` };
     }
+    const activeConversationHandoff = getActiveRunHandoff(conversationId);
+    if (activeConversationHandoff) {
+      reply.code(409);
+      return { error: buildDmTaskHandoffBlockedError(activeConversationHandoff.handoff) };
+    }
 
     const row = db
       .prepare(
-        `SELECT task_id as taskId, status as currentStatus, claimed_by_agent_id as claimedByAgentId
-         FROM tasks WHERE channel_id = ? AND task_number = ?`,
+        `SELECT t.task_id as taskId,
+                t.status as currentStatus,
+                t.claimed_by_agent_id as claimedByAgentId,
+                t.message_id as messageId,
+                t.title as title,
+                cm.target as messageTarget
+         FROM tasks t
+         LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
+         WHERE t.channel_id = ? AND t.task_number = ?`,
       )
       .get(channelId, task_number) as {
         taskId: string;
         currentStatus: 'todo' | 'in_progress' | 'in_review' | 'done';
         claimedByAgentId: string | null;
+        messageId: string | null;
+        title: string;
+        messageTarget: string | null;
       } | undefined;
 
     if (!row) {
@@ -1768,6 +2480,27 @@ export function registerInternalAgentRoutes(
     })();
 
     broadcastChannelTasksChanged(channelId);
+    if (channelId.startsWith('dm:') && row.messageId && row.messageTarget?.startsWith('dm:@')) {
+      broadcastDmTaskRootUpdate({
+        agentId,
+        primaryTarget: row.messageTarget,
+        messageId: row.messageId,
+        taskNumber: task_number,
+        taskStatus: nextStatus,
+        taskAssigneeName: agent.name,
+      });
+      if (nextStatus === 'in_review') {
+        emitDmTaskLifecycleEvent({
+          agentId,
+          primaryTarget: row.messageTarget,
+          taskNumber: task_number,
+          title: row.title,
+          taskStatus: nextStatus,
+          kind: 'in_review',
+          taskAssigneeName: agent.name,
+        });
+      }
+    }
 
     return { ok: true, taskNumber: task_number, status: nextStatus };
   });
@@ -1845,9 +2578,28 @@ function normalizeTargetForConversation(db: Db, conversationId: string, target: 
     channelName: string | null;
   } | undefined;
 
-  if (!row || row.threadKind !== 'branch' || row.threadRootId) return target;
+  if (!row || row.threadKind !== 'branch') return target;
 
   const channelName = row.channelName ?? row.channelId;
+  if (row.threadRootId) {
+    const canonicalThreadTarget = `#${channelName}:${row.threadRootId}`;
+    const sameChannelThread = target.match(/^#([^:]+):([a-zA-Z0-9-]+)$/);
+    if (sameChannelThread) {
+      const [, targetChannel, targetThreadRootId] = sameChannelThread;
+      if (
+        (targetChannel === channelName || targetChannel === row.channelId)
+        && (
+          targetThreadRootId === row.threadRootId
+          || targetThreadRootId.startsWith(row.threadRootId)
+          || row.threadRootId.startsWith(targetThreadRootId)
+        )
+      ) {
+        return canonicalThreadTarget;
+      }
+    }
+    return target;
+  }
+
   const canonicalBaseTarget = `#${channelName}`;
   const sameChannelThread = target.match(/^#([^:]+):([a-zA-Z0-9-]+)$/);
   if (sameChannelThread) {

@@ -347,7 +347,7 @@ server.tool(
 
 server.tool(
   'create_tasks',
-  "Create one or more new task-messages in a top-level channel or DM. Each task requires a title and a brief that states the goal and done criteria. Each created task gets a task root message and a default thread. Use this only for genuinely new work or subtasks. Do not use it to convert an existing message — use claim_tasks with message_ids instead.",
+  "Create one or more new task-messages in a top-level channel or DM. Each task requires a title and a brief that states the goal and done criteria. Each created task gets a task root message and a default thread. Use this only for genuinely new work or subtasks. Do not use it to convert an existing message — use claim_tasks with message_ids instead. In a primary DM, the platform will open the task thread automatically and mirror lifecycle status in the main DM. Do not manually send follow-up messages in the main DM after the handoff starts.",
   {
     channel: z.string().describe("The channel or DM to create tasks in — e.g. '#general' or 'dm:@User'"),
     tasks: z
@@ -362,17 +362,36 @@ server.tool(
       const { ok, data } = await apiFetch('/tasks', { method: 'POST', body: { channel, tasks, conversationId } });
       if (!ok) return toText(`Error: ${errText(data, 'create tasks failed')}`);
 
-      const d = data as { tasks?: Array<{ taskNumber: number; title: string; messageId?: string }> };
+      const d = data as {
+        tasks?: Array<{
+          taskNumber: number;
+          title: string;
+          messageId?: string;
+          handoffStarted?: boolean;
+          threadConversationId?: string | null;
+          threadTarget?: string | null;
+          handoffError?: string;
+        }>;
+      };
       const created = d.tasks?.map((t) => {
         const msgShort = t.messageId ? t.messageId.slice(0, 8) : null;
-        return msgShort ? `#t${t.taskNumber} msg=${msgShort} "${t.title}"` : `#t${t.taskNumber} "${t.title}"`;
+        const handoff = t.handoffError
+          ? ` → handoff failed: ${t.handoffError}`
+          : t.handoffStarted && t.threadTarget
+            ? ` → handoff started in ${t.threadTarget}`
+            : '';
+        return msgShort ? `#t${t.taskNumber} msg=${msgShort} "${t.title}"${handoff}` : `#t${t.taskNumber} "${t.title}"${handoff}`;
       }).join('\n') ?? '';
-      const threadHints = d.tasks
+      const hasHandoff = d.tasks?.some((t) => t.handoffStarted) ?? false;
+      const threadHints = hasHandoff ? '' : d.tasks
         ?.filter((t) => t.messageId)
         .map((t) => `#t${t.taskNumber} → send_message to "${channel}:${t.messageId!.slice(0, 8)}"`)
         .join('\n') ?? '';
       const hint = threadHints ? `\n\nTo follow up in each task's thread:\n${threadHints}` : '';
-      return toText(`Created ${d.tasks?.length ?? 0} task(s) in ${channel}:\n${created}${hint}`);
+      const handoffNote = hasHandoff
+        ? '\n\nPrimary DM handoff started automatically. Stop this run now. Do not manually send any follow-up in the main DM; the platform will mirror task status there while detailed work continues in the task thread.'
+        : '';
+      return toText(`Created ${d.tasks?.length ?? 0} task(s) in ${channel}:\n${created}${hint}${handoffNote}`);
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }
@@ -383,7 +402,7 @@ server.tool(
 
 server.tool(
   'claim_message',
-  `Compatibility alias for claim_tasks(message_ids=[...]). Promote one or more existing top-level channel or DM messages into task-messages and claim them. Use the 8-character msg= ID from received messages or read_history. In the current primary DM, you may use message_ids=["current"] to claim the latest user request instead of manually picking an older msg id. Each promoted message becomes the task root and default thread — reply in its thread with send_message(target="${'#channel:msgid'}"). If a message is already a task-message, the claim fails. Thread messages cannot be converted. The task brief is required; use separate calls when promoted messages need different briefs.`,
+  `Compatibility alias for claim_tasks(message_ids=[...]). Promote one or more existing top-level channel or DM messages into task-messages and claim them. Use the 8-character msg= ID from received messages or read_history. In the current primary DM, you may use message_ids=["current"] to claim the latest user request instead of manually picking an older msg id. Each promoted message becomes the task root and default thread. In a primary DM, the platform will hand the task off to its task thread and mirror lifecycle status in the main DM; do not manually continue in the main DM after that starts. If a message is already a task-message, the claim fails. Thread messages cannot be converted. The task brief is required; use separate calls when promoted messages need different briefs.`,
   {
     channel: z.string().describe("The channel or DM — e.g. '#engineering' or 'dm:@User'"),
     message_ids: z.array(z.string()).describe("8-char message IDs (the msg= value from check_messages or read_history, e.g. ['a1b2c3d4']). In the current primary DM you may use ['current'] to claim the latest user request."),
@@ -398,11 +417,24 @@ server.tool(
       });
       if (!ok) return toText(`Error: ${errText(data, 'claim-message failed')}`);
 
-      type ClaimMsgResult = { messageId: string; taskNumber?: number; success: boolean; reason?: string; context?: Array<{ senderName: string; content: string; seq: number }> };
+      type ClaimMsgResult = {
+        messageId: string;
+        taskNumber?: number;
+        success: boolean;
+        reason?: string;
+        context?: Array<{ senderName: string; content: string; seq: number }>;
+        handoffStarted?: boolean;
+        threadTarget?: string | null;
+        handoffError?: string;
+      };
       const d = data as { results?: ClaimMsgResult[] };
       const lines = (d.results ?? []).map((r) => {
         const msgShort = r.messageId.slice(0, 8);
-        if (r.success) return `msg:${msgShort} → #t${r.taskNumber}: claimed`;
+        if (r.success) {
+          if (r.handoffError) return `msg:${msgShort} → #t${r.taskNumber}: claimed, handoff failed — ${r.handoffError}`;
+          if (r.handoffStarted && r.threadTarget) return `msg:${msgShort} → #t${r.taskNumber}: claimed, handoff started in ${r.threadTarget}`;
+          return `msg:${msgShort} → #t${r.taskNumber}: claimed`;
+        }
         return `msg:${msgShort}: FAILED — ${r.reason ?? 'unknown error'}`;
       });
       const succeeded = (d.results ?? []).filter((r) => r.success).length;
@@ -420,13 +452,16 @@ server.tool(
         }).join('\n\n');
       const contextSection = contextBlocks ? `\n\n${contextBlocks}` : '';
 
-      const threadHints = (d.results ?? [])
+      const hasHandoff = (d.results ?? []).some((r) => r.handoffStarted);
+      const threadHints = hasHandoff ? '' : (d.results ?? [])
         .filter((r) => r.success)
         .map((r) => `#t${r.taskNumber} → send_message to "${channel}:${r.messageId.slice(0, 8)}"`)
         .join('\n');
       const hint = threadHints ? `\n\nFollow up in each task's thread:\n${threadHints}` : '';
-
-      return toText(`Claim results (${summary}):\n${lines.join('\n')}${contextSection}${hint}`);
+      const handoffNote = hasHandoff
+        ? '\n\nPrimary DM handoff started automatically. Stop this run now. Do not manually send any follow-up in the main DM; the platform will mirror task status there while detailed work continues in the task thread.'
+        : '';
+      return toText(`Claim results (${summary}):\n${lines.join('\n')}${contextSection}${hint}${handoffNote}`);
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }
@@ -448,7 +483,7 @@ server.tool(
     try {
       const { ok, data } = await apiFetch('/tasks/update-details', {
         method: 'POST',
-        body: { channel, task_number, title, description },
+        body: { channel, task_number, title, description, conversationId },
       });
       if (!ok) return toText(`Error: ${errText(data, 'update task details failed')}`);
       return toText(`#t${task_number} details updated.`);
@@ -466,7 +501,7 @@ server.tool(
 1. By task number: claim existing tasks shown in list_tasks. Use task_numbers=[1, 3].
 2. By message ID: convert a regular top-level channel or DM message into a task and claim it. Use message_ids=["a1b2c3d4"] with description="goal and done criteria". In the current primary DM, prefer message_ids=["current"] for the latest user request.
 
-Thread messages cannot be claimed or converted into tasks. If a task is in "todo" status, claiming auto-advances it to "in_progress". If another agent already claimed it, the claim fails — do not work on that task, move on. Always claim before starting any work to prevent duplicate effort.`,
+Thread messages cannot be claimed or converted into tasks. If a task is in "todo" status, claiming auto-advances it to "in_progress". If another agent already claimed it, the claim fails — do not work on that task, move on. In a primary DM, a successful claim is handed off to the task thread automatically; stop the current run and let the thread continue the work. Always claim before starting any work to prevent duplicate effort.`,
   {
     channel: z.string().describe("The channel or DM whose tasks to claim — e.g. '#general' or 'dm:@User'"),
     task_numbers: z.array(z.number()).optional().describe('Task numbers to claim (e.g. [1, 3, 5])'),
@@ -485,11 +520,23 @@ Thread messages cannot be claimed or converted into tasks. If a task is in "todo
       });
       if (!ok) return toText(`Error: ${errText(data, 'claim tasks failed')}`);
 
-      type ClaimTaskResult = { taskNumber: number; success: boolean; reason?: string; messageId?: string | null; context?: Array<{ senderName: string; content: string; seq: number }> };
+      type ClaimTaskResult = {
+        taskNumber: number;
+        success: boolean;
+        reason?: string;
+        messageId?: string | null;
+        context?: Array<{ senderName: string; content: string; seq: number }>;
+        handoffStarted?: boolean;
+        threadTarget?: string | null;
+        handoffError?: string;
+      };
       const d = data as { results?: ClaimTaskResult[] };
-      const lines = (d.results ?? []).map((r) =>
-        r.success ? `#t${r.taskNumber}: claimed` : `#t${r.taskNumber}: FAILED — ${r.reason ?? 'already claimed'}`,
-      );
+      const lines = (d.results ?? []).map((r) => {
+        if (!r.success) return `#t${r.taskNumber}: FAILED — ${r.reason ?? 'already claimed'}`;
+        if (r.handoffError) return `#t${r.taskNumber}: claimed, handoff failed — ${r.handoffError}`;
+        if (r.handoffStarted && r.threadTarget) return `#t${r.taskNumber}: claimed, handoff started in ${r.threadTarget}`;
+        return `#t${r.taskNumber}: claimed`;
+      });
       const succeeded = (d.results ?? []).filter((r) => r.success).length;
       const failed = (d.results ?? []).length - succeeded;
       let summary = `${succeeded} claimed`;
@@ -503,12 +550,16 @@ Thread messages cannot be claimed or converted into tasks. If a task is in "todo
           return `#t${r.taskNumber} context:\n${msgs}`;
         }).join('\n\n');
       const contextSection = contextBlocks ? `\n\n${contextBlocks}` : '';
-      const threadHints = (d.results ?? [])
+      const hasHandoff = (d.results ?? []).some((r) => r.handoffStarted);
+      const threadHints = hasHandoff ? '' : (d.results ?? [])
         .filter((r) => r.success && r.messageId)
         .map((r) => `#t${r.taskNumber} → send_message to "${channel}:${r.messageId!.slice(0, 8)}"`)
         .join('\n');
       const hint = threadHints ? `\n\nFollow up in each task's thread:\n${threadHints}` : '';
-      return toText(`Claim results (${summary}):\n${lines.join('\n')}${contextSection}${hint}`);
+      const handoffNote = hasHandoff
+        ? '\n\nPrimary DM handoff started automatically. Stop this run now. Do not manually send any follow-up in the main DM; the platform will mirror task status there while detailed work continues in the task thread.'
+        : '';
+      return toText(`Claim results (${summary}):\n${lines.join('\n')}${contextSection}${hint}${handoffNote}`);
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }
@@ -528,7 +579,7 @@ server.tool(
     try {
       const { ok, data } = await apiFetch('/tasks/unclaim', {
         method: 'POST',
-        body: { channel, task_number },
+        body: { channel, task_number, conversationId },
       });
       if (!ok) return toText(`Error: ${errText(data, 'unclaim failed')}`);
       return toText(`#t${task_number} unclaimed — now open.`);

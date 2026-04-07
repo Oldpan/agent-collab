@@ -163,6 +163,7 @@ export class ExecutionDispatcher {
               oldestVisibleSeq: dmActivationContext.oldestVisibleSeq,
               rootMessage: dmActivationContext.rootMessage,
               dmContextSnapshot: dmActivationContext.dmContextSnapshot,
+              dmActiveTaskThreads: dmActivationContext.dmActiveTaskThreads,
             });
           }
         }
@@ -434,7 +435,8 @@ export class ExecutionDispatcher {
   }
 
   private isIgnorableReplayAssistantText(text: string): boolean {
-    return text.includes(`Empty response: {'content':`);
+    return text.includes(`Empty response: {'content':`)
+      || text.trim() === '[stop_reason] handoff';
   }
 
   private getDispatchMode(sessionKey: string): RuntimeDispatchMode {

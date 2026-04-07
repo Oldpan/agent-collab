@@ -49,6 +49,15 @@ describe('directActivationPrompt', () => {
           },
         ],
       },
+      dmActiveTaskThreads: [
+        {
+          taskNumber: 4,
+          title: '检查显存使用情况',
+          status: 'in_progress',
+          claimedByName: 'Kimi',
+          threadTarget: 'dm:@oldpan:deadbead',
+        },
+      ],
     });
 
     expect(text).toContain('[Thread root message]');
@@ -57,5 +66,7 @@ describe('directActivationPrompt', () => {
     expect(text).toContain('这是 thread 内的执行更新。');
     expect(text).toContain('[Context from DM]');
     expect(text).toContain('@oldpan [Trigger]: 请帮我检查一下当前系统显存占用。');
+    expect(text).toContain('[Active DM task threads]');
+    expect(text).toContain('#4 [in_progress] @Kimi -> dm:@oldpan:deadbead — 检查显存使用情况');
   });
 });

@@ -6,6 +6,10 @@ import * as api from "@/lib/api";
 const SELECTED_CONVERSATION_STORAGE_KEY = "agent-collab:selected-conversation-id";
 const LAST_USER_STORAGE_KEY = "agent-collab:last-user-id";
 
+type UpsertConversationOptions = {
+  select?: boolean;
+};
+
 function readStoredSelectedConversationId(): string | null {
   if (typeof window === "undefined") return null;
   return window.localStorage.getItem(SELECTED_CONVERSATION_STORAGE_KEY);
@@ -34,6 +38,39 @@ function writeStoredLastUserId(id: string | null): void {
   }
 }
 
+function isPrimaryDirectConversation(conversation?: ConversationInfo | null): boolean {
+  return Boolean(conversation && conversation.threadKind === "direct" && conversation.isPrimaryThread);
+}
+
+function sortConversations(conversations: ConversationInfo[]): ConversationInfo[] {
+  return [...conversations].sort((a, b) => {
+    if (a.isPrimaryThread !== b.isPrimaryThread) return a.isPrimaryThread ? -1 : 1;
+    return b.updatedAt - a.updatedAt;
+  });
+}
+
+function resolvePersistedSelectionId(
+  conversations: ConversationInfo[],
+  selectedId: string | null,
+): string | null {
+  if (!selectedId) return null;
+  const selectedConversation = conversations.find((conversation) => conversation.id === selectedId);
+  if (!selectedConversation) return null;
+  if (isPrimaryDirectConversation(selectedConversation)) return selectedConversation.id;
+  if (!selectedConversation.agentId) return null;
+  return conversations.find(
+    (conversation) =>
+      conversation.agentId === selectedConversation.agentId
+      && isPrimaryDirectConversation(conversation),
+  )?.id ?? null;
+}
+
+function resolveDefaultSelectionId(conversations: ConversationInfo[]): string | null {
+  return conversations.find((conversation) => isPrimaryDirectConversation(conversation))?.id
+    ?? conversations[0]?.id
+    ?? null;
+}
+
 type ConversationsState = {
   conversations: ConversationInfo[];
   selectedId: string | null;
@@ -41,8 +78,8 @@ type ConversationsState = {
   loading: boolean;
   error: string | null;
   setConversations: (conversations: ConversationInfo[]) => void;
-  addConversation: (conversation: ConversationInfo) => void;
-  upsertConversation: (conversation: ConversationInfo) => void;
+  addConversation: (conversation: ConversationInfo, options?: UpsertConversationOptions) => void;
+  upsertConversation: (conversation: ConversationInfo, options?: UpsertConversationOptions) => void;
   patchConversationStatus: (id: string, status: ConversationInfo["status"]) => void;
   removeConversation: (id: string) => void;
   selectConversation: (id: string | null) => void;
@@ -59,35 +96,35 @@ export const useConversationsStore = create<ConversationsState>((set) => ({
   error: null,
   setConversations: (conversations) =>
     set((state) => {
-      const sorted = conversations.sort((a, b) => b.updatedAt - a.updatedAt);
-      const selectedId = sorted.some((conversation) => conversation.id === state.selectedId)
-        ? state.selectedId
-        : (sorted[0]?.id ?? null);
+      const sorted = sortConversations(conversations);
+      const selectedId = resolvePersistedSelectionId(sorted, state.selectedId) ?? resolveDefaultSelectionId(sorted);
       writeStoredSelectedConversationId(selectedId);
       return { conversations: sorted, selectedId };
     }),
-  addConversation: (conversation) =>
+  addConversation: (conversation, options) =>
     set((state) => {
-      writeStoredSelectedConversationId(conversation.id);
+      const conversations = sortConversations([conversation, ...state.conversations]);
+      const shouldSelect = options?.select ?? true;
+      const selectedId = shouldSelect ? conversation.id : state.selectedId;
+      writeStoredSelectedConversationId(resolvePersistedSelectionId(conversations, selectedId));
       return {
-        conversations: [conversation, ...state.conversations],
-        selectedId: conversation.id,
+        conversations,
+        selectedId,
       };
     }),
-  upsertConversation: (conversation) =>
+  upsertConversation: (conversation, options) =>
     set((state) => {
       const existing = state.conversations.some((item) => item.id === conversation.id);
       const conversations = existing
         ? state.conversations.map((item) => (item.id === conversation.id ? conversation : item))
         : [conversation, ...state.conversations];
-      conversations.sort((a, b) => {
-        if (a.isPrimaryThread !== b.isPrimaryThread) return a.isPrimaryThread ? -1 : 1;
-        return b.updatedAt - a.updatedAt;
-      });
-      writeStoredSelectedConversationId(conversation.id);
+      const sorted = sortConversations(conversations);
+      const shouldSelect = options?.select ?? false;
+      const selectedId = shouldSelect ? conversation.id : state.selectedId;
+      writeStoredSelectedConversationId(resolvePersistedSelectionId(sorted, selectedId));
       return {
-        conversations,
-        selectedId: conversation.id,
+        conversations: sorted,
+        selectedId,
       };
     }),
   patchConversationStatus: (id, status) =>
@@ -98,15 +135,16 @@ export const useConversationsStore = create<ConversationsState>((set) => ({
     set((state) => {
       const conversations = state.conversations.filter((conversation) => conversation.id !== id);
       const selectedId = state.selectedId === id
-        ? (conversations[0]?.id ?? null)
+        ? resolveDefaultSelectionId(conversations)
         : state.selectedId;
-      writeStoredSelectedConversationId(selectedId);
+      writeStoredSelectedConversationId(resolvePersistedSelectionId(conversations, selectedId));
       return { conversations, selectedId };
     }),
-  selectConversation: (id) => {
-    writeStoredSelectedConversationId(id);
-    set({ selectedId: id });
-  },
+  selectConversation: (id) =>
+    set((state) => {
+      writeStoredSelectedConversationId(resolvePersistedSelectionId(state.conversations, id));
+      return { selectedId: id };
+    }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
   checkAndResetUser: (userId) =>
@@ -191,7 +229,7 @@ export function useConversations(userId?: string | null) {
     async (req: CreateConversationRequest) => {
       try {
         const conversation = await api.createConversation(req);
-        addConversation(conversation);
+        addConversation(conversation, { select: true });
         return conversation;
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to create conversation");
@@ -205,7 +243,7 @@ export function useConversations(userId?: string | null) {
     async (agentId: string) => {
       try {
         const conversation = await api.openAgentThread(agentId);
-        upsertConversation(conversation);
+        upsertConversation(conversation, { select: true });
         return conversation;
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to open agent thread");
@@ -219,7 +257,7 @@ export function useConversations(userId?: string | null) {
     async (agentId: string, channelId: string, threadRootId?: string | null) => {
       try {
         const conversation = await api.openAgentChannelSession(agentId, channelId, threadRootId);
-        upsertConversation(conversation);
+        upsertConversation(conversation, { select: true });
         return conversation;
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to open agent channel session");
