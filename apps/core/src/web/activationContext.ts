@@ -1,4 +1,5 @@
 import type { Db } from '@agent-collab/runtime-acp';
+import { buildThreadShortId } from '@agent-collab/protocol';
 import { getAgentMessageCheckpoint } from './messageCheckpoints.js';
 import {
   listRecentTargetParticipants,
@@ -6,6 +7,7 @@ import {
   type TargetParticipant,
 } from './targetParticipants.js';
 import { getBoundTaskForThread } from './threadTaskBindings.js';
+import { findThreadRootMessageId } from './threadRoots.js';
 
 export type ActivationContextMessage = {
   messageId: string;
@@ -83,14 +85,10 @@ function loadThreadRootMessage(
     const exact = loadActivationMessageById(db, channelId, rootMessageId);
     if (exact) return exact;
   }
-  return db.prepare(
-    `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
-            content, created_at as createdAt
-     FROM channel_messages
-     WHERE channel_id = ? AND substr(message_id, 1, 8) = ? AND thread_root_id IS NULL
-     ORDER BY created_at ASC, seq ASC
-     LIMIT 1`,
-  ).get(channelId, threadRootId) as ActivationContextMessage | undefined;
+  const matchedMessageId = findThreadRootMessageId(db, channelId, threadRootId);
+  return matchedMessageId
+    ? loadActivationMessageById(db, channelId, matchedMessageId)
+    : undefined;
 }
 
 function parseDmThreadContextSnapshot(raw: string): ActivationContextMessage[] {
@@ -280,14 +278,12 @@ export function buildTargetActivationContext(
   ).get(params.channelId, params.replyTarget, ...threadArgs, checkpoint, unreadUpperBound, params.agentId) as { count: number };
 
   const rootMessage = normalizedThreadRootId
-    ? db.prepare(
-      `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
-              content, created_at as createdAt
-       FROM channel_messages
-       WHERE channel_id = ? AND substr(message_id, 1, 8) = ?
-       ORDER BY created_at ASC, seq ASC
-       LIMIT 1`,
-    ).get(params.channelId, normalizedThreadRootId) as ActivationContextMessage | undefined
+    ? (() => {
+        const matchedMessageId = findThreadRootMessageId(db, params.channelId, normalizedThreadRootId);
+        return matchedMessageId
+          ? loadActivationMessageById(db, params.channelId, matchedMessageId)
+          : undefined;
+      })()
     : undefined;
   const directTarget = normalizedThreadRootId && params.replyTarget.startsWith('dm:@')
     ? params.replyTarget.replace(/:[^:]+$/, '')
@@ -379,7 +375,7 @@ export function buildTargetActivationContext(
       title: task.title,
       status: task.status,
       claimedByName: task.claimedByName,
-      threadTarget: `${params.replyTarget}:${task.messageId.slice(0, 8)}`,
+      threadTarget: `${params.replyTarget}:${buildThreadShortId(task.messageId)}`,
     }))
     : [];
 

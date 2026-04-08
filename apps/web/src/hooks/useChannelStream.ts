@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useLayoutEffect, useEffect } from "react";
+import { buildThreadShortId } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
 import * as api from "@/lib/api";
 
@@ -127,7 +128,7 @@ export function useChannelStream(options: UseChannelStreamOptions): {
               // Thread reply — increment replyCount on parent message
               setMessages((prev) =>
                 prev.map((m) =>
-                  m.id.slice(0, 8) === msg.threadRootId
+                  buildThreadShortId(m.id) === msg.threadRootId
                     ? { ...m, replyCount: (m.replyCount ?? 0) + 1 }
                     : m,
                 ),

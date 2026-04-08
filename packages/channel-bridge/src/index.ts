@@ -77,6 +77,17 @@ function formatTaskIdentity(agentTaskRef: string | null | undefined, taskNumber:
   return 'task';
 }
 
+function normalizeMessageIdForThreadShortId(messageId: string): string {
+  const trimmed = messageId.trim().toLowerCase();
+  const withoutClientPrefix = trimmed.startsWith('client-') ? trimmed.slice('client-'.length) : trimmed;
+  const normalized = withoutClientPrefix.replace(/[^a-z0-9]/g, '');
+  return normalized || trimmed.replace(/[^a-z0-9]/g, '');
+}
+
+function buildThreadShortId(messageId: string): string {
+  return normalizeMessageIdForThreadShortId(messageId).slice(0, 16);
+}
+
 function isThreadTarget(target: string): boolean {
   if (target.startsWith('dm:@')) return target.split(':').length >= 3;
   if (target.startsWith('#')) return target.includes(':');
@@ -88,7 +99,7 @@ function buildThreadTarget(target: string | null | undefined, messageId: string 
   const normalizedTarget = target.trim();
   if (!(normalizedTarget.startsWith('dm:@') || normalizedTarget.startsWith('#'))) return null;
   if (isThreadTarget(normalizedTarget)) return normalizedTarget;
-  return `${normalizedTarget}:${messageId.slice(0, 8)}`;
+  return `${normalizedTarget}:${buildThreadShortId(messageId)}`;
 }
 
 // ─── MCP server ───────────────────────────────────────────────────────────────
@@ -134,9 +145,9 @@ server.tool(
     const d = data as Record<string, unknown>;
     const msgId = String(d.messageId ?? '');
     const deliveredTarget = String(d.target ?? target ?? 'current conversation');
-    const shortId = msgId.slice(0, 8);
-    const replyHint = shortId
-      ? ` (to reply in this message's thread, use target "${deliveredTarget.includes(':') ? deliveredTarget : `${deliveredTarget}:${shortId}`}")`
+    const threadTarget = buildThreadTarget(deliveredTarget, msgId);
+    const replyHint = threadTarget
+      ? ` (to reply in this message's thread, use target "${threadTarget}")`
       : '';
     return toText(`Message sent to ${deliveredTarget}. Message ID: ${msgId}${replyHint}`);
   },
@@ -353,7 +364,7 @@ server.tool(
 
       const threadHints = d.tasks
         .filter((t) => t.messageId)
-        .map((t) => `#t${t.taskNumber} → send_message to "${channel}:${t.messageId!.slice(0, 8)}"`)
+        .map((t) => `#t${t.taskNumber} → send_message to "${channel}:${buildThreadShortId(t.messageId!)}"`)
         .join('\n');
       const hint = threadHints ? `\n\nTo reply in a task's thread:\n${threadHints}` : '';
 
@@ -487,7 +498,7 @@ server.tool(
       const hasHandoff = d.tasks?.some((t) => t.handoffStarted) ?? false;
       const threadHints = hasHandoff ? '' : d.tasks
         ?.filter((t) => t.messageId)
-        .map((t) => `#t${t.taskNumber} → send_message to "${channel}:${t.messageId!.slice(0, 8)}"`)
+        .map((t) => `#t${t.taskNumber} → send_message to "${channel}:${buildThreadShortId(t.messageId!)}"`)
         .join('\n') ?? '';
       const hint = threadHints ? `\n\nTo follow up in each task's thread:\n${threadHints}` : '';
       const handoffNote = hasHandoff
@@ -559,7 +570,7 @@ server.tool(
       const hasHandoff = (d.results ?? []).some((r) => r.handoffStarted);
       const threadHints = hasHandoff ? '' : (d.results ?? [])
         .filter((r) => r.success)
-        .map((r) => `${formatTaskIdentity(r.agentTaskRef, r.taskNumber)} → send_message to "${channel}:${r.messageId.slice(0, 8)}"`)
+        .map((r) => `${formatTaskIdentity(r.agentTaskRef, r.taskNumber)} → send_message to "${channel}:${buildThreadShortId(r.messageId)}"`)
         .join('\n');
       const hint = threadHints ? `\n\nFollow up in each task's thread:\n${threadHints}` : '';
       const handoffNote = hasHandoff
@@ -659,7 +670,7 @@ Thread messages cannot be claimed or converted into tasks. If a task is in "todo
       const hasHandoff = (d.results ?? []).some((r) => r.handoffStarted);
       const threadHints = hasHandoff ? '' : (d.results ?? [])
         .filter((r) => r.success && r.messageId)
-        .map((r) => `${formatTaskIdentity(r.agentTaskRef, r.taskNumber)} → send_message to "${channel}:${r.messageId!.slice(0, 8)}"`)
+        .map((r) => `${formatTaskIdentity(r.agentTaskRef, r.taskNumber)} → send_message to "${channel}:${buildThreadShortId(r.messageId!)}"`)
         .join('\n');
       const hint = threadHints ? `\n\nFollow up in each task's thread:\n${threadHints}` : '';
       const handoffNote = hasHandoff

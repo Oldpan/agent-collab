@@ -1,4 +1,5 @@
 import type { Db } from '@agent-collab/runtime-acp';
+import { normalizeThreadShortIdInput } from '@agent-collab/protocol';
 
 export type TargetParticipantRole = 'owner' | 'participant';
 
@@ -13,8 +14,7 @@ export type TargetParticipant = {
 export const TARGET_PARTICIPANT_ACTIVE_WINDOW_MS = 15 * 60 * 1000;
 
 function normalizeThreadRootId(threadRootId?: string | null): string {
-  if (!threadRootId) return '';
-  return threadRootId.slice(0, 8);
+  return normalizeThreadShortIdInput(threadRootId) ?? '';
 }
 
 export function upsertTargetParticipant(

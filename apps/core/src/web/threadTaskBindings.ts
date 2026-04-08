@@ -1,10 +1,12 @@
 import type { TaskInfo } from '@agent-collab/protocol';
 import type { Db } from '@agent-collab/runtime-acp';
+import { buildLegacyThreadShortId, buildThreadShortId } from '@agent-collab/protocol';
 import {
   listRecentTargetParticipants,
   setTargetOwner,
   TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
 } from './targetParticipants.js';
+import { findThreadRootMessageId } from './threadRoots.js';
 
 type TaskThreadRow = {
   taskId: string;
@@ -46,8 +48,16 @@ function normalizeThreadRootId(threadRootId?: string | null): string {
   return threadRootId ?? '';
 }
 
+function getTaskThreadRootIds(messageId?: string | null): string[] {
+  if (!messageId) return [];
+  return Array.from(new Set([
+    buildThreadShortId(messageId),
+    buildLegacyThreadShortId(messageId),
+  ]));
+}
+
 export function getTaskThreadRootId(messageId?: string | null): string | null {
-  return messageId ? messageId.slice(0, 8) : null;
+  return messageId ? buildThreadShortId(messageId) : null;
 }
 
 function toBoundThreadTask(row: TaskThreadRow): BoundThreadTask | undefined {
@@ -95,6 +105,8 @@ export function getBoundTaskForThread(
 ): BoundThreadTask | undefined {
   const threadRootId = normalizeThreadRootId(params.threadRootId);
   if (!threadRootId) return undefined;
+  const rootMessageId = findThreadRootMessageId(db, params.channelId, threadRootId);
+  if (!rootMessageId) return undefined;
 
   const row = db.prepare(
     `SELECT t.task_id as taskId,
@@ -109,9 +121,9 @@ export function getBoundTaskForThread(
             t.created_at as createdAt,
             t.updated_at as updatedAt
      FROM tasks t
-     WHERE t.channel_id = ? AND t.message_id IS NOT NULL AND SUBSTR(t.message_id, 1, 8) = ?
+     WHERE t.channel_id = ? AND t.message_id = ?
      LIMIT 1`,
-  ).get(params.channelId, threadRootId) as TaskThreadRow | undefined;
+  ).get(params.channelId, rootMessageId) as TaskThreadRow | undefined;
 
   return row ? toBoundThreadTask(row) : undefined;
 }
@@ -119,7 +131,7 @@ export function getBoundTaskForThread(
 export function getThreadBindingForTask(
   db: Db,
   taskId: string,
-): { channelId: string; threadRootId: string } | undefined {
+): { channelId: string; threadRootId: string; threadRootIds: string[] } | undefined {
   const row = db.prepare(
     `SELECT channel_id as channelId, message_id as messageId
      FROM tasks
@@ -128,8 +140,9 @@ export function getThreadBindingForTask(
   ).get(taskId) as { channelId: string; messageId: string | null } | undefined;
 
   const threadRootId = getTaskThreadRootId(row?.messageId);
+  const threadRootIds = getTaskThreadRootIds(row?.messageId);
   if (!row || !threadRootId) return undefined;
-  return { channelId: row.channelId, threadRootId };
+  return { channelId: row.channelId, threadRootId, threadRootIds };
 }
 
 export function syncTaskThreadOwner(
@@ -143,12 +156,14 @@ export function syncTaskThreadOwner(
   const binding = getThreadBindingForTask(db, params.taskId);
   if (!binding) return;
 
-  setTargetOwner(db, {
-    channelId: binding.channelId,
-    threadRootId: binding.threadRootId,
-    agentId: params.agentId ?? null,
-    lastActiveAt: params.lastActiveAt,
-  });
+  for (const threadRootId of binding.threadRootIds) {
+    setTargetOwner(db, {
+      channelId: binding.channelId,
+      threadRootId,
+      agentId: params.agentId ?? null,
+      lastActiveAt: params.lastActiveAt,
+    });
+  }
 }
 
 export function clearTaskThreadState(
@@ -158,15 +173,17 @@ export function clearTaskThreadState(
   const binding = getThreadBindingForTask(db, params.taskId);
   if (!binding) return;
 
-  db.prepare(
-    `DELETE FROM target_participants
-     WHERE channel_id = ? AND thread_root_id = ?`,
-  ).run(binding.channelId, binding.threadRootId);
+  for (const threadRootId of binding.threadRootIds) {
+    db.prepare(
+      `DELETE FROM target_participants
+       WHERE channel_id = ? AND thread_root_id = ?`,
+    ).run(binding.channelId, threadRootId);
 
-  db.prepare(
-    `DELETE FROM agent_message_checkpoints
-     WHERE channel_id = ? AND thread_root_id = ?`,
-  ).run(binding.channelId, binding.threadRootId);
+    db.prepare(
+      `DELETE FROM agent_message_checkpoints
+       WHERE channel_id = ? AND thread_root_id = ?`,
+    ).run(binding.channelId, threadRootId);
+  }
 }
 
 export function listChannelTasks(

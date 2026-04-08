@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon, Settings2Icon, MessageSquareOffIcon, ListTodoIcon, PaperclipIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChannelInfo, AgentInfo, ConversationInfo } from "@agent-collab/protocol";
+import { buildThreadShortId, type ChannelInfo, type AgentInfo, type ConversationInfo } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
 import { addAgentToChannel, clearChannelChat, removeAgentFromChannel, subscribeChannelAgent, unsubscribeChannelAgent, updateChannel, claimMessageAsTask, uploadAttachment } from "@/lib/api";
 import { useChannelStream, type ChannelNotice } from "@/hooks/useChannelStream";
@@ -1061,7 +1061,7 @@ export function ChannelPanel({
   );
 
   const handleOpenTaskThread = useCallback((threadShortId: string) => {
-    const msg = messages.find((m) => m.id.slice(0, 8) === threadShortId);
+    const msg = messages.find((m) => buildThreadShortId(m.id) === threadShortId);
     if (msg) {
       setOpenThread(msg);
     }

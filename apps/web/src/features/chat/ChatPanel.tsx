@@ -125,21 +125,6 @@ function getTaskLifecycleKind(message: LiveMessage): TaskLifecycleKind {
   return "unknown";
 }
 
-function getTaskLifecycleStatusLabel(message: LiveMessage): string {
-  switch (getTaskLifecycleKind(message)) {
-    case "started":
-      return "In progress";
-    case "in_review":
-      return "In review";
-    case "done":
-      return "Done";
-    case "handoff_failed":
-      return "Handoff failed";
-    default:
-      return message.taskStatus ? message.taskStatus.replaceAll("_", " ") : "Unknown";
-  }
-}
-
 function getTaskLifecycleTitle(message: LiveMessage): { taskNumber: number | null; title: string | null } {
   const matched = message.text.match(/#(\d+)\s+"([^"]+)"/);
   if (!matched) {
@@ -150,7 +135,7 @@ function getTaskLifecycleTitle(message: LiveMessage): { taskNumber: number | nul
   }
   return {
     taskNumber: Number(matched[1]),
-    title: matched[2],
+    title: matched[2] ?? null,
   };
 }
 

@@ -11,7 +11,7 @@ import fastifyMultipart from '@fastify/multipart';
 
 import type { Db } from '@agent-collab/runtime-acp';
 import { log, finishRun } from '@agent-collab/runtime-acp';
-import type { CreateConversationRequest, CreateChannelRequest, UpdateChannelRequest, CreateAgentRequest, UpdateAgentRequest, CreateMachineRequest } from '@agent-collab/protocol';
+import { buildThreadShortId, type CreateConversationRequest, type CreateChannelRequest, type UpdateChannelRequest, type CreateAgentRequest, type UpdateAgentRequest, type CreateMachineRequest } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
 import { handleWebSocket, broadcast } from './wsHandler.js';
 import { handleNodeWebSocket } from './nodeWsHandler.js';
@@ -50,6 +50,7 @@ import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
 import { allocateNextTaskNumber } from './taskNumbers.js';
 import { isValidTransition } from './taskStatusTransitions.js';
 import { upsertAgentTaskLink } from './agentTaskLinks.js';
+import { findThreadRootMessageId } from './threadRoots.js';
 import type { User } from '../services/auth.js';
 import {
   hasAdminUser,
@@ -419,12 +420,15 @@ export async function startServer(params: {
           }))
         : participants;
 
-      const rootMsg = db.prepare(
-        `SELECT sender_id as senderId, sender_type as senderType
-         FROM channel_messages
-         WHERE channel_id = ? AND substr(message_id, 1, 8) = ?
-         LIMIT 1`,
-      ).get(params.channelId, threadRootId) as { senderId: string; senderType: string } | undefined;
+      const rootMessageId = findThreadRootMessageId(db, params.channelId, threadRootId);
+      const rootMsg = rootMessageId
+        ? (db.prepare(
+          `SELECT sender_id as senderId, sender_type as senderType
+           FROM channel_messages
+           WHERE channel_id = ? AND message_id = ?
+           LIMIT 1`,
+        ).get(params.channelId, rootMessageId) as { senderId: string; senderType: string } | undefined)
+        : undefined;
 
       if (summary.ownerAgentId) {
         notifyAgent(summary.ownerAgentId, 'thread_reply', 'owner');
@@ -653,7 +657,7 @@ export async function startServer(params: {
   };
 
   const mapAgentTaskRow = (row: AgentTaskListRow, dmChannelId: string) => {
-    const linkedThreadId = row.messageId ? row.messageId.slice(0, 8) : null;
+    const linkedThreadId = row.messageId ? buildThreadShortId(row.messageId) : null;
     const sourceType = row.channelId === dmChannelId ? 'dm' : 'channel';
     const channelName = sourceType === 'channel' ? row.channelName : null;
     return {
@@ -1670,7 +1674,7 @@ export async function startServer(params: {
       }
 
       const requestedThreadRootId = typeof req.body?.threadRootId === 'string' && req.body.threadRootId.trim()
-        ? req.body.threadRootId.trim().slice(0, 8)
+        ? req.body.threadRootId.trim()
         : null;
       const requestedMessageId = typeof req.body?.messageId === 'string' && req.body.messageId.trim()
         ? req.body.messageId.trim()
@@ -2599,7 +2603,7 @@ export async function startServer(params: {
         ).run(taskId, req.params.id, taskNumber, normalizedTitle, normalizedDescription, messageId, now, now);
       })();
 
-      const shortId = messageId.slice(0, 8);
+      const shortId = buildThreadShortId(messageId);
       // Broadcast the task message to channel subscribers
       broadcastToChannel(req.params.id, {
         type: 'channel.message',
@@ -2826,7 +2830,7 @@ export async function startServer(params: {
           });
         })();
 
-        const threadRootId = current.messageId.slice(0, 8);
+        const threadRootId = buildThreadShortId(current.messageId);
         postUserChannelMessage({
           channelId: req.params.id,
           senderName: chanUser.username,

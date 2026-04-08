@@ -65,6 +65,37 @@ export function listRuntimeDrivers(): RuntimeDriverDefinition[] {
   return Object.values(RUNTIME_DRIVERS);
 }
 
+export const LEGACY_THREAD_SHORT_ID_LENGTH = 8;
+export const THREAD_SHORT_ID_LENGTH = 16;
+
+export function normalizeThreadShortIdInput(threadRootId: string | null | undefined): string | null {
+  const normalized = threadRootId?.trim().toLowerCase();
+  return normalized ? normalized : null;
+}
+
+export function normalizeMessageIdForThreadShortId(messageId: string): string {
+  const trimmed = messageId.trim().toLowerCase();
+  const withoutClientPrefix = trimmed.startsWith('client-') ? trimmed.slice('client-'.length) : trimmed;
+  const alnumOnly = withoutClientPrefix.replace(/[^a-z0-9]/g, '');
+  return alnumOnly || trimmed.replace(/[^a-z0-9]/g, '') || trimmed;
+}
+
+export function buildLegacyThreadShortId(messageId: string): string {
+  return messageId.trim().slice(0, LEGACY_THREAD_SHORT_ID_LENGTH).toLowerCase();
+}
+
+export function buildThreadShortId(messageId: string): string {
+  const normalized = normalizeMessageIdForThreadShortId(messageId);
+  return normalized.slice(0, THREAD_SHORT_ID_LENGTH);
+}
+
+export function matchesThreadShortId(messageId: string, threadRootId: string | null | undefined): boolean {
+  const normalizedCandidate = normalizeThreadShortIdInput(threadRootId);
+  if (!normalizedCandidate) return false;
+  return normalizedCandidate === buildThreadShortId(messageId)
+    || normalizedCandidate === buildLegacyThreadShortId(messageId);
+}
+
 export type ConversationStatusEvent = {
   type: 'conversation.status';
   status: ConversationStatus;
@@ -163,7 +194,7 @@ export type ChannelMessageEvent = {
     content: string;
     createdAt: string;
     seq?: number;
-    /** First 8 chars of the root message ID. Present only for thread replies. */
+    /** Thread short ID derived from the root message ID. Present only for thread replies. */
     threadRootId?: string;
     /** Present only when the message was synthesized from raw deltas as a fallback. */
     messageSource?: string;

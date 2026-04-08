@@ -1,4 +1,5 @@
 import type { Db } from '@agent-collab/runtime-acp';
+import { normalizeThreadShortIdInput } from '@agent-collab/protocol';
 
 export function resolveDirectUserName(
   db: Db,
@@ -17,10 +18,11 @@ export function buildDirectReplyTarget(params: {
   userName: string;
   threadRootId?: string | null;
 }): string {
+  const normalizedThreadRootId = normalizeThreadShortIdInput(params.threadRootId);
   return params.isPrimaryThread
     ? `dm:@${params.userName}`
-    : params.threadRootId?.trim()
-      ? `dm:@${params.userName}:${params.threadRootId.trim().slice(0, 8)}`
+    : normalizedThreadRootId
+      ? `dm:@${params.userName}:${normalizedThreadRootId}`
       : `dm:@${params.userName}`;
 }
 

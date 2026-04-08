@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Db } from '@agent-collab/runtime-acp';
-import type { ServerEvent } from '@agent-collab/protocol';
+import { buildThreadShortId, type ServerEvent } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
 import type { AgentSkillsService } from '../services/agentSkillsService.js';
 import { AgentSkillsServiceError } from '../services/agentSkillsService.js';
@@ -33,6 +33,7 @@ import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
 import { allocateNextTaskNumber } from './taskNumbers.js';
 import { isValidTransition } from './taskStatusTransitions.js';
 import { upsertAgentTaskLink } from './agentTaskLinks.js';
+import { findThreadRootMessageId } from './threadRoots.js';
 
 const AGENT_MENTION_COOLDOWN_MS = 60_000;
 const DM_TASK_HANDOFF_EVENT_METHOD = 'platform/handoff';
@@ -175,15 +176,7 @@ function fetchTaskContext(db: Db, channelId: string, messageId: string, limit = 
 }
 
 function doesThreadRootExist(db: Db, channelId: string, threadRootId: string): boolean {
-  const row = db.prepare(
-    `SELECT 1
-     FROM channel_messages
-     WHERE channel_id = ?
-       AND thread_root_id IS NULL
-       AND SUBSTR(message_id, 1, 8) = ?
-     LIMIT 1`,
-  ).get(channelId, threadRootId) as { 1: number } | undefined;
-  return Boolean(row);
+  return Boolean(findThreadRootMessageId(db, channelId, threadRootId));
 }
 
 function fetchLatestTopLevelUserMessageForTarget(
@@ -239,7 +232,7 @@ export function registerInternalAgentRoutes(
   const runThreadSendOverrides = new Map<string, string>();
   const runDmTaskHandoffs = new Map<string, DmTaskHandoffState>();
 
-  const buildDmTaskThreadTarget = (primaryTarget: string, messageId: string) => `${primaryTarget}:${messageId.slice(0, 8)}`;
+  const buildDmTaskThreadTarget = (primaryTarget: string, messageId: string) => `${primaryTarget}:${buildThreadShortId(messageId)}`;
 
   const nextSyntheticRunEventSeq = (runId: string): number => {
     const row = db.prepare(
@@ -590,7 +583,7 @@ export function registerInternalAgentRoutes(
           channelId: `dm:${params.agentId}`,
           replyTarget: threadTarget,
           triggerSeq: rootMessageRow.seq + 1,
-          threadRootId: params.messageId.slice(0, 8),
+          threadRootId: buildThreadShortId(params.messageId),
         })
       : null;
     try {
@@ -909,12 +902,15 @@ export function registerInternalAgentRoutes(
         }
 
         if (normalizedRecentParticipants.length === 0 && !summary.ownerAgentId) {
-          const rootMsg = db.prepare(
-            `SELECT sender_id as senderId, sender_type as senderType
-             FROM channel_messages
-             WHERE channel_id = ? AND substr(message_id, 1, 8) = ?
-             LIMIT 1`,
-          ).get(channelId, threadRootId) as { senderId: string; senderType: string } | undefined;
+          const rootMessageId = findThreadRootMessageId(db, channelId, threadRootId);
+          const rootMsg = rootMessageId
+            ? (db.prepare(
+              `SELECT sender_id as senderId, sender_type as senderType
+               FROM channel_messages
+               WHERE channel_id = ? AND message_id = ?
+               LIMIT 1`,
+            ).get(channelId, rootMessageId) as { senderId: string; senderType: string } | undefined)
+            : undefined;
           if (rootMsg?.senderType === 'agent') {
             queueAgentNotification(rootMsg.senderId, 'thread_reply', 'owner');
           }
@@ -2863,7 +2859,7 @@ function buildTaskThreadTarget(sourceTarget: string | null, messageId: string | 
   const normalizedTarget = sourceTarget.trim();
   if (!(normalizedTarget.startsWith('dm:@') || normalizedTarget.startsWith('#'))) return null;
   if (isThreadTargetValue(normalizedTarget)) return normalizedTarget;
-  return `${normalizedTarget}:${messageId.slice(0, 8)}`;
+  return `${normalizedTarget}:${buildThreadShortId(messageId)}`;
 }
 
 function normalizeTargetForConversation(db: Db, conversationId: string, target: string): string {

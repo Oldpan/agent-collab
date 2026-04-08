@@ -17,6 +17,7 @@ import type {
   ThreadKind,
   AgentPermissionKind,
 } from '@agent-collab/protocol';
+import { normalizeThreadShortIdInput } from '@agent-collab/protocol';
 import {
   log,
   createSession,
@@ -33,6 +34,7 @@ import {
   upsertChannelSubscription,
 } from './channelSubscriptions.js';
 import type { ActivationContextMessage } from './activationContext.js';
+import { resolveThreadRootLookup } from './threadRoots.js';
 import {
   deleteTargetParticipantsForAgent,
   deleteTargetParticipantsForAgentInChannel,
@@ -51,9 +53,7 @@ function slugifyAgentName(name: string): string {
 }
 
 function normalizeChannelThreadRootId(threadRootId?: string | null): string | null {
-  const normalized = threadRootId?.trim();
-  if (!normalized) return null;
-  return normalized.slice(0, 8);
+  return normalizeThreadShortIdInput(threadRootId);
 }
 
 type AgentRow = {
@@ -458,8 +458,12 @@ export class ConversationManager {
 
     const normalizedThreadRootId = normalizeChannelThreadRootId(threadRootId);
     if (!normalizedThreadRootId) return null;
+    const dmChannelId = `dm:${agentId}`;
+    const threadRootLookup = resolveThreadRootLookup(this.db, dmChannelId, normalizedThreadRootId);
+    const canonicalThreadRootId = threadRootLookup?.canonicalThreadRootId ?? normalizedThreadRootId;
+    const acceptableThreadRootIds = new Set(threadRootLookup?.alternateThreadRootIds ?? [canonicalThreadRootId]);
 
-    const existing = userId
+    const existingCandidates = userId
       ? this.db.prepare(
           `SELECT id, channel_id as channelId, title, agent_type as agentType,
                   reply_target as replyTarget,
@@ -468,10 +472,9 @@ export class ConversationManager {
                   workspace_path as workspacePath, status, node_id as nodeId,
                   agent_id as agentId, user_id as userId, created_at as createdAt, updated_at as updatedAt
            FROM conversations
-           WHERE agent_id = ? AND user_id = ? AND thread_kind = 'direct' AND is_primary_thread = 0 AND thread_root_id = ?
-           ORDER BY updated_at DESC
-           LIMIT 1`,
-        ).get(agentId, userId, normalizedThreadRootId) as ConversationInfo | undefined
+           WHERE agent_id = ? AND user_id = ? AND thread_kind = 'direct' AND is_primary_thread = 0
+           ORDER BY updated_at DESC`,
+        ).all(agentId, userId) as ConversationInfo[]
       : this.db.prepare(
           `SELECT id, channel_id as channelId, title, agent_type as agentType,
                   reply_target as replyTarget,
@@ -480,10 +483,12 @@ export class ConversationManager {
                   workspace_path as workspacePath, status, node_id as nodeId,
                   agent_id as agentId, user_id as userId, created_at as createdAt, updated_at as updatedAt
            FROM conversations
-           WHERE agent_id = ? AND user_id IS NULL AND thread_kind = 'direct' AND is_primary_thread = 0 AND thread_root_id = ?
-           ORDER BY updated_at DESC
-           LIMIT 1`,
-        ).get(agentId, normalizedThreadRootId) as ConversationInfo | undefined;
+           WHERE agent_id = ? AND user_id IS NULL AND thread_kind = 'direct' AND is_primary_thread = 0
+           ORDER BY updated_at DESC`,
+        ).all(agentId) as ConversationInfo[];
+    const existing = existingCandidates.find(
+      (candidate) => candidate.threadRootId != null && acceptableThreadRootIds.has(candidate.threadRootId),
+    );
 
     if (existing) {
       const canonicalReplyTarget = this.computeReplyTarget({
@@ -491,7 +496,7 @@ export class ConversationManager {
         channelId: existing.channelId,
         threadKind: existing.threadKind,
         isPrimaryThread: false,
-        threadRootId: existing.threadRootId ?? normalizedThreadRootId,
+        threadRootId: existing.threadRootId ?? canonicalThreadRootId,
         userId: existing.userId ?? userId ?? null,
       });
       if ((existing.replyTarget ?? '').trim() !== canonicalReplyTarget) {
@@ -505,7 +510,7 @@ export class ConversationManager {
       return {
         ...existing,
         isPrimaryThread: !!existing.isPrimaryThread,
-        threadRootId: existing.threadRootId ?? normalizedThreadRootId,
+        threadRootId: existing.threadRootId ?? canonicalThreadRootId,
         userId: existing.userId ?? userId ?? null,
       };
     }
@@ -518,7 +523,7 @@ export class ConversationManager {
       nodeId: agent.nodeId ?? undefined,
       threadKind: 'direct',
       isPrimaryThread: false,
-      threadRootId: normalizedThreadRootId,
+      threadRootId: canonicalThreadRootId,
       title: '',
       userId: userId ?? null,
     });
@@ -529,8 +534,13 @@ export class ConversationManager {
     if (!agent) return null;
 
     const normalizedThreadRootId = normalizeChannelThreadRootId(threadRootId);
+    const threadRootLookup = normalizedThreadRootId
+      ? resolveThreadRootLookup(this.db, channelId, normalizedThreadRootId)
+      : null;
+    const canonicalThreadRootId = threadRootLookup?.canonicalThreadRootId ?? normalizedThreadRootId;
+    const acceptableThreadRootIds = new Set(threadRootLookup?.alternateThreadRootIds ?? []);
     const existing = (normalizedThreadRootId
-      ? this.db.prepare(
+      ? (this.db.prepare(
         `SELECT id, channel_id as channelId, title, agent_type as agentType,
                 reply_target as replyTarget,
                 thread_kind as threadKind, is_primary_thread as isPrimaryThread,
@@ -538,10 +548,11 @@ export class ConversationManager {
                 workspace_path as workspacePath, status, node_id as nodeId,
                 agent_id as agentId, created_at as createdAt, updated_at as updatedAt
          FROM conversations
-         WHERE agent_id = ? AND channel_id = ? AND thread_kind = 'branch' AND thread_root_id = ?
-         ORDER BY updated_at DESC
-         LIMIT 1`,
-      ).get(agentId, channelId, normalizedThreadRootId)
+         WHERE agent_id = ? AND channel_id = ? AND thread_kind = 'branch'
+         ORDER BY updated_at DESC`,
+      ).all(agentId, channelId) as ConversationInfo[]).find(
+        (candidate) => candidate.threadRootId != null && acceptableThreadRootIds.has(candidate.threadRootId),
+      )
       : this.db.prepare(
         `SELECT id, channel_id as channelId, title, agent_type as agentType,
                 reply_target as replyTarget,
@@ -566,7 +577,7 @@ export class ConversationManager {
       nodeId: agent.nodeId ?? undefined,
       threadKind: 'branch',
       isPrimaryThread: false,
-      threadRootId: normalizedThreadRootId,
+      threadRootId: canonicalThreadRootId,
       title: '',
     });
   }

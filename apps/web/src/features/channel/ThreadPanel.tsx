@@ -2,7 +2,7 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { XIcon, SendIcon, MessageSquareIcon, ChevronDownIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { AgentInfo } from "@agent-collab/protocol";
+import { buildThreadShortId, type AgentInfo } from "@agent-collab/protocol";
 import {
   type ChannelMessage,
   type ThreadCollaborationSummary,
@@ -359,7 +359,7 @@ export function ThreadPanel({
   onClose,
   className,
 }: ThreadPanelProps) {
-  const threadRootId = rootMessage.id.slice(0, 8);
+  const threadRootId = buildThreadShortId(rootMessage.id);
   const { messages, summary, sendMessage, loadMore, hasMore } = useThreadStream(
     channelId,
     threadRootId,
