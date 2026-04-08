@@ -11,6 +11,7 @@ import type { ClaudeTranscriptBroker } from '../services/claudeTranscriptBroker.
 import type { ConversationManager } from './conversationManager.js';
 import { resolveConversationReplyTarget } from './directReplyTargets.js';
 import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
+import { getBoundTaskForThread } from './threadTaskBindings.js';
 
 /** Persist a ServerEvent from a remote run into core DB as a node/event entry */
 function appendNodeEvent(db: Db, runId: string, seq: number, event: ServerEvent): void {
@@ -76,8 +77,143 @@ const REPLAY_EVENT_TYPES = new Set([
   'task.update',
 ]);
 const DM_TASK_HANDOFF_EVENT_METHOD = 'platform/handoff';
+const TASK_STATUS_REMINDER_EVENT_METHOD = 'platform/task-status-reminder';
+const TASK_STATUS_REMINDER_PROMPT_PREFIX = '[Platform task status reminder]';
 
 type EventBroadcaster = (conversationId: string, event: ServerEvent) => void;
+
+function nextSyntheticRunEventSeq(db: Db, runId: string): number {
+  const row = db.prepare(
+    `SELECT COALESCE(MAX(seq), 0) as maxSeq
+     FROM events
+     WHERE run_id = ?`,
+  ).get(runId) as { maxSeq: number } | undefined;
+  return (row?.maxSeq ?? 0) + 1;
+}
+
+function hasRunTaskStatusReminder(db: Db, runId: string): boolean {
+  return Boolean(db.prepare(
+    `SELECT 1
+     FROM events
+     WHERE run_id = ?
+       AND method = ?
+     LIMIT 1`,
+  ).get(runId, TASK_STATUS_REMINDER_EVENT_METHOD));
+}
+
+function isTaskStatusReminderRun(db: Db, runId: string): boolean {
+  const row = db.prepare(
+    `SELECT prompt_text as promptText
+     FROM runs
+     WHERE run_id = ?
+     LIMIT 1`,
+  ).get(runId) as { promptText: string } | undefined;
+  return row?.promptText?.startsWith(TASK_STATUS_REMINDER_PROMPT_PREFIX) ?? false;
+}
+
+function hasQueuedTaskStatusReminder(db: Db, conversationId: string): boolean {
+  return Boolean(db.prepare(
+    `SELECT 1
+     FROM conversation_prompt_queue
+     WHERE conversation_id = ?
+       AND prompt_text LIKE ?
+     LIMIT 1`,
+  ).get(conversationId, `${TASK_STATUS_REMINDER_PROMPT_PREFIX}%`));
+}
+
+function getTaskBoardTarget(replyTarget: string): string {
+  if (replyTarget.startsWith('dm:@')) {
+    const parts = replyTarget.split(':');
+    return parts.length >= 3 ? parts.slice(0, 2).join(':') : replyTarget;
+  }
+  if (replyTarget.startsWith('#')) {
+    const idx = replyTarget.lastIndexOf(':');
+    return idx > 0 ? replyTarget.slice(0, idx) : replyTarget;
+  }
+  return replyTarget;
+}
+
+function buildTaskStatusReminderPrompt(params: {
+  replyTarget: string;
+  taskNumber: number;
+  title: string;
+  status: string;
+}): string {
+  const boardTarget = getTaskBoardTarget(params.replyTarget);
+  return [
+    TASK_STATUS_REMINDER_PROMPT_PREFIX,
+    `This thread is bound to task #${params.taskNumber} "${params.title}", but the task is still marked ${params.status}.`,
+    `If the work you just completed is ready for review, call update_task_status(channel="${boardTarget}", task_number=${params.taskNumber}, status="in_review") before replying further.`,
+    'Only use status="done" for trivial work or after explicit human approval.',
+    'If the work is still ongoing, keep the task open and continue with a progress update in this thread.',
+  ].join('\n');
+}
+
+function maybeQueueTaskStatusReminder(params: {
+  db: Db;
+  conversationId: string;
+  runId: string;
+  stopReason?: string;
+  error?: string;
+}): void {
+  if (params.error) return;
+  if (params.stopReason === 'handoff' || isCancelStopReason(params.stopReason)) return;
+  if (hasRunTaskStatusReminder(params.db, params.runId) || isTaskStatusReminderRun(params.db, params.runId)) return;
+
+  const conversation = params.db.prepare(
+    `SELECT agent_id as agentId,
+            channel_id as channelId,
+            reply_target as replyTarget,
+            thread_root_id as threadRootId
+     FROM conversations
+     WHERE id = ?
+     LIMIT 1`,
+  ).get(params.conversationId) as {
+    agentId: string | null;
+    channelId: string;
+    replyTarget: string | null;
+    threadRootId: string | null;
+  } | undefined;
+  if (!conversation?.agentId || !conversation.replyTarget || !conversation.threadRootId) return;
+
+  const boundTask = getBoundTaskForThread(params.db, {
+    channelId: conversation.channelId,
+    threadRootId: conversation.threadRootId,
+  });
+  if (!boundTask || (boundTask.status !== 'todo' && boundTask.status !== 'in_progress')) return;
+  if (hasQueuedTaskStatusReminder(params.db, params.conversationId)) return;
+
+  const now = Date.now();
+  const promptText = buildTaskStatusReminderPrompt({
+    replyTarget: conversation.replyTarget,
+    taskNumber: boundTask.taskNumber,
+    title: boundTask.title,
+    status: boundTask.status,
+  });
+
+  params.db.prepare(
+    `INSERT INTO conversation_prompt_queue(
+       agent_id, conversation_id, prompt_text, record_as_user_message, activation_context_text, replay_overlap_recent_messages_json, sender_name, client_message_id, created_at, updated_at
+     )
+     VALUES(?, ?, ?, 0, NULL, NULL, NULL, NULL, ?, ?)`,
+  ).run(conversation.agentId, params.conversationId, promptText, now, now);
+
+  params.db.prepare(
+    `INSERT INTO events(run_id, seq, method, payload_json, created_at)
+     VALUES(?, ?, ?, ?, ?)`,
+  ).run(
+    params.runId,
+    nextSyntheticRunEventSeq(params.db, params.runId),
+    TASK_STATUS_REMINDER_EVENT_METHOD,
+    JSON.stringify({
+      conversationId: params.conversationId,
+      taskId: boundTask.taskId,
+      taskNumber: boundTask.taskNumber,
+      status: boundTask.status,
+    }),
+    now,
+  );
+}
 
 type ExistingNodeRow = {
   node_id: string;
@@ -475,6 +611,13 @@ function finishConversationRun(params: {
   if (params.error) {
     params.broadcast(params.conversationId, { type: 'error', message: params.error });
   }
+  maybeQueueTaskStatusReminder({
+    db: params.db,
+    conversationId: params.conversationId,
+    runId: params.runId,
+    stopReason: params.stopReason,
+    error: params.error,
+  });
   void params.manager.onConversationSettled(params.conversationId);
 }
 

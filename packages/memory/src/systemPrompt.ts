@@ -163,6 +163,7 @@ Rules:
 - Claim a task before starting work. If the claim fails, do not work on it.
 - Do the work in the task-message's thread whenever possible.
 - In a primary DM, after claiming or creating a task, do not send any manual follow-up in the main DM. The platform will hand the task off to its task thread automatically and mirror task lifecycle status in the main DM separately.
+- If a task-thread run ends while the bound task is still \`todo\` or \`in_progress\`, the platform may immediately prompt you again in that same thread to update the task state. Treat that as a reminder to call \`${tool('update_task_status')}\` before finishing.
 - When finished, set the task to \`in_review\`.
 - Only set \`done\` for trivial tasks or after explicit human approval.
 - These rules apply in both channels and DMs. Pure DM Q&A should be answered directly without claiming.
