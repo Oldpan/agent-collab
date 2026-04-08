@@ -51,6 +51,7 @@ describe('directActivationPrompt', () => {
       },
       dmActiveTaskThreads: [
         {
+          agentTaskRef: 'task_deadbead1234',
           taskNumber: 4,
           title: '检查显存使用情况',
           status: 'in_progress',

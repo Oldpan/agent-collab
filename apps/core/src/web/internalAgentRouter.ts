@@ -32,6 +32,7 @@ import {
 import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
 import { allocateNextTaskNumber } from './taskNumbers.js';
 import { isValidTransition } from './taskStatusTransitions.js';
+import { upsertAgentTaskLink } from './agentTaskLinks.js';
 
 const AGENT_MENTION_COOLDOWN_MS = 60_000;
 const DM_TASK_HANDOFF_EVENT_METHOD = 'platform/handoff';
@@ -70,6 +71,7 @@ type BroadcastChannelMessage = ServerEvent & {
 
 type TaskRow = {
   taskId: string;
+  agentTaskRef: string | null;
   channelId: string;
   taskNumber: number;
   title: string;
@@ -1530,7 +1532,7 @@ export function registerInternalAgentRoutes(
     const rows: TaskRow[] = status && status !== 'all'
       ? db
         .prepare(
-          `SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
+          `SELECT task_id as taskId, agent_task_ref as agentTaskRef, channel_id as channelId, task_number as taskNumber,
                   title, description, status, claimed_by_agent_id as claimedByAgentId,
                   claimed_by_name as claimedByName, created_by_agent_id as createdByAgentId,
                   created_by_name as createdByName, created_at as createdAt, updated_at as updatedAt,
@@ -1540,7 +1542,7 @@ export function registerInternalAgentRoutes(
         .all(channelId, status) as TaskRow[]
       : db
         .prepare(
-          `SELECT task_id as taskId, channel_id as channelId, task_number as taskNumber,
+          `SELECT task_id as taskId, agent_task_ref as agentTaskRef, channel_id as channelId, task_number as taskNumber,
                   title, description, status, claimed_by_agent_id as claimedByAgentId,
                   claimed_by_name as claimedByName, created_by_agent_id as createdByAgentId,
                   created_by_name as createdByName, created_at as createdAt, updated_at as updatedAt,
@@ -1551,6 +1553,7 @@ export function registerInternalAgentRoutes(
 
     const tasks = rows.map((r) => ({
       taskId: r.taskId,
+      agentTaskRef: r.agentTaskRef,
       taskNumber: r.taskNumber,
       title: r.title,
       description: r.description ?? null,
@@ -1561,6 +1564,165 @@ export function registerInternalAgentRoutes(
     }));
 
     return { tasks };
+  });
+
+  app.get<{
+    Params: { agentId: string };
+    Querystring: { status?: string; scope?: string };
+  }>('/api/internal/agent/:agentId/my-tasks', async (req, reply) => {
+    const { agentId } = req.params;
+    if (!conversationManager.getAgent(agentId)) {
+      reply.code(404);
+      return { error: 'Agent not found' };
+    }
+
+    const requestedScope = (req.query.scope ?? 'all').trim().toLowerCase();
+    const requestedStatus = (req.query.status ?? 'all').trim().toLowerCase();
+    if (!['all', 'dm', 'channel'].includes(requestedScope)) {
+      reply.code(400);
+      return { error: `Invalid scope: ${req.query.scope}` };
+    }
+    if (!['all', 'todo', 'in_progress', 'in_review', 'done'].includes(requestedStatus)) {
+      reply.code(400);
+      return { error: `Invalid status: ${req.query.status}` };
+    }
+
+    const params: Array<string> = [agentId];
+    const conditions = ['atl.agent_id = ?'];
+    if (requestedStatus !== 'all') {
+      conditions.push('t.status = ?');
+      params.push(requestedStatus);
+    }
+    if (requestedScope === 'dm') {
+      conditions.push(`t.channel_id LIKE 'dm:%'`);
+    } else if (requestedScope === 'channel') {
+      conditions.push(`t.channel_id NOT LIKE 'dm:%'`);
+    }
+
+    const rows = db.prepare(
+      `SELECT t.task_id as taskId,
+              t.agent_task_ref as agentTaskRef,
+              t.channel_id as channelId,
+              t.task_number as taskNumber,
+              t.title,
+              t.description,
+              t.status,
+              t.claimed_by_agent_id as claimedByAgentId,
+              t.claimed_by_name as claimedByName,
+              t.created_by_agent_id as createdByAgentId,
+              t.created_by_name as createdByName,
+              t.created_at as createdAt,
+              t.updated_at as updatedAt,
+              t.message_id as messageId,
+              cm.target as sourceTarget,
+              ch.name as channelName
+       FROM agent_task_links atl
+       JOIN tasks t ON t.task_id = atl.task_id
+       LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
+       LEFT JOIN channels ch ON ch.channel_id = t.channel_id
+       WHERE ${conditions.join(' AND ')}
+       ORDER BY t.updated_at DESC, t.created_at DESC`,
+    ).all(...params) as Array<TaskRow & {
+      messageId?: string | null;
+      sourceTarget?: string | null;
+      channelName?: string | null;
+    }>;
+
+    const tasks = rows.map((row) => {
+      const sourceTarget = buildTaskSourceTarget(row.channelId, row.sourceTarget ?? null, row.channelName ?? null);
+      return {
+        taskId: row.taskId,
+        agentTaskRef: row.agentTaskRef,
+        channelId: row.channelId,
+        taskNumber: row.taskNumber,
+        title: row.title,
+        description: row.description ?? null,
+        status: row.status,
+        claimedByName: row.claimedByName,
+        createdByName: row.createdByName,
+        messageId: row.messageId ?? null,
+        sourceTarget,
+        sourceLabel: buildTaskSourceLabel(row.channelId, sourceTarget, row.channelName ?? null),
+        threadTarget: buildTaskThreadTarget(sourceTarget, row.messageId ?? null),
+        createdAt: new Date(row.createdAt).toISOString(),
+        updatedAt: new Date(row.updatedAt).toISOString(),
+      };
+    });
+
+    return { tasks };
+  });
+
+  app.get<{
+    Params: { agentId: string };
+    Querystring: { task_ref: string };
+  }>('/api/internal/agent/:agentId/tasks/by-ref', async (req, reply) => {
+    const { agentId } = req.params;
+    if (!conversationManager.getAgent(agentId)) {
+      reply.code(404);
+      return { error: 'Agent not found' };
+    }
+
+    const taskRef = req.query.task_ref?.trim().toLowerCase();
+    if (!taskRef) {
+      reply.code(400);
+      return { error: 'task_ref query parameter is required' };
+    }
+
+    const row = db.prepare(
+      `SELECT t.task_id as taskId,
+              t.agent_task_ref as agentTaskRef,
+              t.channel_id as channelId,
+              t.task_number as taskNumber,
+              t.title,
+              t.description,
+              t.status,
+              t.claimed_by_agent_id as claimedByAgentId,
+              t.claimed_by_name as claimedByName,
+              t.created_by_agent_id as createdByAgentId,
+              t.created_by_name as createdByName,
+              t.created_at as createdAt,
+              t.updated_at as updatedAt,
+              t.message_id as messageId,
+              cm.target as sourceTarget,
+              ch.name as channelName
+       FROM agent_task_links atl
+       JOIN tasks t ON t.task_id = atl.task_id
+       LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
+       LEFT JOIN channels ch ON ch.channel_id = t.channel_id
+       WHERE t.agent_task_ref = ?
+         AND atl.agent_id = ?
+       LIMIT 1`,
+    ).get(taskRef, agentId) as (TaskRow & {
+      messageId?: string | null;
+      sourceTarget?: string | null;
+      channelName?: string | null;
+    }) | undefined;
+
+    if (!row) {
+      reply.code(404);
+      return { error: 'Task not found' };
+    }
+
+    const sourceTarget = buildTaskSourceTarget(row.channelId, row.sourceTarget ?? null, row.channelName ?? null);
+    return {
+      task: {
+        taskId: row.taskId,
+        agentTaskRef: row.agentTaskRef,
+        channelId: row.channelId,
+        taskNumber: row.taskNumber,
+        title: row.title,
+        description: row.description ?? null,
+        status: row.status,
+        claimedByName: row.claimedByName,
+        createdByName: row.createdByName,
+        messageId: row.messageId ?? null,
+        sourceTarget,
+        sourceLabel: buildTaskSourceLabel(row.channelId, sourceTarget, row.channelName ?? null),
+        threadTarget: buildTaskThreadTarget(sourceTarget, row.messageId ?? null),
+        createdAt: new Date(row.createdAt).toISOString(),
+        updatedAt: new Date(row.updatedAt).toISOString(),
+      },
+    };
   });
 
   /**
@@ -1605,6 +1767,7 @@ export function registerInternalAgentRoutes(
     const now = Date.now();
     const created: Array<{
       taskId: string;
+      agentTaskRef: string;
       taskNumber: number;
       title: string;
       description: string;
@@ -1642,20 +1805,21 @@ export function registerInternalAgentRoutes(
     );
 
     const insertTask = db.prepare(
-      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
+      `INSERT INTO tasks(task_id, agent_task_ref, channel_id, task_number, title, description, status, message_id,
                          created_by_agent_id, created_by_name, created_at, updated_at)
-       VALUES(?, ?, ?, ?, ?, 'todo', ?, ?, ?, ?, ?)`,
+       VALUES(?, ?, ?, ?, ?, ?, 'todo', ?, ?, ?, ?, ?)`,
     );
     const insertClaimedTask = db.prepare(
-      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
+      `INSERT INTO tasks(task_id, agent_task_ref, channel_id, task_number, title, description, status, message_id,
                          claimed_by_agent_id, claimed_by_name,
                          created_by_agent_id, created_by_name, created_at, updated_at)
-       VALUES(?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES(?, ?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?)`,
     );
 
     db.transaction(() => {
       for (const taskDef of normalizedTasks) {
         const taskId = randomUUID();
+        const agentTaskRef = generateUniqueAgentTaskRef(db, taskId);
         const messageId = randomUUID();
         const taskNumber = allocateNextTaskNumber(db, channelId);
         const seq = allocateNextChannelMessageSeq(db, channelId);
@@ -1664,6 +1828,7 @@ export function registerInternalAgentRoutes(
         if (autoClaimInPrimaryDm) {
           insertClaimedTask.run(
             taskId,
+            agentTaskRef,
             channelId,
             taskNumber,
             taskDef.title,
@@ -1681,10 +1846,23 @@ export function registerInternalAgentRoutes(
             agentId,
             lastActiveAt: now,
           });
+          upsertAgentTaskLink(db, {
+            agentId,
+            taskId,
+            linkedAt: now,
+            created: true,
+            assigned: true,
+          });
         } else {
-          insertTask.run(taskId, channelId, taskNumber, taskDef.title, taskDef.description, messageId, agentId, agent.name, now, now);
+          insertTask.run(taskId, agentTaskRef, channelId, taskNumber, taskDef.title, taskDef.description, messageId, agentId, agent.name, now, now);
+          upsertAgentTaskLink(db, {
+            agentId,
+            taskId,
+            linkedAt: now,
+            created: true,
+          });
         }
-        created.push({ taskId, taskNumber, title: taskDef.title, description: taskDef.description, messageId });
+        created.push({ taskId, agentTaskRef, taskNumber, title: taskDef.title, description: taskDef.description, messageId });
         const taskMessageEvent: ServerEvent = {
           type: 'channel.message',
           message: {
@@ -1789,6 +1967,7 @@ export function registerInternalAgentRoutes(
     const results: Array<{
       messageId: string;
       taskNumber?: number;
+      agentTaskRef?: string;
       success: boolean;
       reason?: string;
       context?: ContextMsg[];
@@ -1832,12 +2011,13 @@ export function registerInternalAgentRoutes(
       }
 
       const existing = db.prepare(
-        `SELECT task_id as taskId, task_number as taskNumber, claimed_by_agent_id as claimedByAgentId
+        `SELECT task_id as taskId, agent_task_ref as agentTaskRef, task_number as taskNumber, claimed_by_agent_id as claimedByAgentId
          FROM tasks WHERE message_id = ?`,
-      ).get(msg.messageId) as { taskId: string; taskNumber: number; claimedByAgentId: string | null } | undefined;
+      ).get(msg.messageId) as { taskId: string; agentTaskRef: string | null; taskNumber: number; claimedByAgentId: string | null } | undefined;
       if (existing) {
         results.push({
           messageId: msg.messageId,
+          agentTaskRef: existing.agentTaskRef ?? undefined,
           taskNumber: existing.taskNumber,
           success: false,
           reason: existing.claimedByAgentId && existing.claimedByAgentId !== agentId
@@ -1857,19 +2037,27 @@ export function registerInternalAgentRoutes(
         `SELECT COALESCE(MAX(task_number), 0) + 1 as nextTaskNumber FROM tasks WHERE channel_id = ?`,
       ).get(channelId) as { nextTaskNumber: number };
       const taskId = randomUUID();
+      const agentTaskRef = generateUniqueAgentTaskRef(db, taskId);
       const taskNumber = nextTaskNumberRow.nextTaskNumber;
       db.transaction(() => {
         db.prepare(
-          `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
+          `INSERT INTO tasks(task_id, agent_task_ref, channel_id, task_number, title, description, status, message_id,
                              claimed_by_agent_id, claimed_by_name,
                              created_by_agent_id, created_by_name, created_at, updated_at)
-           VALUES(?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?)`,
-        ).run(taskId, channelId, taskNumber, taskTitle, normalizedDescription, msg.messageId, agentId, agent.name, agentId, agent.name, now, now);
+           VALUES(?, ?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(taskId, agentTaskRef, channelId, taskNumber, taskTitle, normalizedDescription, msg.messageId, agentId, agent.name, agentId, agent.name, now, now);
         db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.messageId);
         syncTaskThreadOwner(db, {
           taskId,
           agentId,
           lastActiveAt: now,
+        });
+        upsertAgentTaskLink(db, {
+          agentId,
+          taskId,
+          linkedAt: now,
+          created: true,
+          assigned: true,
         });
       })();
       changed = true;
@@ -1877,6 +2065,7 @@ export function registerInternalAgentRoutes(
       const result: {
         messageId: string;
         taskNumber?: number;
+        agentTaskRef?: string;
         success: boolean;
         reason?: string;
         context?: ContextMsg[];
@@ -1887,6 +2076,7 @@ export function registerInternalAgentRoutes(
       } = {
         messageId: msg.messageId,
         taskNumber,
+        agentTaskRef,
         success: true,
         context: fetchTaskContext(db, channelId, msg.messageId),
       };
@@ -2104,6 +2294,7 @@ export function registerInternalAgentRoutes(
     const now = Date.now();
     const results: Array<{
       taskNumber?: number;
+      agentTaskRef?: string;
       success: boolean;
       reason?: string;
       messageId?: string | null;
@@ -2118,7 +2309,7 @@ export function registerInternalAgentRoutes(
     for (const taskNumber of task_numbers ?? []) {
       const row = db
         .prepare(
-          `SELECT t.task_id as taskId, t.status, t.claimed_by_agent_id as claimedByAgentId, t.message_id as messageId,
+          `SELECT t.task_id as taskId, t.agent_task_ref as agentTaskRef, t.status, t.claimed_by_agent_id as claimedByAgentId, t.message_id as messageId,
                   t.title, t.description, cm.target as messageTarget
            FROM tasks t
            LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
@@ -2126,6 +2317,7 @@ export function registerInternalAgentRoutes(
         )
         .get(channelId, taskNumber) as {
           taskId: string;
+          agentTaskRef: string | null;
           status: string;
           claimedByAgentId: string | null;
           messageId: string | null;
@@ -2139,11 +2331,11 @@ export function registerInternalAgentRoutes(
         continue;
       }
       if (row.claimedByAgentId && row.claimedByAgentId !== agentId) {
-        results.push({ taskNumber, success: false, reason: 'Already claimed by another agent' });
+        results.push({ taskNumber, agentTaskRef: row.agentTaskRef ?? undefined, success: false, reason: 'Already claimed by another agent' });
         continue;
       }
       if (row.status === 'done') {
-        results.push({ taskNumber, success: false, reason: 'Task is already done' });
+        results.push({ taskNumber, agentTaskRef: row.agentTaskRef ?? undefined, success: false, reason: 'Task is already done' });
         continue;
       }
 
@@ -2159,11 +2351,18 @@ export function registerInternalAgentRoutes(
           agentId,
           lastActiveAt: now,
         });
+        upsertAgentTaskLink(db, {
+          agentId,
+          taskId: row.taskId,
+          linkedAt: now,
+          assigned: true,
+        });
       })();
       changed = true;
 
       const claimResult: {
         taskNumber?: number;
+        agentTaskRef?: string;
         success: boolean;
         reason?: string;
         messageId?: string | null;
@@ -2173,7 +2372,10 @@ export function registerInternalAgentRoutes(
         threadTarget?: string | null;
         handoffError?: string;
       } = {
-        taskNumber, success: true, messageId: row.messageId ?? null,
+        taskNumber,
+        agentTaskRef: row.agentTaskRef ?? undefined,
+        success: true,
+        messageId: row.messageId ?? null,
         context: row.messageId ? fetchTaskContext(db, channelId, row.messageId) : [],
       };
       if (currentPrimaryDmTarget && row.messageId && row.messageTarget === currentPrimaryDmTarget) {
@@ -2225,10 +2427,11 @@ export function registerInternalAgentRoutes(
       }
 
       const existingTask = db.prepare(
-        `SELECT task_id as taskId, task_number as taskNumber, status, claimed_by_agent_id as claimedByAgentId
+        `SELECT task_id as taskId, agent_task_ref as agentTaskRef, task_number as taskNumber, status, claimed_by_agent_id as claimedByAgentId
          FROM tasks WHERE channel_id = ? AND message_id = ?`,
       ).get(channelId, messageRow.messageId) as {
         taskId: string;
+        agentTaskRef: string | null;
         taskNumber: number;
         status: string;
         claimedByAgentId: string | null;
@@ -2237,6 +2440,7 @@ export function registerInternalAgentRoutes(
       if (existingTask) {
         results.push({
           taskNumber: existingTask.taskNumber,
+          agentTaskRef: existingTask.agentTaskRef ?? undefined,
           success: false,
           messageId: messageRow.messageId,
           reason: existingTask.claimedByAgentId && existingTask.claimedByAgentId !== agentId
@@ -2250,15 +2454,16 @@ export function registerInternalAgentRoutes(
         `SELECT COALESCE(MAX(task_number), 0) + 1 as nextTaskNumber FROM tasks WHERE channel_id = ?`,
       ).get(channelId) as { nextTaskNumber: number };
       const taskId = randomUUID();
+      const agentTaskRef = generateUniqueAgentTaskRef(db, taskId);
       const taskNumber = nextTaskNumberRow.nextTaskNumber;
       const taskTitle = title?.trim() || messageRow.content.trim().slice(0, 120) || `Task #${taskNumber}`;
 
       db.transaction(() => {
         db.prepare(
-          `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
-                             claimed_by_agent_id, claimed_by_name, created_at, updated_at)
-           VALUES(?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?)`,
-        ).run(taskId, channelId, taskNumber, taskTitle, normalizedDescription, messageRow.messageId, agentId, agent.name, now, now);
+          `INSERT INTO tasks(task_id, agent_task_ref, channel_id, task_number, title, description, status, message_id,
+                             claimed_by_agent_id, claimed_by_name, created_by_agent_id, created_by_name, created_at, updated_at)
+           VALUES(?, ?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?, ?)`,
+        ).run(taskId, agentTaskRef, channelId, taskNumber, taskTitle, normalizedDescription, messageRow.messageId, agentId, agent.name, agentId, agent.name, now, now);
 
         db.prepare(
           `UPDATE channel_messages
@@ -2271,11 +2476,19 @@ export function registerInternalAgentRoutes(
           agentId,
           lastActiveAt: now,
         });
+        upsertAgentTaskLink(db, {
+          agentId,
+          taskId,
+          linkedAt: now,
+          created: true,
+          assigned: true,
+        });
       })();
       changed = true;
 
       const claimResult: {
         taskNumber?: number;
+        agentTaskRef?: string;
         success: boolean;
         reason?: string;
         messageId?: string | null;
@@ -2286,6 +2499,7 @@ export function registerInternalAgentRoutes(
         handoffError?: string;
       } = {
         taskNumber,
+        agentTaskRef,
         success: true,
         messageId: messageRow.messageId,
         context: fetchTaskContext(db, channelId, messageRow.messageId),
@@ -2591,6 +2805,65 @@ function canonicalTaskTarget(channelId: string, requestedTarget: string, db: Db)
   const channelRow = db.prepare('SELECT name FROM channels WHERE channel_id = ?').get(channelId) as { name: string } | undefined;
   const channelName = channelRow?.name ?? channelId;
   return `#${channelName}`;
+}
+
+function buildAgentTaskRefCandidate(taskId: string, length: number): string {
+  const normalized = taskId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  const sliceLength = Math.max(8, Math.min(length, normalized.length));
+  return `task_${normalized.slice(0, sliceLength)}`;
+}
+
+function generateUniqueAgentTaskRef(db: Db, taskId: string): string {
+  const normalized = taskId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  const lookup = db.prepare(
+    `SELECT task_id as taskId
+     FROM tasks
+     WHERE agent_task_ref = ?
+     LIMIT 1`,
+  );
+  const candidateLengths = [12, 16, 20, 24, 28, normalized.length];
+  for (const length of candidateLengths) {
+    const candidate = buildAgentTaskRefCandidate(taskId, length);
+    const existing = lookup.get(candidate) as { taskId: string } | undefined;
+    if (!existing || existing.taskId === taskId) return candidate;
+  }
+
+  const fullBase = buildAgentTaskRefCandidate(taskId, normalized.length);
+  let suffix = 2;
+  while (true) {
+    const candidate = `${fullBase}_${suffix}`;
+    const existing = lookup.get(candidate) as { taskId: string } | undefined;
+    if (!existing || existing.taskId === taskId) return candidate;
+    suffix += 1;
+  }
+}
+
+function buildTaskSourceTarget(channelId: string, sourceTarget: string | null, channelName: string | null): string | null {
+  if (sourceTarget?.trim()) return sourceTarget.trim();
+  if (channelId.startsWith('dm:')) return null;
+  return `#${channelName ?? channelId}`;
+}
+
+function buildTaskSourceLabel(channelId: string, sourceTarget: string | null, channelName: string | null): string {
+  if (sourceTarget?.startsWith('dm:@')) return sourceTarget;
+  if (channelName) return `#${channelName}`;
+  if (channelId.startsWith('dm:')) return 'DM';
+  if (sourceTarget?.trim()) return sourceTarget.trim();
+  return channelId;
+}
+
+function isThreadTargetValue(target: string): boolean {
+  if (target.startsWith('dm:@')) return target.split(':').length >= 3;
+  if (target.startsWith('#')) return target.includes(':');
+  return false;
+}
+
+function buildTaskThreadTarget(sourceTarget: string | null, messageId: string | null): string | null {
+  if (!sourceTarget || !messageId) return null;
+  const normalizedTarget = sourceTarget.trim();
+  if (!(normalizedTarget.startsWith('dm:@') || normalizedTarget.startsWith('#'))) return null;
+  if (isThreadTargetValue(normalizedTarget)) return normalizedTarget;
+  return `${normalizedTarget}:${messageId.slice(0, 8)}`;
 }
 
 function normalizeTargetForConversation(db: Db, conversationId: string, target: string): string {

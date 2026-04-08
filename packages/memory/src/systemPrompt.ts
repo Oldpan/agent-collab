@@ -65,13 +65,15 @@ You have MCP tools from the "chat" server. Use ONLY these for communication:
 4. **${tool('read_history')}** — Read past messages from a channel, DM, or thread.
 5. **${tool('search_messages')}** — Search visible messages across channels, DMs, and threads.
 6. **${tool('list_tasks')}** — View a channel's task board.
-7. **${tool('create_tasks')}** — Create new task-messages.
-8. **${tool('claim_message')}** — Compatibility alias for promoting an existing top-level message into a task-message and claiming it.
-9. **${tool('claim_tasks')}** — Claim existing tasks by number, or promote top-level messages by ID and claim them.
-10. **${tool('unclaim_task')}** — Release your claim on a task.
-11. **${tool('update_task_status')}** — Change a task status.
-12. **${tool('upload_file')}** — Upload an image and get an attachment ID for ${tool('send_message')}.
-13. **${tool('view_file')}** — Download an attached image for inspection.
+7. **${tool('list_my_tasks')}** — List your own tasks across DMs and channels.
+8. **${tool('get_task_status')}** — Look up a task by its stable global task ref.
+9. **${tool('create_tasks')}** — Create new task-messages.
+10. **${tool('claim_message')}** — Compatibility alias for promoting an existing top-level message into a task-message and claiming it.
+11. **${tool('claim_tasks')}** — Claim existing tasks by number, or promote top-level messages by ID and claim them.
+12. **${tool('unclaim_task')}** — Release your claim on a task.
+13. **${tool('update_task_status')}** — Change a task status.
+14. **${tool('upload_file')}** — Upload an image and get an attachment ID for ${tool('send_message')}.
+15. **${tool('view_file')}** — Download an attached image for inspection.
 
 CRITICAL RULES:
 ${criticalRules.join('\n')}
@@ -153,6 +155,10 @@ Rules:
 - Thread messages are discussion context only. Do not convert a thread message into a task; claim from the corresponding top-level message instead.
 - \`${tool('claim_message')}\` is a compatibility alias. Prefer \`${tool('claim_tasks')}\` as the primary task-claiming tool.
 - Use \`${tool('create_tasks')}\` only when you need a genuinely new task-message or subtask that does not already exist.
+- Every task has a stable global task ref like \`task_ab12cd34ef56\`. Keep it when you create or claim work.
+- Use \`${tool('get_task_status')}(task_ref="...")\` when you need the latest status for one known task.
+- Use \`${tool('list_my_tasks')}()\` when you need to rediscover tasks you created or have been assigned to across DMs/channels, or review their latest status in bulk.
+- If a user asks whether an existing task is done, in review, still running, or otherwise asks for its current status, do not answer from memory alone. Look up the current state with \`${tool('get_task_status')}(task_ref="...")\` or \`${tool('list_my_tasks')}()\` first, then answer from the live task state.
 - Check for existing relevant work before creating a new task-message.
 - Claim a task before starting work. If the claim fails, do not work on it.
 - Do the work in the task-message's thread whenever possible.

@@ -93,6 +93,129 @@ const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
   minute: "2-digit",
 });
 
+const taskLifecycleTimeFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "Asia/Shanghai",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: true,
+});
+
+const taskLifecycleDateFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "Asia/Shanghai",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+const taskLifecycleYearFormatter = new Intl.DateTimeFormat("en-US", {
+  timeZone: "Asia/Shanghai",
+  year: "numeric",
+});
+
+type TaskLifecycleKind = "started" | "in_review" | "done" | "handoff_failed" | "unknown";
+
+function getTaskLifecycleKind(message: LiveMessage): TaskLifecycleKind {
+  const normalized = message.text.toLowerCase();
+  if (normalized.includes("could not start its task thread automatically")) return "handoff_failed";
+  if (normalized.includes("moved to in review")) return "in_review";
+  if (normalized.includes("marked done")) return "done";
+  if (normalized.startsWith("started ")) return "started";
+  if (message.taskStatus === "in_review") return "in_review";
+  if (message.taskStatus === "done") return "done";
+  if (message.taskStatus === "in_progress") return "started";
+  return "unknown";
+}
+
+function getTaskLifecycleStatusLabel(message: LiveMessage): string {
+  switch (getTaskLifecycleKind(message)) {
+    case "started":
+      return "In progress";
+    case "in_review":
+      return "In review";
+    case "done":
+      return "Done";
+    case "handoff_failed":
+      return "Handoff failed";
+    default:
+      return message.taskStatus ? message.taskStatus.replaceAll("_", " ") : "Unknown";
+  }
+}
+
+function getTaskLifecycleTitle(message: LiveMessage): { taskNumber: number | null; title: string | null } {
+  const matched = message.text.match(/#(\d+)\s+"([^"]+)"/);
+  if (!matched) {
+    return {
+      taskNumber: message.taskNumber ?? null,
+      title: null,
+    };
+  }
+  return {
+    taskNumber: Number(matched[1]),
+    title: matched[2],
+  };
+}
+
+function formatTaskLifecyclePrimaryText(message: LiveMessage): string {
+  const { taskNumber, title } = getTaskLifecycleTitle(message);
+  const taskLabel = title
+    ? `Task #${taskNumber ?? "?"} "${title}"`
+    : taskNumber != null
+      ? `Task #${taskNumber}`
+      : "Task";
+
+  switch (getTaskLifecycleKind(message)) {
+    case "started":
+      return `${taskLabel} started`;
+    case "in_review":
+      return `${taskLabel} moved to in review`;
+    case "done":
+      return `${taskLabel} marked done`;
+    case "handoff_failed":
+      return `${taskLabel} failed to start its task thread`;
+    default:
+      return message.text;
+  }
+}
+
+function getTaskLifecycleLead(message: LiveMessage, actorName: string | null): string {
+  const { taskNumber, title } = getTaskLifecycleTitle(message);
+  const taskLabel = title
+    ? `#${taskNumber ?? "?"} "${title}"`
+    : taskNumber != null
+      ? `#${taskNumber}`
+      : "task";
+  const actor = actorName ?? "System";
+
+  switch (getTaskLifecycleKind(message)) {
+    case "started":
+      return `🚀 ${actor} started ${taskLabel}`;
+    case "in_review":
+      return `👀 ${actor} moved ${taskLabel} to In Review`;
+    case "done":
+      return `✅ ${actor} moved ${taskLabel} to Done`;
+    case "handoff_failed":
+      return `⚠️ ${actor} failed to start ${taskLabel}`;
+    default:
+      return formatTaskLifecyclePrimaryText(message);
+  }
+}
+
+function getShanghaiDayStamp(timestamp: number): number {
+  const parts = taskLifecycleDateFormatter.formatToParts(timestamp);
+  const year = Number(taskLifecycleYearFormatter.format(timestamp));
+  const month = Number(parts.find((part) => part.type === "month")?.value ?? "1");
+  const day = Number(parts.find((part) => part.type === "day")?.value ?? "1");
+  return Date.UTC(year, month - 1, day);
+}
+
+function formatTaskLifecycleTimestamp(timestamp: number): string {
+  const now = Date.now();
+  const dayDiff = Math.round((getShanghaiDayStamp(now) - getShanghaiDayStamp(timestamp)) / 86_400_000);
+  const timeText = taskLifecycleTimeFormatter.format(timestamp);
+  if (dayDiff === 0) return `Today ${timeText}`;
+  if (dayDiff === 1) return `Yesterday ${timeText}`;
+  return `${taskLifecycleDateFormatter.format(timestamp)} ${timeText}`;
+}
+
 function isDispatchFailureError(error?: string): boolean {
   return error === "Node not connected" || error === "Node disconnected during dispatch";
 }
@@ -583,10 +706,11 @@ function MessageRow({
   openingThread?: boolean;
 }) {
   if (message.messageSource === "task_lifecycle") {
+    const agentLabel = message.taskAssigneeName ?? agent?.name ?? null;
     return (
       <div className="px-1 py-2">
-        <div className="mx-auto max-w-[720px] rounded-sm border border-zinc-900/15 bg-[#fff6cc] px-3 py-1.5 text-center text-[12px] text-zinc-700">
-          {message.text}
+        <div className="mx-auto w-fit max-w-[720px] text-center text-[12px] font-normal text-zinc-500">
+          {`${formatTaskLifecycleTimestamp(message.createdAt)} · ${getTaskLifecycleLead(message, agentLabel)}`}
         </div>
       </div>
     );

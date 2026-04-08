@@ -1,6 +1,6 @@
 # Slock System Prompt
 
-> 来源：`@slock-ai/daemon@0.30.0`（当前 `latest`）— `dist/index.js` 中的 `buildBaseSystemPrompt()`
+> 来源：`@slock-ai/daemon@0.32.1`（`2026-04-07` 查询时的 `latest`）— `dist/index.js` 中的 `buildBaseSystemPrompt()`
 >
 > 动态变量说明：
 > - `{agent_name}` — agent 的 displayName / name（由 server 配置）

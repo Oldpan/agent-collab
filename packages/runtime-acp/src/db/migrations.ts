@@ -1,6 +1,50 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 54;
+const LATEST_VERSION = 56;
+
+function buildAgentTaskRefCandidate(taskId: string, length: number): string {
+  const normalized = taskId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  const sliceLength = Math.max(8, Math.min(length, normalized.length));
+  return `task_${normalized.slice(0, sliceLength)}`;
+}
+
+function generateUniqueAgentTaskRef(db: Db, taskId: string): string {
+  const normalized = taskId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+  const lookup = db.prepare(
+    `SELECT task_id as taskId
+     FROM tasks
+     WHERE agent_task_ref = ?
+     LIMIT 1`,
+  );
+  const candidateLengths = [12, 16, 20, 24, 28, normalized.length];
+  for (const length of candidateLengths) {
+    const candidate = buildAgentTaskRefCandidate(taskId, length);
+    const existing = lookup.get(candidate) as { taskId: string } | undefined;
+    if (!existing || existing.taskId === taskId) return candidate;
+  }
+
+  const fullBase = buildAgentTaskRefCandidate(taskId, normalized.length);
+  let suffix = 2;
+  while (true) {
+    const candidate = `${fullBase}_${suffix}`;
+    const existing = lookup.get(candidate) as { taskId: string } | undefined;
+    if (!existing || existing.taskId === taskId) return candidate;
+    suffix += 1;
+  }
+}
+
+function backfillAgentTaskRefs(db: Db): void {
+  const rows = db.prepare(
+    `SELECT task_id as taskId
+     FROM tasks
+     WHERE agent_task_ref IS NULL OR trim(agent_task_ref) = ''
+     ORDER BY created_at ASC, task_id ASC`,
+  ).all() as Array<{ taskId: string }>;
+  const update = db.prepare(`UPDATE tasks SET agent_task_ref = ? WHERE task_id = ?`);
+  for (const row of rows) {
+    update.run(generateUniqueAgentTaskRef(db, row.taskId), row.taskId);
+  }
+}
 
 export function migrate(db: Db): void {
   db.exec(
@@ -1083,6 +1127,105 @@ export function migrate(db: Db): void {
 
     if (effectiveVersionRow.version < 54) {
       db.exec(`UPDATE schema_version SET version = 54;`);
+    }
+  }
+
+  const taskColumns = db.prepare(`PRAGMA table_info('tasks')`).all() as Array<{ name: string }>;
+  const hasAgentTaskRefColumn = taskColumns.some((column) => column.name === 'agent_task_ref');
+  const agentTaskRefIndexExists = !!db.prepare(
+    `SELECT 1
+     FROM sqlite_master
+     WHERE type = 'index' AND name = 'idx_tasks_agent_task_ref_unique'
+     LIMIT 1`,
+  ).get();
+  const refreshedVersionRow = db.prepare('SELECT version FROM schema_version').get() as { version: number };
+  if (refreshedVersionRow.version < 55 || !hasAgentTaskRefColumn || !agentTaskRefIndexExists) {
+    if (!hasAgentTaskRefColumn) {
+      db.exec(`ALTER TABLE tasks ADD COLUMN agent_task_ref TEXT;`);
+    }
+
+    backfillAgentTaskRefs(db);
+
+    db.exec(`
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_agent_task_ref_unique
+      ON tasks(agent_task_ref)
+      WHERE agent_task_ref IS NOT NULL;
+
+      CREATE INDEX IF NOT EXISTS idx_tasks_claimed_by_agent_id_updated
+      ON tasks(claimed_by_agent_id, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_tasks_created_by_agent_id_updated
+      ON tasks(created_by_agent_id, updated_at DESC);
+    `);
+
+    if (refreshedVersionRow.version < 55) {
+      db.exec(`UPDATE schema_version SET version = 55;`);
+    }
+  }
+
+  const agentTaskLinksTableExists = !!db.prepare(
+    `SELECT 1
+     FROM sqlite_master
+     WHERE type = 'table' AND name = 'agent_task_links'
+     LIMIT 1`,
+  ).get();
+  const agentTaskLinksTaskIndexExists = !!db.prepare(
+    `SELECT 1
+     FROM sqlite_master
+     WHERE type = 'index' AND name = 'idx_agent_task_links_task'
+     LIMIT 1`,
+  ).get();
+  const latestVersionRow = db.prepare('SELECT version FROM schema_version').get() as { version: number };
+  if (latestVersionRow.version < 56 || !agentTaskLinksTableExists || !agentTaskLinksTaskIndexExists) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS agent_task_links (
+        agent_id           TEXT NOT NULL,
+        task_id            TEXT NOT NULL,
+        created_relation   INTEGER NOT NULL DEFAULT 0,
+        assigned_relation  INTEGER NOT NULL DEFAULT 0,
+        first_linked_at    INTEGER NOT NULL,
+        last_linked_at     INTEGER NOT NULL,
+        PRIMARY KEY (agent_id, task_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_agent_task_links_task
+      ON agent_task_links(task_id, last_linked_at DESC);
+
+      INSERT INTO agent_task_links(
+        agent_id,
+        task_id,
+        created_relation,
+        assigned_relation,
+        first_linked_at,
+        last_linked_at
+      )
+      SELECT created_by_agent_id, task_id, 1, 0, created_at, updated_at
+      FROM tasks
+      WHERE created_by_agent_id IS NOT NULL AND trim(created_by_agent_id) != ''
+      ON CONFLICT(agent_id, task_id) DO UPDATE SET
+        created_relation = MAX(agent_task_links.created_relation, excluded.created_relation),
+        first_linked_at = MIN(agent_task_links.first_linked_at, excluded.first_linked_at),
+        last_linked_at = MAX(agent_task_links.last_linked_at, excluded.last_linked_at);
+
+      INSERT INTO agent_task_links(
+        agent_id,
+        task_id,
+        created_relation,
+        assigned_relation,
+        first_linked_at,
+        last_linked_at
+      )
+      SELECT claimed_by_agent_id, task_id, 0, 1, created_at, updated_at
+      FROM tasks
+      WHERE claimed_by_agent_id IS NOT NULL AND trim(claimed_by_agent_id) != ''
+      ON CONFLICT(agent_id, task_id) DO UPDATE SET
+        assigned_relation = MAX(agent_task_links.assigned_relation, excluded.assigned_relation),
+        first_linked_at = MIN(agent_task_links.first_linked_at, excluded.first_linked_at),
+        last_linked_at = MAX(agent_task_links.last_linked_at, excluded.last_linked_at);
+    `);
+
+    if (latestVersionRow.version < 56) {
+      db.exec(`UPDATE schema_version SET version = 56;`);
     }
   }
 }

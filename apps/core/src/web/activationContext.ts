@@ -23,6 +23,7 @@ export type DmThreadContextSnapshot = {
 };
 
 export type DmActiveTaskThreadSummary = {
+  agentTaskRef: string | null;
   taskNumber: number;
   title: string;
   status: string;
@@ -352,7 +353,8 @@ export function buildTargetActivationContext(
 
   const dmActiveTaskThreads = normalizedThreadRootId === null && params.replyTarget.startsWith('dm:@')
     ? (db.prepare(
-      `SELECT t.task_number as taskNumber,
+      `SELECT t.agent_task_ref as agentTaskRef,
+              t.task_number as taskNumber,
               t.title,
               t.status,
               t.claimed_by_name as claimedByName,
@@ -365,12 +367,14 @@ export function buildTargetActivationContext(
          AND t.status IN ('todo', 'in_progress', 'in_review')
        ORDER BY t.updated_at DESC, t.task_number DESC`,
     ).all(params.channelId, params.replyTarget) as Array<{
+      agentTaskRef: string | null;
       taskNumber: number;
       title: string;
       status: string;
       claimedByName: string | null;
       messageId: string;
     }>).map((task) => ({
+      agentTaskRef: task.agentTaskRef,
       taskNumber: task.taskNumber,
       title: task.title,
       status: task.status,

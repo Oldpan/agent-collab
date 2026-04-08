@@ -1,11 +1,14 @@
 # Agent Collab vs Slock
 
-本文分析当前仓库 `agent-collab` 的架构与系统设计，并对比参考实现 `@slock-ai/daemon@latest`。
+本文分析当前仓库 `agent-collab` 的架构与系统设计，并对比参考实现 `@slock-ai/daemon`。
 
 对比基线：
 
 - Agent Collab：当前工作区 `/ai/code/agi/agent-collab`
-- Slock：npm `@slock-ai/daemon@0.28.0`
+- Slock：主体代码对照基线为 npm `@slock-ai/daemon@0.28.0`
+- 补充参考：
+  - `@slock-ai/daemon@0.30.0` 的 system prompt
+  - `@slock-ai/daemon@0.32.1`（`2026-04-07` 查询时的 `latest`）的运行时与 `chat-bridge`
 - 参考产物：
   - `/tmp/slock-daemon-inspect/unpack/package/dist/index.js`
   - `/tmp/slock-daemon-inspect/unpack/package/dist/chat-bridge.js`
@@ -239,7 +242,77 @@ Agent Collab 把 run 中的细粒度事件都持久化：
 
 这属于更完整的执行审计模型。
 
-### 5. 协作语义与消息模型
+### 5. 上下文管理与抗膨胀
+
+#### Slock
+
+Slock 的“长期存活 agent”并不等于“同一个 prompt 无限增长”。它更像：
+
+- agent 身份、workspace、`MEMORY.md` 长期存在
+- session 尽量复用，但 runtime 仍会在 turn 边界结束或休眠
+- 需要额外上下文时，用 `read_history` / `search_messages` 按需拉取
+- 如果 resume session 不可用，则直接 cold start
+
+也就是说，Slock 处理上下文膨胀的主手段不是平台侧硬限制，而是：
+
+1. 把 durable memory 外置到 workspace 文件
+2. 把聊天历史改成按需检索
+3. 借助底层 CLI/runtime 自己的 session resume / compression 能力
+4. 在部分 runtime 上通过 turn 结束后退出进程来避免单进程无限堆积
+
+这套方案的优点是：
+
+- 心智模型自然，像一个一直在线的同事
+- daemon 结构轻，不需要复杂的上下文拼装层
+
+缺点是：
+
+- 上下文边界更多依赖 agent 自己维护 `MEMORY.md`
+- 也更依赖底层 runtime 的 session 压缩与恢复质量
+- 平台层缺少明确的“只回放多少历史”“何时硬切 session”这类硬边界
+
+#### Agent Collab
+
+Agent Collab 把“抗上下文膨胀”更多前移到了平台层：
+
+- 一个 `Conversation` / thread 对应一个独立 `session_key`
+- `systemPromptText` / `contextText` 只在 fresh session 注入一次
+- activation context 只带当前 exact target 的 recent messages、thread root、unread summary、participants、task 信息
+- replay 只回放有限最近 runs，并有最大字符数上限
+- clear chat / history reset 会直接 rotate 到新的 `session_key`
+- continuity 不只依赖 CLI session，也依赖 `runs / events / channel_messages` 的平台级持久化
+
+这意味着 Agent Collab 的连续性更像：
+
+- **Slock：session-centric continuity**
+- **Agent Collab：platform-managed bounded continuity**
+
+优点是：
+
+- 上下文规模更容易被平台显式约束
+- thread / direct / branch 之间天然隔离，污染更少
+- 即使底层 session 丢失，也能靠 replay + activation context 恢复出足够连续性
+
+代价是：
+
+- “长期在线 agent”的连续体感不如 Slock 自然
+- 连续性更依赖 activation context、replay 窗口、memory 维护三者配合
+- 如果平台拼接不足，容易出现“记住结构，但忘了细节”的体验
+
+#### 结论
+
+如果问题是“谁更像一个始终在线、人格连续的 agent”，Slock 的体感更自然。
+
+如果问题是“谁更能系统性控制上下文规模、防止慢性膨胀”，Agent Collab 更强。
+
+因此，在“上下文管理”这个维度上，最准确的结论是：
+
+- Slock 更依赖 **workspace memory + runtime session**
+- Agent Collab 更依赖 **session isolation + bounded replay + activation context**
+
+后者更像平台工程，前者更像守护进程工程。
+
+### 6. 协作语义与消息模型
 
 #### Slock
 
@@ -263,7 +336,7 @@ Agent Collab 明显收紧了这部分语义：
 
 这是一种“对模型更友好的路由约束”，优点是减少模型误用 thread，缺点是离原生 chat target 语义稍远一些。
 
-### 6. runtime 适配层
+### 7. runtime 适配层
 
 #### Slock
 
@@ -295,7 +368,7 @@ Agent Collab 用 `runtime-acp` 把 CLI 侧差异压到了 ACP client 层：
 
 这是比 Slock 更成熟的一步。
 
-### 7. 数据模型
+### 8. 数据模型
 
 #### Slock
 
@@ -462,6 +535,7 @@ flowchart TD
 - 更适合多机、多节点、统一调度
 - 更适合做完整前端产品
 - 更适合做执行历史回放和可观测性
+- 更适合显式控制上下文规模与 session 边界
 - 更适合未来接更多 runtime
 - 更适合精细化恢复与运维
 
@@ -470,6 +544,7 @@ flowchart TD
 - 状态复杂度显著更高
 - core DB、node DB、ACP session、message checkpoint 之间的一致性更难维护
 - 调试链路更长
+- 连续感更依赖平台拼接，而不是单一 runtime session 自然延续
 - 在一些简单协作场景下，系统重量高于 Slock
 
 ### Slock 的优势
@@ -477,6 +552,7 @@ flowchart TD
 - 结构直接
 - agent-centric 心智模型简单
 - daemon 代码对“消息到达 -> agent 处理”非常自然
+- “长期在线同事”的体感更自然
 - 作为协作 agent 基础设施，启动成本低
 
 ### Slock 的限制
@@ -484,6 +560,7 @@ flowchart TD
 - 不像 Agent Collab 这样天然支持强状态产品化
 - 可回放性和执行级审计偏弱
 - conversation/thread 作为执行实体不够显式
+- 上下文边界更多依赖 runtime 压缩能力与 agent 自律
 - runtime 差异更多暴露在 daemon 层
 
 ---

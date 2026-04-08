@@ -49,6 +49,7 @@ import {
 import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
 import { allocateNextTaskNumber } from './taskNumbers.js';
 import { isValidTransition } from './taskStatusTransitions.js';
+import { upsertAgentTaskLink } from './agentTaskLinks.js';
 import type { User } from '../services/auth.js';
 import {
   hasAdminUser,
@@ -2812,6 +2813,12 @@ export async function startServer(params: {
              SET claimed_by_agent_id = ?, claimed_by_name = ?, status = ?, updated_at = ?
              WHERE task_id = ?`,
           ).run(requestedAgentId, agent.name, nextStatus, now, current.taskId);
+          upsertAgentTaskLink(db, {
+            agentId: requestedAgentId,
+            taskId: current.taskId,
+            linkedAt: now,
+            assigned: true,
+          });
           syncTaskThreadOwner(db, {
             taskId: current.taskId,
             agentId: requestedAgentId,

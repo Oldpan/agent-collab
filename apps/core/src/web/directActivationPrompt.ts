@@ -79,7 +79,8 @@ export function buildDirectActivationContextText(params: DirectActivationContext
         '[Active DM task threads]',
         ...params.dmActiveTaskThreads.map((task) => {
           const assignee = task.claimedByName ? ` @${task.claimedByName}` : '';
-          return `#${task.taskNumber} [${task.status}]${assignee} -> ${task.threadTarget} — ${task.title}`;
+          const identity = task.agentTaskRef ? `${task.agentTaskRef} · #${task.taskNumber}` : `#${task.taskNumber}`;
+          return `${identity} [${task.status}]${assignee} -> ${task.threadTarget} — ${task.title}`;
         }),
       ].join('\n'),
     );

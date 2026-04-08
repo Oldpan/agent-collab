@@ -70,6 +70,27 @@ function toText(text: string) {
   return { content: [{ type: 'text' as const, text }] };
 }
 
+function formatTaskIdentity(agentTaskRef: string | null | undefined, taskNumber: number | null | undefined): string {
+  if (agentTaskRef && taskNumber != null) return `${agentTaskRef} · #t${taskNumber}`;
+  if (agentTaskRef) return agentTaskRef;
+  if (taskNumber != null) return `#t${taskNumber}`;
+  return 'task';
+}
+
+function isThreadTarget(target: string): boolean {
+  if (target.startsWith('dm:@')) return target.split(':').length >= 3;
+  if (target.startsWith('#')) return target.includes(':');
+  return false;
+}
+
+function buildThreadTarget(target: string | null | undefined, messageId: string | null | undefined): string | null {
+  if (!target || !messageId) return null;
+  const normalizedTarget = target.trim();
+  if (!(normalizedTarget.startsWith('dm:@') || normalizedTarget.startsWith('#'))) return null;
+  if (isThreadTarget(normalizedTarget)) return normalizedTarget;
+  return `${normalizedTarget}:${messageId.slice(0, 8)}`;
+}
+
 // ─── MCP server ───────────────────────────────────────────────────────────────
 
 const server = new McpServer({ name: 'chat', version: '1.0.0' });
@@ -298,7 +319,7 @@ server.tool(
 
 server.tool(
   'list_tasks',
-  "List task-messages on a channel's board. Returns each task-message with its number (#t1, #t2...), title, status, assignee, and message root when available.",
+  "List task-messages on a channel's board. Returns each task-message with its local board number (#t1, #t2...), stable global task ref, title, status, assignee, and message root when available.",
   {
     channel: z.string().describe("The channel whose task board to view — e.g. '#general'"),
     status: z
@@ -327,7 +348,7 @@ server.tool(
         const descLine = t.description
           ? `\n  desc: ${t.description.length > 80 ? t.description.slice(0, 80) + '...' : t.description}`
           : '';
-        return `#t${t.taskNumber} [${t.status}] "${t.title}"${assignee}${creator}${msgTag}${descLine}`;
+        return `${formatTaskIdentity(t.agentTaskRef, t.taskNumber)} [${t.status}] "${t.title}"${assignee}${creator}${msgTag}${descLine}`;
       }).join('\n');
 
       const threadHints = d.tasks
@@ -337,6 +358,85 @@ server.tool(
       const hint = threadHints ? `\n\nTo reply in a task's thread:\n${threadHints}` : '';
 
       return toText(`## Task Board for ${channel} (${d.tasks.length} tasks)\n\n${formatted}${hint}`);
+    } catch (err: unknown) {
+      return toText(`Error: ${(err as Error).message}`);
+    }
+  },
+);
+
+server.tool(
+  'list_my_tasks',
+  'List your own tasks across DMs and channels. By default this returns tasks you created or have been assigned to, and includes each task\'s stable global task ref for later lookup.',
+  {
+    status: z
+      .enum(['all', 'todo', 'in_progress', 'in_review', 'done'])
+      .default('all')
+      .describe('Filter by status (default: all)'),
+    scope: z
+      .enum(['all', 'dm', 'channel'])
+      .default('all')
+      .describe('Filter to DM tasks, channel tasks, or both (default: all)'),
+  },
+  async ({ status, scope }) => {
+    try {
+      const params = new URLSearchParams();
+      if (status !== 'all') params.set('status', status);
+      if (scope !== 'all') params.set('scope', scope);
+
+      const { ok, data } = await apiFetch(`/my-tasks?${params}`);
+      if (!ok) return toText(`Error: ${errText(data, 'list my tasks failed')}`);
+
+      const d = data as { tasks?: MyTaskItem[] };
+      if (!d.tasks?.length) {
+        return toText(`No${status !== 'all' ? ` ${status}` : ''} ${scope !== 'all' ? scope : ''} tasks found for you.`.replace(/\s+/g, ' ').trim());
+      }
+
+      const formatted = d.tasks.map((t) => {
+        const identity = formatTaskIdentity(t.agentTaskRef, t.taskNumber);
+        const assignee = t.claimedByName ? ` → @${t.claimedByName}` : '';
+        const msgTag = t.messageId ? `  msg=${t.messageId.slice(0, 8)}` : '';
+        const threadTag = t.threadTarget ? `  thread=${t.threadTarget}` : '';
+        return `${identity} [${t.status}] "${t.title}"${assignee}  source=${t.sourceLabel ?? t.sourceTarget ?? t.channelId}${msgTag}${threadTag}`;
+      }).join('\n');
+
+      return toText(`## My Tasks (${d.tasks.length} tasks)\n\n${formatted}`);
+    } catch (err: unknown) {
+      return toText(`Error: ${(err as Error).message}`);
+    }
+  },
+);
+
+server.tool(
+  'get_task_status',
+  'Look up a task by its stable global task ref and return the latest completion status, source, assignee, and thread hint.',
+  {
+    task_ref: z.string().trim().min(1, 'task_ref is required').describe('Stable global task ref, for example task_ab12cd34ef56'),
+  },
+  async ({ task_ref }) => {
+    try {
+      const params = new URLSearchParams({ task_ref: task_ref.trim().toLowerCase() });
+      const { ok, data } = await apiFetch(`/tasks/by-ref?${params}`);
+      if (!ok) return toText(`Error: ${errText(data, 'task status lookup failed')}`);
+
+      const d = data as { task?: MyTaskItem };
+      const task = d.task;
+      if (!task) return toText(`Error: task ${task_ref} not found`);
+
+      const identity = formatTaskIdentity(task.agentTaskRef, task.taskNumber);
+      const threadTarget = task.threadTarget ?? buildThreadTarget(task.sourceTarget, task.messageId ?? null);
+      const details = [
+        `Task: ${identity}`,
+        `Title: ${task.title}`,
+        `Status: ${task.status}`,
+        `Source: ${task.sourceLabel ?? task.sourceTarget ?? task.channelId}`,
+        `Assignee: ${task.claimedByName ? `@${task.claimedByName}` : 'unclaimed'}`,
+        `Creator: ${task.createdByName ? `@${task.createdByName}` : 'unknown'}`,
+        `Updated: ${task.updatedAt ?? 'unknown'}`,
+      ];
+      if (task.messageId) details.push(`Root message: ${task.messageId}`);
+      if (threadTarget) details.push(`Thread target: ${threadTarget}`);
+
+      return toText(details.join('\n'));
     } catch (err: unknown) {
       return toText(`Error: ${(err as Error).message}`);
     }
@@ -364,6 +464,7 @@ server.tool(
 
       const d = data as {
         tasks?: Array<{
+          agentTaskRef?: string | null;
           taskNumber: number;
           title: string;
           messageId?: string;
@@ -380,7 +481,8 @@ server.tool(
           : t.handoffStarted && t.threadTarget
             ? ` → handoff started in ${t.threadTarget}`
             : '';
-        return msgShort ? `#t${t.taskNumber} msg=${msgShort} "${t.title}"${handoff}` : `#t${t.taskNumber} "${t.title}"${handoff}`;
+        const identity = formatTaskIdentity(t.agentTaskRef, t.taskNumber);
+        return msgShort ? `${identity} msg=${msgShort} "${t.title}"${handoff}` : `${identity} "${t.title}"${handoff}`;
       }).join('\n') ?? '';
       const hasHandoff = d.tasks?.some((t) => t.handoffStarted) ?? false;
       const threadHints = hasHandoff ? '' : d.tasks
@@ -420,6 +522,7 @@ server.tool(
       type ClaimMsgResult = {
         messageId: string;
         taskNumber?: number;
+        agentTaskRef?: string;
         success: boolean;
         reason?: string;
         context?: Array<{ senderName: string; content: string; seq: number }>;
@@ -431,9 +534,10 @@ server.tool(
       const lines = (d.results ?? []).map((r) => {
         const msgShort = r.messageId.slice(0, 8);
         if (r.success) {
-          if (r.handoffError) return `msg:${msgShort} → #t${r.taskNumber}: claimed, handoff failed — ${r.handoffError}`;
-          if (r.handoffStarted && r.threadTarget) return `msg:${msgShort} → #t${r.taskNumber}: claimed, handoff started in ${r.threadTarget}`;
-          return `msg:${msgShort} → #t${r.taskNumber}: claimed`;
+          const identity = formatTaskIdentity(r.agentTaskRef, r.taskNumber);
+          if (r.handoffError) return `msg:${msgShort} → ${identity}: claimed, handoff failed — ${r.handoffError}`;
+          if (r.handoffStarted && r.threadTarget) return `msg:${msgShort} → ${identity}: claimed, handoff started in ${r.threadTarget}`;
+          return `msg:${msgShort} → ${identity}: claimed`;
         }
         return `msg:${msgShort}: FAILED — ${r.reason ?? 'unknown error'}`;
       });
@@ -448,14 +552,14 @@ server.tool(
           const msgs = r.context!.map(
             (m) => `  @${m.senderName}: ${m.content.length > 100 ? m.content.slice(0, 100) + '...' : m.content}`,
           ).join('\n');
-          return `#t${r.taskNumber} context:\n${msgs}`;
+          return `${formatTaskIdentity(r.agentTaskRef, r.taskNumber)} context:\n${msgs}`;
         }).join('\n\n');
       const contextSection = contextBlocks ? `\n\n${contextBlocks}` : '';
 
       const hasHandoff = (d.results ?? []).some((r) => r.handoffStarted);
       const threadHints = hasHandoff ? '' : (d.results ?? [])
         .filter((r) => r.success)
-        .map((r) => `#t${r.taskNumber} → send_message to "${channel}:${r.messageId.slice(0, 8)}"`)
+        .map((r) => `${formatTaskIdentity(r.agentTaskRef, r.taskNumber)} → send_message to "${channel}:${r.messageId.slice(0, 8)}"`)
         .join('\n');
       const hint = threadHints ? `\n\nFollow up in each task's thread:\n${threadHints}` : '';
       const handoffNote = hasHandoff
@@ -522,6 +626,7 @@ Thread messages cannot be claimed or converted into tasks. If a task is in "todo
 
       type ClaimTaskResult = {
         taskNumber: number;
+        agentTaskRef?: string;
         success: boolean;
         reason?: string;
         messageId?: string | null;
@@ -532,10 +637,11 @@ Thread messages cannot be claimed or converted into tasks. If a task is in "todo
       };
       const d = data as { results?: ClaimTaskResult[] };
       const lines = (d.results ?? []).map((r) => {
-        if (!r.success) return `#t${r.taskNumber}: FAILED — ${r.reason ?? 'already claimed'}`;
-        if (r.handoffError) return `#t${r.taskNumber}: claimed, handoff failed — ${r.handoffError}`;
-        if (r.handoffStarted && r.threadTarget) return `#t${r.taskNumber}: claimed, handoff started in ${r.threadTarget}`;
-        return `#t${r.taskNumber}: claimed`;
+        const identity = formatTaskIdentity(r.agentTaskRef, r.taskNumber);
+        if (!r.success) return `${identity}: FAILED — ${r.reason ?? 'already claimed'}`;
+        if (r.handoffError) return `${identity}: claimed, handoff failed — ${r.handoffError}`;
+        if (r.handoffStarted && r.threadTarget) return `${identity}: claimed, handoff started in ${r.threadTarget}`;
+        return `${identity}: claimed`;
       });
       const succeeded = (d.results ?? []).filter((r) => r.success).length;
       const failed = (d.results ?? []).length - succeeded;
@@ -547,13 +653,13 @@ Thread messages cannot be claimed or converted into tasks. If a task is in "todo
           const msgs = r.context!.map(
             (m) => `  @${m.senderName}: ${m.content.length > 100 ? m.content.slice(0, 100) + '...' : m.content}`,
           ).join('\n');
-          return `#t${r.taskNumber} context:\n${msgs}`;
+          return `${formatTaskIdentity(r.agentTaskRef, r.taskNumber)} context:\n${msgs}`;
         }).join('\n\n');
       const contextSection = contextBlocks ? `\n\n${contextBlocks}` : '';
       const hasHandoff = (d.results ?? []).some((r) => r.handoffStarted);
       const threadHints = hasHandoff ? '' : (d.results ?? [])
         .filter((r) => r.success && r.messageId)
-        .map((r) => `#t${r.taskNumber} → send_message to "${channel}:${r.messageId!.slice(0, 8)}"`)
+        .map((r) => `${formatTaskIdentity(r.agentTaskRef, r.taskNumber)} → send_message to "${channel}:${r.messageId!.slice(0, 8)}"`)
         .join('\n');
       const hint = threadHints ? `\n\nFollow up in each task's thread:\n${threadHints}` : '';
       const handoffNote = hasHandoff
@@ -761,6 +867,8 @@ type ChannelItem = { name: string; joined: boolean; description?: string };
 type AgentItem = { name: string; status: string };
 type HumanItem = { name: string };
 type TaskItem = {
+  taskId?: string;
+  agentTaskRef?: string | null;
   taskNumber: number;
   title: string;
   description?: string | null;
@@ -768,4 +876,13 @@ type TaskItem = {
   claimedByName: string | null;
   createdByName: string | null;
   messageId?: string | null;
+};
+
+type MyTaskItem = TaskItem & {
+  channelId: string;
+  sourceTarget?: string | null;
+  sourceLabel?: string | null;
+  threadTarget?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
 };
