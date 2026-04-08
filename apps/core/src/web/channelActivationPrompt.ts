@@ -93,7 +93,7 @@ export function buildChannelActivationContextText(params: ChannelActivationConte
       ? `\nTask brief / goal / done criteria:\n${params.boundTask.description.trim()}`
       : '\nTask brief / goal / done criteria: missing';
     parts.push(
-      `[Bound task-message for this thread]\n#${params.boundTask.taskNumber} [${params.boundTask.status}]${assignee} — ${params.boundTask.title}${brief}\nThis thread is the shared work surface for that task-message. If you are not the owner/assignee, default to coordination and discussion unless you explicitly claim or are asked to take over.`,
+      `[Bound task-message for this thread]\n#${params.boundTask.taskNumber} [${params.boundTask.status}]${assignee} — ${params.boundTask.title}${brief}\nThis thread is the shared work surface for that task-message. If you are not the owner/assignee, default to coordination and discussion unless you explicitly claim or are asked to take over. If you already own this task, do not claim it again in this thread. Send one substantive result, then move it to in_review unless the work is trivial or explicitly approved for done. Do not append a second completion-summary message after the substantive result.`,
     );
   }
 

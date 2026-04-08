@@ -491,6 +491,14 @@ function persistDeltaFallbackMessages(params: {
   );
   if (!context) return 0;
 
+  if (context.threadRootId && hasRunFinalReplyMessage(params.db, params.runId)) {
+    const boundTask = getBoundTaskForThread(params.db, {
+      channelId: context.channelId,
+      threadRootId: context.threadRootId,
+    });
+    if (boundTask) return 0;
+  }
+
   const segments = collectFallbackSegments(params.db, params.runId);
   if (segments.length === 0) return 0;
 

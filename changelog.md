@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-04-08 (task-thread execution protocol tightening)
+
+- DM task-thread 和 channel task-thread 的 activation / handoff prompt 现在都明确要求：任务已存在且已认领时不要重复 `claim`，只发送一次 substantive final result，随后通常先更新到 `in_review`，不要再补第二条“任务完成”式总结。
+- internal agent task claim 路由现在会识别“当前 conversation 已是该 task 的 bound thread”这一场景；在同一个已绑定 thread 中重复 `claim_tasks` / `claim_message` 会被拒绝，不再产生重复认领和多余 lifecycle 噪音。
+- 已绑定 task 的 thread run 一旦成功落过一条 `message_kind='final'`，同一 run 后续再发用户可见消息会被拦住，防止“完整结果 + 额外 completion summary”双发。
+- `delta_fallback` 现在会跳过“已有 final 的 bound task-thread”场景；这只影响 task-thread，普通 DM、普通 channel 和非 task thread 仍保留原有 fallback 行为。
+- agent 在 thread 里尝试直接把任务标成 `done` 时，错误提示也改成更明确地要求先用 `in_review`，除非任务确实 trivial 或已经得到明确人工批准。
+
 ## 2026-04-04 (task threads simplified to task-message roots)
 
 - task/thread 关联现在收口为单一路径：每个 task 只认自己的 task-message root thread（`message_id` 的 8 位 short id），不再支持显式 `bind / unbind` 到其他 thread。

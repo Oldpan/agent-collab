@@ -26,6 +26,7 @@ import {
   upsertTargetParticipant,
 } from './targetParticipants.js';
 import {
+  type BoundThreadTask,
   getThreadCollaborationSummary,
   syncTaskThreadOwner,
 } from './threadTaskBindings.js';
@@ -119,6 +120,14 @@ type DmTaskHandoffState = {
   taskNumber: number;
   handoffStarted: boolean;
   handoffError?: string | null;
+};
+
+type BoundTaskThreadContext = {
+  channelId: string;
+  replyTarget: string;
+  threadRootId: string;
+  rootMessageId: string | null;
+  boundTask: BoundThreadTask;
 };
 
 function parseBoundedPositiveInt(value: string | undefined, fallback: number, max: number): number {
@@ -231,6 +240,7 @@ export function registerInternalAgentRoutes(
 ): void {
   const runThreadSendOverrides = new Map<string, string>();
   const runDmTaskHandoffs = new Map<string, DmTaskHandoffState>();
+  const runBoundTaskFinalReplySent = new Set<string>();
 
   const buildDmTaskThreadTarget = (primaryTarget: string, messageId: string) => `${primaryTarget}:${buildThreadShortId(messageId)}`;
 
@@ -323,6 +333,37 @@ export function registerInternalAgentRoutes(
     runDmTaskHandoffs.set(runId, handoff);
     return { runId, handoff };
   };
+
+  const getBoundTaskThreadContext = (conversationId?: string | null): BoundTaskThreadContext | null => {
+    if (!conversationId) return null;
+    const conversation = conversationManager.getConversation(conversationId);
+    if (!conversation) return null;
+
+    const replyTarget = (resolveDefaultReplyTarget(db, conversationId, humanUserName) ?? conversation.replyTarget ?? '').trim();
+    if (!replyTarget) return null;
+    const threadRootId = resolveThreadRootId(replyTarget) ?? conversation.threadRootId ?? null;
+    if (!threadRootId) return null;
+
+    const channelId = conversation.threadKind === 'direct'
+      ? (conversation.agentId ? `dm:${conversation.agentId}` : null)
+      : (conversation.channelId ?? null);
+    if (!channelId) return null;
+
+    const summary = getThreadCollaborationSummary(db, { channelId, threadRootId });
+    if (!summary.boundTask) return null;
+
+    return {
+      channelId,
+      replyTarget,
+      threadRootId,
+      rootMessageId: findThreadRootMessageId(db, channelId, threadRootId),
+      boundTask: summary.boundTask,
+    };
+  };
+
+  const buildBoundTaskThreadReclaimError = (boundTask: BoundThreadTask): string => (
+    `This thread is already bound to #${boundTask.taskNumber} "${boundTask.title}". Do not claim it again here; continue the work in this thread and update its status when appropriate.`
+  );
 
   const getLatestConversationDispatchState = (conversationId: string): { queueId: number | null; runId: string | null } => {
     const queuedPrompt = db.prepare(
@@ -496,7 +537,10 @@ export function registerInternalAgentRoutes(
       '',
       'Rules:',
       '- This task thread is now the primary work surface for the task.',
+      '- The task already exists and is already claimed for this run. Do not call claim_tasks or claim_message again for the same task in this thread.',
       '- Put substantive progress updates, tool results, and the final answer in this thread.',
+      '- Send one substantive final result for the task. After that, update the task to in_review unless the work is trivial or a human explicitly approved done.',
+      '- Do not append a second redundant completion-summary message after the substantive final result.',
       '- Do not send any manual follow-up in the main DM after this handoff.',
       '- The platform will mirror task lifecycle status in the main DM separately.',
       '- Start working on the task now.',
@@ -747,6 +791,13 @@ export function registerInternalAgentRoutes(
       reply.code(409);
       return { error: buildDmTaskHandoffBlockedError(activeConversationHandoff.handoff) };
     }
+    const boundTaskThreadContext = getBoundTaskThreadContext(conversationId);
+    if (activeRunId && boundTaskThreadContext?.boundTask && runBoundTaskFinalReplySent.has(activeRunId)) {
+      reply.code(409);
+      return {
+        error: `This task-thread run already sent its substantive final reply for #${boundTaskThreadContext.boundTask.taskNumber}. Update the task status or stop instead of sending another user-visible message.`,
+      };
+    }
     const defaultTarget = conversationId ? resolveDefaultReplyTarget(db, conversationId, humanUserName) : null;
     const initialTarget = target?.trim() || (activeRunId ? runThreadSendOverrides.get(activeRunId) : null) || defaultTarget;
     if (!initialTarget) {
@@ -787,7 +838,6 @@ export function registerInternalAgentRoutes(
         runThreadSendOverrides.delete(activeRunId);
       }
     }
-
     const attachmentIdsJson = Array.isArray(attachmentIds) && attachmentIds.length > 0
       ? JSON.stringify(attachmentIds)
       : null;
@@ -809,6 +859,9 @@ export function registerInternalAgentRoutes(
       'agent_send',
       attachmentIdsJson,
     );
+    if (activeRunId && boundTaskThreadContext?.boundTask && kind === 'final') {
+      runBoundTaskFinalReplySent.add(activeRunId);
+    }
 
     if (!channelId.startsWith('dm:')) {
       upsertTargetParticipant(db, {
@@ -1954,6 +2007,7 @@ export function registerInternalAgentRoutes(
       reply.code(409);
       return { error: buildDmTaskHandoffBlockedError(activeConversationHandoff.handoff) };
     }
+    const boundTaskThreadContext = getBoundTaskThreadContext(currentConversation?.id);
     if (currentPrimaryDmTarget && message_ids.length > 1) {
       reply.code(400);
       return { error: 'A primary DM can only hand off one task per request' };
@@ -2003,6 +2057,14 @@ export function registerInternalAgentRoutes(
       }
       if (msg.threadRootId) {
         results.push({ messageId: msg.messageId, success: false, reason: 'Cannot promote a thread reply to task' });
+        continue;
+      }
+      if (boundTaskThreadContext && boundTaskThreadContext.rootMessageId === msg.messageId) {
+        results.push({
+          messageId: msg.messageId,
+          success: false,
+          reason: buildBoundTaskThreadReclaimError(boundTaskThreadContext.boundTask),
+        });
         continue;
       }
 
@@ -2243,6 +2305,7 @@ export function registerInternalAgentRoutes(
       reply.code(409);
       return { error: buildDmTaskHandoffBlockedError(activeConversationHandoff.handoff) };
     }
+    const boundTaskThreadContext = getBoundTaskThreadContext(currentConversation?.id);
     const requestedClaimCount = (task_numbers?.length ?? 0) + (message_ids?.length ?? 0);
     if (currentPrimaryDmTarget && requestedClaimCount > 1) {
       reply.code(400);
@@ -2324,6 +2387,22 @@ export function registerInternalAgentRoutes(
 
       if (!row) {
         results.push({ taskNumber, success: false, reason: 'Task not found' });
+        continue;
+      }
+      if (
+        boundTaskThreadContext
+        && (
+          boundTaskThreadContext.boundTask.taskId === row.taskId
+          || (boundTaskThreadContext.rootMessageId && row.messageId === boundTaskThreadContext.rootMessageId)
+        )
+      ) {
+        results.push({
+          taskNumber,
+          agentTaskRef: row.agentTaskRef ?? undefined,
+          success: false,
+          messageId: row.messageId ?? null,
+          reason: buildBoundTaskThreadReclaimError(boundTaskThreadContext.boundTask),
+        });
         continue;
       }
       if (row.claimedByAgentId && row.claimedByAgentId !== agentId) {
@@ -2419,6 +2498,14 @@ export function registerInternalAgentRoutes(
       }
       if (messageRow.threadRootId) {
         results.push({ success: false, messageId: messageRow.messageId, reason: 'Thread messages cannot become tasks' });
+        continue;
+      }
+      if (boundTaskThreadContext && boundTaskThreadContext.rootMessageId === messageRow.messageId) {
+        results.push({
+          success: false,
+          messageId: messageRow.messageId,
+          reason: buildBoundTaskThreadReclaimError(boundTaskThreadContext.boundTask),
+        });
         continue;
       }
 
@@ -2694,7 +2781,7 @@ export function registerInternalAgentRoutes(
 
     if (nextStatus === 'done') {
       reply.code(403);
-      return { error: 'Only a channel user can mark a task done' };
+      return { error: 'Only a human user can mark a task done. If your work is complete, move it to in_review first unless the user explicitly approved done.' };
     }
 
     if (row.claimedByAgentId !== agentId) {
