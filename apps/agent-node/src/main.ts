@@ -73,7 +73,9 @@ async function main(): Promise<void> {
 
       case 'workspace.list.request':
         try {
-          const result = listWorkspaceDirectory(msg.workspaceRoot, msg.relativePath);
+          const result = listWorkspaceDirectory(msg.workspaceRoot, msg.relativePath, {
+            scaffold: msg.scaffold,
+          });
           connection.send({
             type: 'workspace.list.response',
             requestId: msg.requestId,
@@ -87,7 +89,9 @@ async function main(): Promise<void> {
 
       case 'workspace.read.request':
         try {
-          const result = readWorkspaceFile(msg.workspaceRoot, msg.relativePath);
+          const result = readWorkspaceFile(msg.workspaceRoot, msg.relativePath, {
+            scaffold: msg.scaffold,
+          });
           connection.send({
             type: 'workspace.read.response',
             requestId: msg.requestId,

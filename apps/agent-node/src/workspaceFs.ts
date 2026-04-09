@@ -37,8 +37,9 @@ export class WorkspaceFsError extends Error {
 export function listWorkspaceDirectory(
   workspaceRoot: string,
   relativePath: string,
+  options?: { scaffold?: boolean },
 ): WorkspaceListResult {
-  ensureWorkspaceScaffold(workspaceRoot);
+  if (options?.scaffold !== false) ensureWorkspaceScaffold(workspaceRoot);
   const resolved = resolveRelativeWorkspacePath(workspaceRoot, relativePath);
   const stat = fs.statSync(resolved, { throwIfNoEntry: false });
   if (!stat) throw new WorkspaceFsError('not_found', 'Path not found.');
@@ -72,8 +73,9 @@ export function listWorkspaceDirectory(
 export function readWorkspaceFile(
   workspaceRoot: string,
   relativePath: string,
+  options?: { scaffold?: boolean },
 ): WorkspaceReadResult {
-  ensureWorkspaceScaffold(workspaceRoot);
+  if (options?.scaffold !== false) ensureWorkspaceScaffold(workspaceRoot);
   const resolved = resolveRelativeWorkspacePath(workspaceRoot, relativePath);
   const stat = fs.statSync(resolved, { throwIfNoEntry: false });
   if (!stat) throw new WorkspaceFsError('not_found', 'Path not found.');

@@ -12,6 +12,9 @@ import type {
   CreateAgentRequest,
   UpdateAgentRequest,
   UpdateChannelRequest,
+  ResourceSpaceInfo,
+  CreateResourceSpaceRequest,
+  UpdateResourceSpaceRequest,
   MachineInfo,
   CreateMachineRequest,
   ThreadKind,
@@ -1087,6 +1090,140 @@ export class ConversationManager {
         name: item.name,
       })),
     };
+  }
+
+  createResourceSpace(params: CreateResourceSpaceRequest): ResourceSpaceInfo {
+    const resourceSpaceId = randomUUID();
+    const now = Date.now();
+    const description = params.description?.trim() || null;
+    const channelId = params.channelId?.trim() || null;
+    const nodeId = params.nodeId?.trim() || null;
+
+    this.db.prepare(
+      `INSERT INTO resource_spaces(
+        resource_space_id,
+        name,
+        resource_type,
+        backend_type,
+        node_id,
+        root_path,
+        channel_id,
+        description,
+        created_at,
+        updated_at
+      ) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      resourceSpaceId,
+      params.name,
+      params.resourceType,
+      params.backendType,
+      nodeId,
+      params.rootPath,
+      channelId,
+      description,
+      now,
+      now,
+    );
+
+    return {
+      resourceSpaceId,
+      name: params.name,
+      resourceType: params.resourceType,
+      backendType: params.backendType,
+      nodeId,
+      rootPath: params.rootPath,
+      channelId,
+      description,
+      createdAt: now,
+      updatedAt: now,
+    };
+  }
+
+  updateResourceSpace(resourceSpaceId: string, req: UpdateResourceSpaceRequest): ResourceSpaceInfo | null {
+    const existing = this.getResourceSpace(resourceSpaceId);
+    if (!existing) return null;
+
+    const nextName = req.name ?? existing.name;
+    const nextResourceType = req.resourceType ?? existing.resourceType;
+    const nextBackendType = req.backendType ?? existing.backendType;
+    const nextNodeId = req.nodeId !== undefined ? (req.nodeId?.trim() || null) : (existing.nodeId ?? null);
+    const nextRootPath = req.rootPath ?? existing.rootPath;
+    const nextChannelId = req.channelId !== undefined ? (req.channelId?.trim() || null) : (existing.channelId ?? null);
+    const nextDescription = req.description !== undefined
+      ? (req.description?.trim() || null)
+      : (existing.description ?? null);
+    const now = Date.now();
+
+    this.db.prepare(
+      `UPDATE resource_spaces
+       SET name = ?,
+           resource_type = ?,
+           backend_type = ?,
+           node_id = ?,
+           root_path = ?,
+           channel_id = ?,
+           description = ?,
+           updated_at = ?
+       WHERE resource_space_id = ?`,
+    ).run(
+      nextName,
+      nextResourceType,
+      nextBackendType,
+      nextNodeId,
+      nextRootPath,
+      nextChannelId,
+      nextDescription,
+      now,
+      resourceSpaceId,
+    );
+
+    return {
+      resourceSpaceId,
+      name: nextName,
+      resourceType: nextResourceType,
+      backendType: nextBackendType,
+      nodeId: nextNodeId,
+      rootPath: nextRootPath,
+      channelId: nextChannelId,
+      description: nextDescription,
+      createdAt: existing.createdAt,
+      updatedAt: now,
+    };
+  }
+
+  listResourceSpaces(): ResourceSpaceInfo[] {
+    return this.db.prepare(
+      `SELECT resource_space_id as resourceSpaceId,
+              name,
+              resource_type as resourceType,
+              backend_type as backendType,
+              node_id as nodeId,
+              root_path as rootPath,
+              channel_id as channelId,
+              description,
+              created_at as createdAt,
+              updated_at as updatedAt
+       FROM resource_spaces
+       ORDER BY created_at ASC`,
+    ).all() as ResourceSpaceInfo[];
+  }
+
+  getResourceSpace(resourceSpaceId: string): ResourceSpaceInfo | null {
+    const row = this.db.prepare(
+      `SELECT resource_space_id as resourceSpaceId,
+              name,
+              resource_type as resourceType,
+              backend_type as backendType,
+              node_id as nodeId,
+              root_path as rootPath,
+              channel_id as channelId,
+              description,
+              created_at as createdAt,
+              updated_at as updatedAt
+       FROM resource_spaces
+       WHERE resource_space_id = ?`,
+    ).get(resourceSpaceId) as ResourceSpaceInfo | undefined;
+    return row ?? null;
   }
 
   async handleApproval(

@@ -604,6 +604,7 @@ export type WorkspaceListRequestMsg = {
   requestId: string;
   workspaceRoot: string;
   relativePath: string;
+  scaffold?: boolean;
 };
 
 export type WorkspaceReadRequestMsg = {
@@ -611,6 +612,7 @@ export type WorkspaceReadRequestMsg = {
   requestId: string;
   workspaceRoot: string;
   relativePath: string;
+  scaffold?: boolean;
 };
 
 export type WorkspaceWriteRequestMsg = {
@@ -692,6 +694,70 @@ export type AgentWorkspaceFileResult = {
   mimeType: 'text/markdown' | 'text/plain';
   size: number;
   modifiedAt: number | null;
+};
+
+export type ResourceSpaceBackendType = 'node_path' | 'shared_mount';
+
+export type ResourceSpaceType = 'docs' | 'experiments' | 'mixed';
+
+export type ResourceTreeEntry = AgentWorkspaceEntry;
+
+export type ResourceTreeResult = {
+  path: string;
+  entries: ResourceTreeEntry[];
+};
+
+export type ResourceFileResult = {
+  path: string;
+  content: string;
+  mimeType: 'text/markdown' | 'text/plain';
+  size: number;
+  modifiedAt: number | null;
+};
+
+export type ResourceSpaceInfo = {
+  resourceSpaceId: string;
+  name: string;
+  resourceType: ResourceSpaceType;
+  backendType: ResourceSpaceBackendType;
+  nodeId?: string | null;
+  rootPath: string;
+  channelId?: string | null;
+  description?: string | null;
+  createdAt: number;
+  updatedAt: number;
+};
+
+export type CreateResourceSpaceRequest = {
+  name: string;
+  resourceType: ResourceSpaceType;
+  backendType: ResourceSpaceBackendType;
+  nodeId?: string | null;
+  rootPath: string;
+  channelId?: string | null;
+  description?: string;
+};
+
+export type UpdateResourceSpaceRequest = {
+  name?: string;
+  resourceType?: ResourceSpaceType;
+  backendType?: ResourceSpaceBackendType;
+  nodeId?: string | null;
+  rootPath?: string;
+  channelId?: string | null;
+  description?: string | null;
+};
+
+export type AnalyzeResourceRequest = {
+  agentId: string;
+  question: string;
+  path: string;
+  selection?: string;
+};
+
+export type AnalyzeResourceResult = {
+  conversation: ConversationInfo;
+  queued: boolean;
 };
 
 export type AgentSkillListResult = {

@@ -55,6 +55,7 @@ export class AgentWorkspaceBroker {
     nodeId: string,
     workspaceRoot: string,
     relativePath: string,
+    options?: { scaffold?: boolean },
   ): Promise<AgentWorkspaceListResult> {
     const requestId = randomUUID();
     return new Promise((resolve, reject) => {
@@ -76,6 +77,7 @@ export class AgentWorkspaceBroker {
         requestId,
         workspaceRoot,
         relativePath,
+        ...(options?.scaffold === false ? { scaffold: false } : {}),
       });
 
       if (!sent) {
@@ -90,6 +92,7 @@ export class AgentWorkspaceBroker {
     nodeId: string,
     workspaceRoot: string,
     relativePath: string,
+    options?: { scaffold?: boolean },
   ): Promise<AgentWorkspaceFileResult> {
     const requestId = randomUUID();
     return new Promise((resolve, reject) => {
@@ -111,6 +114,7 @@ export class AgentWorkspaceBroker {
         requestId,
         workspaceRoot,
         relativePath,
+        ...(options?.scaffold === false ? { scaffold: false } : {}),
       });
 
       if (!sent) {

@@ -3,6 +3,7 @@ import { useConversations } from "@/hooks/useConversations";
 import { useAgents } from "@/hooks/useAgents";
 import { useMachines } from "@/hooks/useMachines";
 import { useChannels } from "@/hooks/useChannels";
+import { useResourceSpaces } from "@/hooks/useResourceSpaces";
 import { useUnreadBadges } from "@/hooks/useUnreadBadges";
 import { useAuth } from "@/hooks/useAuth";
 import { Sidebar } from "@/features/sidebar/Sidebar";
@@ -10,6 +11,7 @@ import { ChatPanel } from "@/features/chat/ChatPanel";
 import { ChannelPanel } from "@/features/channel/ChannelPanel";
 import { SessionManagerPanel } from "@/features/sessions/SessionManagerPanel";
 import { SearchPanel } from "@/features/search/SearchPanel";
+import { ResourcesPanel } from "@/features/resources/ResourcesPanel";
 import { LoginPanel } from "@/features/auth/LoginPanel";
 import { SetupPanel } from "@/features/auth/SetupPanel";
 import {
@@ -60,7 +62,9 @@ function getInviteTokenFromUrl(): string {
 export function App() {
   const isMobile = useIsMobile();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<"chat" | "sessions" | "search">("chat");
+  const [viewMode, setViewMode] = useState<"chat" | "sessions" | "search" | "resources">("chat");
+  const [lastNonResourceView, setLastNonResourceView] = useState<"chat" | "sessions" | "search">("chat");
+  const [resourcesSidebarCollapsed, setResourcesSidebarCollapsed] = useState(false);
   const { user, isAuthenticated, isLoading, hasAdmin, checkAuth, checkSetupStatus, doLogout } = useAuth();
 
   // On mount: check setup status and auth token
@@ -84,6 +88,7 @@ export function App() {
   const { agents, createAgent, updateAgent, deleteAgent, refreshAgents } = useAgents();
   const { machines, createMachine, deleteMachine } = useMachines();
   const { channels, createChannel, updateChannel: updateChannelInStore } = useChannels();
+  const { resourceSpaces, createResourceSpace } = useResourceSpaces();
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [searchFocusTarget, setSearchFocusTarget] = useState<SearchFocusTarget | null>(null);
   const [channelTaskContextAgent, setChannelTaskContextAgent] = useState<ChannelTaskContextAgent | null>(null);
@@ -106,6 +111,12 @@ export function App() {
     },
     [agents, selectedConversation?.agentId],
   );
+
+  useEffect(() => {
+    if (viewMode !== "resources") {
+      setLastNonResourceView(viewMode);
+    }
+  }, [viewMode]);
 
   useEffect(() => {
     if (!selectedId) return;
@@ -219,6 +230,20 @@ export function App() {
     setMobileSidebarOpen(false);
   }, []);
 
+  const handleOpenResources = useCallback(() => {
+    setViewMode("resources");
+    setMobileSidebarOpen(false);
+  }, []);
+
+  const handleExitResources = useCallback(() => {
+    setViewMode(lastNonResourceView);
+    setMobileSidebarOpen(false);
+  }, [lastNonResourceView]);
+
+  const handleToggleResourcesSidebar = useCallback(() => {
+    setResourcesSidebarCollapsed((current) => !current);
+  }, []);
+
   const handleOpenSessions = useCallback(() => {
     setViewMode("sessions");
   }, []);
@@ -316,6 +341,7 @@ export function App() {
     selectedView: viewMode,
     currentUser: user,
     onOpenSearch: handleOpenSearch,
+    onOpenResources: handleOpenResources,
     onOpenSessions: handleOpenSessions,
     onCreateMachine: createMachine,
     onDeleteMachine: deleteMachine,
@@ -347,6 +373,90 @@ export function App() {
     return <LoginPanel />;
   }
 
+  const mainContent = viewMode === "sessions" ? (
+    <SessionManagerPanel
+      conversations={visibleConversations}
+      agents={agents}
+      selectedId={selectedId}
+      onOpenSession={handleSelectConversation}
+      onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
+    />
+  ) : viewMode === "search" ? (
+    <SearchPanel
+      onOpenResult={handleOpenSearchResult}
+      onClose={() => setViewMode("chat")}
+      onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
+    />
+  ) : viewMode === "resources" ? (
+    <ResourcesPanel
+      resourceSpaces={resourceSpaces}
+      channels={channels}
+      agents={agents}
+      machines={machines}
+      isAdmin={user?.isAdmin ?? false}
+      onToggleSidebar={isMobile ? () => setMobileSidebarOpen(true) : handleToggleResourcesSidebar}
+      sidebarCollapsed={!isMobile ? resourcesSidebarCollapsed : undefined}
+      onExitResources={handleExitResources}
+      onCreateResourceSpace={createResourceSpace}
+      onOpenConversation={(conversation) => {
+        upsertConversation(conversation, { select: true });
+        setSelectedChannelId(null);
+        setSearchFocusTarget(null);
+        setChannelTaskContextAgent(null);
+        setViewMode("chat");
+      }}
+    />
+  ) : selectedChannel ? (
+    <ChannelPanel
+      channel={selectedChannel}
+      agents={agents}
+      isAdmin={user?.isAdmin ?? false}
+      onAgentsUpdated={refreshAgents}
+      onOpenAgentSession={handleOpenAgentChannelSession}
+      onRestartConversation={handleRestartConversation}
+      onClearConversationChat={handleClearConversationChat}
+      onSeenSeq={handleChannelSeenSeq}
+      onChannelUpdated={updateChannelInStore}
+      onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
+      focusMessageId={searchFocusTarget?.channelId === selectedChannel.channelId ? searchFocusTarget.messageId : null}
+      focusRequestId={searchFocusTarget?.channelId === selectedChannel.channelId ? searchFocusTarget.requestId : null}
+      initialThreadRootId={searchFocusTarget?.channelId === selectedChannel.channelId ? searchFocusTarget.threadRootId : null}
+      currentTaskAgentId={channelTaskContextAgent?.agentId ?? null}
+      currentTaskAgentName={channelTaskContextAgent?.name ?? null}
+    />
+  ) : selectedConversation ? (
+    <ChatPanel
+      conversation={selectedConversation}
+      agent={selectedAgent}
+      isAdmin={user?.isAdmin ?? false}
+      onSeenSeq={handleConversationSeenSeq}
+      onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
+      onUpdateAgent={handleUpdateAgent}
+      onRestartConversation={handleRestartConversation}
+      onClearConversationChat={handleClearConversationChat}
+      onResetAgent={handleResetAgent}
+      onOpenTask={(task) => {
+        if (!selectedAgent) return;
+        handleOpenAgentTask(selectedAgent, task);
+      }}
+    />
+  ) : (
+    <div className="flex h-full items-center justify-center text-muted-foreground">
+      <div className="text-center space-y-2">
+        <p className="text-lg font-medium">
+          {loading ? "Loading..." : "Select or create a conversation"}
+        </p>
+        {!loading && (
+          <p className="text-sm">
+            Create an agent in the sidebar to get started
+          </p>
+        )}
+      </div>
+    </div>
+  );
+
+  const showDesktopSidebar = !isMobile && !(viewMode === "resources" && resourcesSidebarCollapsed);
+
   return (
     <div className="flex h-full bg-[#e8dcc8] text-foreground">
       {/* Mobile: backdrop */}
@@ -369,88 +479,26 @@ export function App() {
         </div>
       )}
 
-      <ResizablePanelGroup direction="horizontal" className="h-full">
-        {/* Desktop sidebar */}
-        {!isMobile && (
-          <>
-            <ResizablePanel
-              defaultSize={25}
-              minSize={14}
-              maxSize={20}
-              className="bg-[#ffe135] text-zinc-950 shadow-[4px_0_0_0_rgba(0,0,0,0.3)]"
-            >
-              <Sidebar {...sidebarProps} />
-            </ResizablePanel>
-            <ResizableHandle />
-          </>
-        )}
-
-        {/* Chat area */}
-        <ResizablePanel defaultSize={isMobile ? 100 : 75} minSize={50}>
-          {viewMode === "sessions" ? (
-            <SessionManagerPanel
-              conversations={visibleConversations}
-              agents={agents}
-              selectedId={selectedId}
-              onOpenSession={handleSelectConversation}
-              onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
-            />
-          ) : viewMode === "search" ? (
-            <SearchPanel
-              onOpenResult={handleOpenSearchResult}
-              onClose={() => setViewMode("chat")}
-              onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
-            />
-          ) : selectedChannel ? (
-            <ChannelPanel
-              channel={selectedChannel}
-              agents={agents}
-              isAdmin={user?.isAdmin ?? false}
-              onAgentsUpdated={refreshAgents}
-              onOpenAgentSession={handleOpenAgentChannelSession}
-              onRestartConversation={handleRestartConversation}
-              onClearConversationChat={handleClearConversationChat}
-              onSeenSeq={handleChannelSeenSeq}
-              onChannelUpdated={updateChannelInStore}
-              onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
-              focusMessageId={searchFocusTarget?.channelId === selectedChannel.channelId ? searchFocusTarget.messageId : null}
-              focusRequestId={searchFocusTarget?.channelId === selectedChannel.channelId ? searchFocusTarget.requestId : null}
-              initialThreadRootId={searchFocusTarget?.channelId === selectedChannel.channelId ? searchFocusTarget.threadRootId : null}
-              currentTaskAgentId={channelTaskContextAgent?.agentId ?? null}
-              currentTaskAgentName={channelTaskContextAgent?.name ?? null}
-            />
-          ) : selectedConversation ? (
-            <ChatPanel
-              conversation={selectedConversation}
-              agent={selectedAgent}
-              isAdmin={user?.isAdmin ?? false}
-              onSeenSeq={handleConversationSeenSeq}
-              onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
-              onUpdateAgent={handleUpdateAgent}
-              onRestartConversation={handleRestartConversation}
-              onClearConversationChat={handleClearConversationChat}
-              onResetAgent={handleResetAgent}
-              onOpenTask={(task) => {
-                if (!selectedAgent) return;
-                handleOpenAgentTask(selectedAgent, task);
-              }}
-            />
-          ) : (
-            <div className="flex h-full items-center justify-center text-muted-foreground">
-              <div className="text-center space-y-2">
-                <p className="text-lg font-medium">
-                  {loading ? "Loading..." : "Select or create a conversation"}
-                </p>
-                {!loading && (
-                  <p className="text-sm">
-                    Create an agent in the sidebar to get started
-                  </p>
-                )}
-              </div>
-            </div>
-          )}
-        </ResizablePanel>
-      </ResizablePanelGroup>
+      {showDesktopSidebar ? (
+        <ResizablePanelGroup direction="horizontal" className="h-full">
+          <ResizablePanel
+            defaultSize={25}
+            minSize={14}
+            maxSize={20}
+            className="bg-[#ffe135] text-zinc-950 shadow-[4px_0_0_0_rgba(0,0,0,0.3)]"
+          >
+            <Sidebar {...sidebarProps} />
+          </ResizablePanel>
+          <ResizableHandle />
+          <ResizablePanel defaultSize={75} minSize={50}>
+            {mainContent}
+          </ResizablePanel>
+        </ResizablePanelGroup>
+      ) : (
+        <div className="min-w-0 flex-1">
+          {mainContent}
+        </div>
+      )}
     </div>
   );
 }

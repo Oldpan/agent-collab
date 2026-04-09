@@ -13,6 +13,12 @@ import type {
   AgentWorkspaceFileResult,
   AgentSkillListResult,
   AgentSkillFileResult,
+  ResourceSpaceInfo,
+  CreateResourceSpaceRequest,
+  UpdateResourceSpaceRequest,
+  ResourceTreeResult,
+  ResourceFileResult,
+  AnalyzeResourceResult,
 } from "@agent-collab/protocol";
 
 const API_BASE = "/api";
@@ -199,6 +205,95 @@ export async function listChannels(): Promise<ChannelInfo[]> {
     headers: withAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to list channels: ${res.statusText}`);
+  return res.json();
+}
+
+export async function listResourceSpaces(): Promise<ResourceSpaceInfo[]> {
+  const res = await fetch(`${API_BASE}/resource-spaces`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to list resource spaces: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function createResourceSpace(req: CreateResourceSpaceRequest): Promise<ResourceSpaceInfo> {
+  const res = await fetch(`${API_BASE}/resource-spaces`, {
+    method: "POST",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to create resource space: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function updateResourceSpace(
+  resourceSpaceId: string,
+  req: UpdateResourceSpaceRequest,
+): Promise<ResourceSpaceInfo> {
+  const res = await fetch(`${API_BASE}/resource-spaces/${encodeURIComponent(resourceSpaceId)}`, {
+    method: "PATCH",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to update resource space: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function listResourceTree(
+  resourceSpaceId: string,
+  resourcePath = "",
+): Promise<ResourceTreeResult> {
+  const params = new URLSearchParams();
+  if (resourcePath) params.set("path", resourcePath);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const res = await fetch(`${API_BASE}/resource-spaces/${encodeURIComponent(resourceSpaceId)}/tree${suffix}`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to list resource tree: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function readResourceFile(
+  resourceSpaceId: string,
+  resourcePath: string,
+): Promise<ResourceFileResult> {
+  const params = new URLSearchParams();
+  params.set("path", resourcePath);
+  const res = await fetch(`${API_BASE}/resource-spaces/${encodeURIComponent(resourceSpaceId)}/file?${params.toString()}`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to read resource file: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function analyzeResource(
+  resourceSpaceId: string,
+  req: { agentId: string; question: string; path: string; selection?: string },
+): Promise<AnalyzeResourceResult> {
+  const res = await fetch(`${API_BASE}/resource-spaces/${encodeURIComponent(resourceSpaceId)}/analyze`, {
+    method: "POST",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to analyze resource: ${res.statusText}`);
+  }
   return res.json();
 }
 

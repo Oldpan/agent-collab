@@ -4,7 +4,7 @@ import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CreateDialog } from "@/components/ui/create-dialog";
 import { cn } from "@/lib/utils";
 import {
-  PlusIcon, TrashIcon, ChevronRightIcon, ChevronDownIcon, Rows3Icon, HashIcon, LogOutIcon, LinkIcon, SettingsIcon, UserIcon, ShieldIcon, SearchIcon,
+  PlusIcon, TrashIcon, ChevronRightIcon, ChevronDownIcon, Rows3Icon, HashIcon, LogOutIcon, LinkIcon, SettingsIcon, UserIcon, ShieldIcon, SearchIcon, FolderSearchIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type {
@@ -51,9 +51,10 @@ type SidebarProps = {
   channelUnreadCounts: Record<string, number>;
   selectedId: string | null;
   selectedChannelId: string | null;
-  selectedView: "chat" | "sessions" | "search";
+  selectedView: "chat" | "sessions" | "search" | "resources";
   currentUser?: User | null;
   onOpenSessions: () => void;
+  onOpenResources: () => void;
   onCreateMachine: (req: CreateMachineRequest) => Promise<MachineInfo>;
   onDeleteMachine: (id: string) => void;
   onCreateAgent: (req: CreateAgentRequest) => void;
@@ -130,6 +131,7 @@ export function Sidebar({
   currentUser,
   onCreateMachine, onDeleteMachine,
   onOpenSearch,
+  onOpenResources,
   onOpenSessions,
   onCreateAgent, onDeleteAgent,
   onOpenAgentThread,
@@ -253,6 +255,20 @@ export function Sidebar({
           Machines &amp; Agents
         </h1>
         <div className="flex items-center gap-1">
+          <Button
+            size="icon-xs"
+            variant="outline"
+            className={cn(
+              "rounded-sm border-2 border-zinc-900 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+              selectedView === "resources"
+                ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]"
+                : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
+            )}
+            title="Open resources"
+            onClick={onOpenResources}
+          >
+            <FolderSearchIcon className="size-3" />
+          </Button>
           <Button
             size="icon-xs"
             variant="outline"

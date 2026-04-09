@@ -11,7 +11,18 @@ import fastifyMultipart from '@fastify/multipart';
 
 import type { Db } from '@agent-collab/runtime-acp';
 import { log, finishRun } from '@agent-collab/runtime-acp';
-import { buildThreadShortId, type CreateConversationRequest, type CreateChannelRequest, type UpdateChannelRequest, type CreateAgentRequest, type UpdateAgentRequest, type CreateMachineRequest } from '@agent-collab/protocol';
+import {
+  buildThreadShortId,
+  type CreateConversationRequest,
+  type CreateChannelRequest,
+  type UpdateChannelRequest,
+  type CreateAgentRequest,
+  type UpdateAgentRequest,
+  type CreateMachineRequest,
+  type CreateResourceSpaceRequest,
+  type UpdateResourceSpaceRequest,
+  type AnalyzeResourceRequest,
+} from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
 import { handleWebSocket, broadcast } from './wsHandler.js';
 import { handleNodeWebSocket } from './nodeWsHandler.js';
@@ -21,6 +32,7 @@ import { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/agentWorkspaceService.js';
 import { AgentSkillsBroker } from '../services/agentSkillsBroker.js';
 import { AgentSkillsService, AgentSkillsServiceError } from '../services/agentSkillsService.js';
+import { ResourceSpaceService, ResourceSpaceServiceError } from '../services/resourceSpaceService.js';
 import { CodexTranscriptBroker } from '../services/codexTranscriptBroker.js';
 import { CodexTranscriptService } from '../services/codexTranscriptService.js';
 import { ClaudeTranscriptBroker } from '../services/claudeTranscriptBroker.js';
@@ -69,7 +81,7 @@ import {
   setUserAccess,
 } from '../services/auth.js';
 
-export async function startServer(params: {
+type ServerParams = {
   port: number;
   host: string;
   conversationManager: ConversationManager;
@@ -77,7 +89,9 @@ export async function startServer(params: {
   nodeRegistry?: NodeRegistry;
   workspaceBroker?: AgentWorkspaceBroker;
   skillsBroker?: AgentSkillsBroker;
-}): Promise<FastifyInstance> {
+};
+
+export async function buildServerApp(params: ServerParams): Promise<FastifyInstance> {
   const { port, host, conversationManager, db } = params;
   const config = conversationManager.getConfig();
   // Attachment storage: sibling directory next to the DB file
@@ -91,6 +105,11 @@ export async function startServer(params: {
   const workspaceService = new AgentWorkspaceService({
     getAgentById: (agentId) => conversationManager.getAgent(agentId),
     broker: workspaceBroker,
+  });
+  const resourceSpaceService = new ResourceSpaceService({
+    getResourceSpaceById: (resourceSpaceId) => conversationManager.getResourceSpace(resourceSpaceId),
+    broker: workspaceBroker,
+    nodeRegistry,
   });
   const skillsService = new AgentSkillsService({
     getAgentById: (agentId) => conversationManager.getAgent(agentId),
@@ -212,6 +231,27 @@ export async function startServer(params: {
     const user = requireUser(req, reply);
     if (!user) return null;
     if (!hasChannelAccess(user, channelId)) {
+      reply.code(403);
+      return null;
+    }
+    return user;
+  };
+
+  const hasResourceSpaceAccess = (user: User, resourceSpaceId: string): boolean => {
+    if (user.isAdmin) return true;
+    const resourceSpace = conversationManager.getResourceSpace(resourceSpaceId);
+    if (!resourceSpace?.channelId) return false;
+    return hasChannelAccess(user, resourceSpace.channelId);
+  };
+
+  const requireResourceSpaceAccess = (
+    req: { headers: Record<string, unknown> },
+    reply: { code: (statusCode: number) => unknown },
+    resourceSpaceId: string,
+  ): User | null => {
+    const user = requireUser(req, reply);
+    if (!user) return null;
+    if (!hasResourceSpaceAccess(user, resourceSpaceId)) {
       reply.code(403);
       return null;
     }
@@ -1778,6 +1818,228 @@ export async function startServer(params: {
       ),
     };
   });
+
+  // ─── Resource Space routes ───
+
+  app.get('/api/resource-spaces', async (req, reply) => {
+    const user = requireUser(req, reply);
+    if (!user) return { error: 'Unauthorized' };
+    const resourceSpaces = conversationManager.listResourceSpaces();
+    if (user.isAdmin) return resourceSpaces;
+    const allowedChannelIds = new Set(getUserChannelAccess(db, user.id));
+    return resourceSpaces.filter((resourceSpace) =>
+      resourceSpace.channelId != null && allowedChannelIds.has(resourceSpace.channelId),
+    );
+  });
+
+  app.post<{ Body: CreateResourceSpaceRequest }>('/api/resource-spaces', async (req, reply) => {
+    if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
+    const body = (req.body ?? {}) as CreateResourceSpaceRequest;
+    const name = body.name?.trim();
+    const rootPath = body.rootPath?.trim();
+    if (!name || !rootPath || !body.backendType || !body.resourceType) {
+      reply.code(400);
+      return { error: 'name, resourceType, backendType, and rootPath are required' };
+    }
+    if (!path.isAbsolute(rootPath)) {
+      reply.code(400);
+      return { error: 'rootPath must be an absolute path' };
+    }
+    if (body.backendType === 'node_path' && !body.nodeId?.trim()) {
+      reply.code(400);
+      return { error: 'nodeId is required when backendType is node_path' };
+    }
+    if (body.channelId && !conversationManager.getChannel(body.channelId)) {
+      reply.code(404);
+      return { error: 'Related channel not found' };
+    }
+
+    try {
+      const resourceSpace = conversationManager.createResourceSpace({
+        name,
+        resourceType: body.resourceType,
+        backendType: body.backendType,
+        nodeId: body.nodeId ?? null,
+        rootPath,
+        channelId: body.channelId ?? null,
+        description: body.description,
+      });
+      reply.code(201);
+      return resourceSpace;
+    } catch {
+      reply.code(409);
+      return { error: 'Resource space name already exists' };
+    }
+  });
+
+  app.patch<{ Params: { id: string }; Body: UpdateResourceSpaceRequest }>(
+    '/api/resource-spaces/:id',
+    async (req, reply) => {
+      if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
+      const body = (req.body ?? {}) as UpdateResourceSpaceRequest;
+      const existing = conversationManager.getResourceSpace(req.params.id);
+      if (!existing) {
+        reply.code(404);
+        return { error: 'Resource space not found' };
+      }
+      if (body.name != null && !body.name.trim()) {
+        reply.code(400);
+        return { error: 'name cannot be empty' };
+      }
+      if (body.rootPath != null && !body.rootPath.trim()) {
+        reply.code(400);
+        return { error: 'rootPath cannot be empty' };
+      }
+      if (body.rootPath != null && !path.isAbsolute(body.rootPath.trim())) {
+        reply.code(400);
+        return { error: 'rootPath must be an absolute path' };
+      }
+      const effectiveBackendType = body.backendType ?? existing.backendType;
+      const effectiveNodeId = body.nodeId !== undefined ? body.nodeId : (existing.nodeId ?? null);
+      if (effectiveBackendType === 'node_path' && !effectiveNodeId?.trim()) {
+        reply.code(400);
+        return { error: 'nodeId is required when backendType is node_path' };
+      }
+      if (body.channelId && !conversationManager.getChannel(body.channelId)) {
+        reply.code(404);
+        return { error: 'Related channel not found' };
+      }
+      try {
+        const updated = conversationManager.updateResourceSpace(req.params.id, {
+          ...body,
+          ...(body.name != null ? { name: body.name.trim() } : {}),
+          ...(body.rootPath != null ? { rootPath: body.rootPath.trim() } : {}),
+        });
+        return updated;
+      } catch {
+        reply.code(409);
+        return { error: 'Resource space name already exists' };
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
+    '/api/resource-spaces/:id/tree',
+    async (req, reply) => {
+      const resourceSpace = conversationManager.getResourceSpace(req.params.id);
+      if (!resourceSpace) {
+        reply.code(404);
+        return { error: 'Resource space not found' };
+      }
+      const user = requireResourceSpaceAccess(req, reply, req.params.id);
+      if (!user) return { error: 'Access denied' };
+      try {
+        return await resourceSpaceService.listTree(req.params.id, normalizeWorkspaceQueryPath(req.query.path));
+      } catch (error) {
+        if (error instanceof ResourceSpaceServiceError) {
+          reply.code(error.statusCode);
+          return { error: error.message };
+        }
+        reply.code(500);
+        return { error: String((error as Error)?.message ?? error) };
+      }
+    },
+  );
+
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
+    '/api/resource-spaces/:id/file',
+    async (req, reply) => {
+      const resourceSpace = conversationManager.getResourceSpace(req.params.id);
+      if (!resourceSpace) {
+        reply.code(404);
+        return { error: 'Resource space not found' };
+      }
+      const user = requireResourceSpaceAccess(req, reply, req.params.id);
+      if (!user) return { error: 'Access denied' };
+      try {
+        return await resourceSpaceService.readFile(req.params.id, normalizeRequiredResourcePath(req.query.path));
+      } catch (error) {
+        if (error instanceof ResourceSpaceServiceError) {
+          reply.code(error.statusCode);
+          return { error: error.message };
+        }
+        reply.code(500);
+        return { error: String((error as Error)?.message ?? error) };
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: AnalyzeResourceRequest }>(
+    '/api/resource-spaces/:id/analyze',
+    async (req, reply) => {
+      const resourceSpace = conversationManager.getResourceSpace(req.params.id);
+      if (!resourceSpace) {
+        reply.code(404);
+        return { error: 'Resource space not found' };
+      }
+      const user = requireResourceSpaceAccess(req, reply, req.params.id);
+      if (!user) return { error: 'Access denied' };
+
+      const agentId = req.body?.agentId?.trim();
+      const question = req.body?.question?.trim();
+      if (!agentId || !question) {
+        reply.code(400);
+        return { error: 'agentId and question are required' };
+      }
+      if (!hasAgentAccess(user, agentId)) {
+        reply.code(403);
+        return { error: 'Access denied' };
+      }
+
+      const agent = conversationManager.getAgent(agentId);
+      if (!agent) {
+        reply.code(404);
+        return { error: 'Agent not found' };
+      }
+
+      let file;
+      try {
+        file = await resourceSpaceService.readFile(req.params.id, normalizeRequiredResourcePath(req.body?.path));
+      } catch (error) {
+        if (error instanceof ResourceSpaceServiceError) {
+          reply.code(error.statusCode);
+          return { error: error.message };
+        }
+        reply.code(500);
+        return { error: String((error as Error)?.message ?? error) };
+      }
+
+      const conversation = conversationManager.openAgentThread(agentId, user.id);
+      if (!conversation) {
+        reply.code(404);
+        return { error: 'Conversation not found' };
+      }
+      if (!conversation.nodeId) {
+        reply.code(409);
+        return { error: 'No agent node assigned. Connect an agent-node first.' };
+      }
+
+      const promptText = buildResourceAnalysisPrompt({
+        resourceSpaceName: resourceSpace.name,
+        resourceType: resourceSpace.resourceType,
+        filePath: file.path,
+        fileContent: file.content,
+        question,
+        selection: req.body?.selection?.trim() || null,
+        relatedChannelName: resourceSpace.channelId
+          ? (conversationManager.getChannel(resourceSpace.channelId)?.name ?? null)
+          : null,
+      });
+
+      try {
+        const result = await conversationManager.submitPrompt(conversation.id, promptText, {
+          senderName: user.username,
+        });
+        return {
+          conversation,
+          queued: result.queued,
+        };
+      } catch (error) {
+        reply.code(500);
+        return { error: String((error as Error)?.message ?? error) };
+      }
+    },
+  );
 
   // ─── Channel routes ───
 
@@ -3451,14 +3713,59 @@ export async function startServer(params: {
     });
   }
 
-  await app.listen({ port, host });
-  log.info(`Web server listening on ${host}:${port}`);
+  return app;
+}
+
+export async function startServer(params: ServerParams): Promise<FastifyInstance> {
+  const app = await buildServerApp(params);
+  await app.listen({ port: params.port, host: params.host });
+  log.info(`Web server listening on ${params.host}:${params.port}`);
   return app;
 }
 
 function normalizeWorkspaceQueryPath(rawPath?: string): string {
   if (!rawPath) return '';
   return rawPath.replace(/^\/+/, '');
+}
+
+function normalizeRequiredResourcePath(rawPath?: string): string {
+  const trimmed = normalizeWorkspaceQueryPath(rawPath);
+  if (!trimmed) throw new ResourceSpaceServiceError(400, 'path is required');
+  return trimmed;
+}
+
+function buildResourceAnalysisPrompt(params: {
+  resourceSpaceName: string;
+  resourceType: 'docs' | 'experiments' | 'mixed';
+  filePath: string;
+  fileContent: string;
+  question: string;
+  selection: string | null;
+  relatedChannelName: string | null;
+}): string {
+  return [
+    `Please analyze a shared resource file from "${params.resourceSpaceName}".`,
+    `Resource type: ${params.resourceType}.`,
+    `File path: ${params.filePath}.`,
+    ...(params.relatedChannelName ? [`Related channel: #${params.relatedChannelName}.`] : []),
+    '',
+    'User question:',
+    params.question,
+    ...(params.selection
+      ? [
+          '',
+          'User-selected excerpt:',
+          params.selection,
+        ]
+      : []),
+    '',
+    'Current file content:',
+    '```',
+    params.fileContent,
+    '```',
+    '',
+    'Use this file as the primary context. If you need follow-up work, explain your findings and reference the file path explicitly.',
+  ].join('\n');
 }
 
 function normalizeSkillQueryPath(rawPath?: string): string | null {

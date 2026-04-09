@@ -54,6 +54,19 @@ describe('workspaceFs', () => {
     expect(() => listWorkspaceDirectory(root, '../')).toThrowError(WorkspaceFsError);
     expect(() => readWorkspaceFile(root, '../secret.txt')).toThrow('Path escapes workspace root.');
   });
+
+  it('scaffold=false 时不应自动创建 MEMORY.md 或 notes', () => {
+    const root = createWorkspace();
+    fs.rmSync(path.join(root, 'MEMORY.md'), { force: true });
+    fs.rmSync(path.join(root, 'notes'), { recursive: true, force: true });
+    fs.writeFileSync(path.join(root, 'README.md'), '# Docs\n', 'utf8');
+
+    const result = listWorkspaceDirectory(root, '', { scaffold: false });
+
+    expect(result.entries.map((entry) => entry.name)).toEqual(['README.md']);
+    expect(fs.existsSync(path.join(root, 'MEMORY.md'))).toBe(false);
+    expect(fs.existsSync(path.join(root, 'notes'))).toBe(false);
+  });
 });
 
 function createWorkspace(): string {

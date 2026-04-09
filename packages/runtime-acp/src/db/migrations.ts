@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 56;
+const LATEST_VERSION = 57;
 
 function buildAgentTaskRefCandidate(taskId: string, length: number): string {
   const normalized = taskId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
@@ -1224,8 +1224,59 @@ export function migrate(db: Db): void {
         last_linked_at = MAX(agent_task_links.last_linked_at, excluded.last_linked_at);
     `);
 
-    if (latestVersionRow.version < 56) {
+  if (latestVersionRow.version < 56) {
       db.exec(`UPDATE schema_version SET version = 56;`);
+    }
+  }
+
+  const resourceSpacesTableExists = !!db.prepare(
+    `SELECT 1
+     FROM sqlite_master
+     WHERE type = 'table' AND name = 'resource_spaces'
+     LIMIT 1`,
+  ).get();
+  const resourceSpacesNameIndexExists = !!db.prepare(
+    `SELECT 1
+     FROM sqlite_master
+     WHERE type = 'index' AND name = 'idx_resource_spaces_name_unique'
+     LIMIT 1`,
+  ).get();
+  const resourceSpacesChannelIndexExists = !!db.prepare(
+    `SELECT 1
+     FROM sqlite_master
+     WHERE type = 'index' AND name = 'idx_resource_spaces_channel'
+     LIMIT 1`,
+  ).get();
+  const finalVersionRow = db.prepare('SELECT version FROM schema_version').get() as { version: number };
+  if (
+    finalVersionRow.version < 57
+    || !resourceSpacesTableExists
+    || !resourceSpacesNameIndexExists
+    || !resourceSpacesChannelIndexExists
+  ) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS resource_spaces (
+        resource_space_id TEXT PRIMARY KEY,
+        name              TEXT NOT NULL,
+        resource_type     TEXT NOT NULL,
+        backend_type      TEXT NOT NULL,
+        node_id           TEXT,
+        root_path         TEXT NOT NULL,
+        channel_id        TEXT REFERENCES channels(channel_id) ON DELETE SET NULL,
+        description       TEXT,
+        created_at        INTEGER NOT NULL,
+        updated_at        INTEGER NOT NULL
+      );
+
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_resource_spaces_name_unique
+      ON resource_spaces(name);
+
+      CREATE INDEX IF NOT EXISTS idx_resource_spaces_channel
+      ON resource_spaces(channel_id, updated_at DESC);
+    `);
+
+    if (finalVersionRow.version < 57) {
+      db.exec(`UPDATE schema_version SET version = 57;`);
     }
   }
 }

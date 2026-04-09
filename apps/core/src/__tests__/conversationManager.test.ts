@@ -1149,4 +1149,48 @@ describe('ConversationManager', () => {
       expect(row.reasoningEffort).toBe('xhigh');
     });
   });
+
+  describe('resource spaces', () => {
+    it('应创建并列出 resource space', () => {
+      const channel = manager.createChannel({ name: 'resource-home' });
+
+      const resourceSpace = manager.createResourceSpace({
+        name: 'shared-docs',
+        resourceType: 'docs',
+        backendType: 'shared_mount',
+        rootPath: '/shared/docs',
+        channelId: channel.channelId,
+        description: 'Shared documentation',
+      });
+
+      expect(resourceSpace.resourceSpaceId).toBeTruthy();
+      expect(resourceSpace.name).toBe('shared-docs');
+      expect(resourceSpace.channelId).toBe(channel.channelId);
+      expect(manager.listResourceSpaces().map((item) => item.resourceSpaceId)).toContain(resourceSpace.resourceSpaceId);
+      expect(manager.getResourceSpace(resourceSpace.resourceSpaceId)?.rootPath).toBe('/shared/docs');
+    });
+
+    it('应更新 resource space', () => {
+      const resourceSpace = manager.createResourceSpace({
+        name: 'exp-space',
+        resourceType: 'experiments',
+        backendType: 'node_path',
+        nodeId: 'node-1',
+        rootPath: '/tmp/experiments',
+      });
+
+      const updated = manager.updateResourceSpace(resourceSpace.resourceSpaceId, {
+        backendType: 'shared_mount',
+        nodeId: null,
+        rootPath: '/shared/experiments',
+        description: 'Experiment outputs',
+      });
+
+      expect(updated).not.toBeNull();
+      expect(updated?.backendType).toBe('shared_mount');
+      expect(updated?.nodeId).toBeNull();
+      expect(updated?.rootPath).toBe('/shared/experiments');
+      expect(manager.getResourceSpace(resourceSpace.resourceSpaceId)?.description).toBe('Experiment outputs');
+    });
+  });
 });
