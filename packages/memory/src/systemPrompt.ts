@@ -33,7 +33,8 @@ export function buildAgentSystemPrompt(
     `- Always communicate through ${tool('send_message')}. This is your only user-visible output channel.`,
     `- Do NOT output user-visible text directly.`,
     `- Use only the provided MCP tools for messaging. They are already available.`,
-    `- If a message requires real work beyond replying, claim it via ${tool('claim_tasks')} before starting.`,
+    `- In a primary DM, ordinary conversation must be answered directly. Do not create or claim a task for greetings, pleasantries, clarifications, or single-turn Q&A.`,
+    `- If a request clearly requires trackable work beyond replying, claim it via ${tool('claim_tasks')} before starting.`,
     `- Complete all required work before stopping.`,
     ...(opts.extraCriticalRules ?? []),
   ];
@@ -147,11 +148,13 @@ When a direct message, channel mention, or thread reply triggers this run, the t
 Status flow: \`todo\` → \`in_progress\` → \`in_review\` → \`done\`.
 
 Rules:
-- If you are only answering a question, clarifying, or having a short conversation, do **not** claim a task.
+- Primary DM default: reply directly.
+- Only create or claim a task in a primary DM if the user explicitly wants task tracking, or the request is clearly multi-step executable work.
+- If unsure, do not create a task. Reply directly or ask briefly whether the user wants it tracked as a task.
 - If fulfilling a message requires action beyond replying — running tools, writing code, investigating, changing files or config, doing multi-step follow-up, or handing work off — claim it first.
 - If a message already shows \`[task #N ...]\`, claim it with \`${tool('claim_tasks')}(channel="...", task_numbers=[N])\`.
 - If a regular top-level channel or DM message needs work, claim it with \`${tool('claim_tasks')}(channel="...", message_ids=["msgid"], description="goal and done criteria")\`.
-- In a primary DM, when the current user request needs to become a task, prefer \`${tool('claim_tasks')}(channel="dm:@User", message_ids=["current"], description="goal and done criteria")\` instead of manually guessing an older msg id.
+- When the current primary-DM request should become a task, prefer \`${tool('claim_tasks')}(channel="dm:@User", message_ids=["current"], description="goal and done criteria")\` instead of manually guessing an older msg id.
 - Thread messages are discussion context only. Do not convert a thread message into a task; claim from the corresponding top-level message instead.
 - \`${tool('claim_message')}\` is a compatibility alias. Prefer \`${tool('claim_tasks')}\` as the primary task-claiming tool.
 - Use \`${tool('create_tasks')}\` only when you need a genuinely new task-message or subtask that does not already exist.
@@ -160,7 +163,6 @@ Rules:
 - Use \`${tool('list_my_tasks')}()\` when you need to rediscover tasks you created or have been assigned to across DMs/channels, or review their latest status in bulk.
 - If a user asks whether an existing task is done, in review, still running, or otherwise asks for its current status, do not answer from memory alone. Look up the current state with \`${tool('get_task_status')}(task_ref="...")\` or \`${tool('list_my_tasks')}()\` first, then answer from the live task state.
 - Check for existing relevant work before creating a new task-message.
-- Claim a task before starting work. If the claim fails, do not work on it.
 - Do the work in the task-message's thread whenever possible.
 - If the current conversation is already a bound task thread for the task, do not claim it again inside that thread.
 - In a primary DM, after claiming or creating a task, do not send any manual follow-up in the main DM. The platform will hand the task off to its task thread automatically and mirror task lifecycle status in the main DM separately.

@@ -62,7 +62,7 @@ export function PromptComposer({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === "Enter" && e.shiftKey) {
         e.preventDefault();
         handleSubmit();
       }
@@ -142,7 +142,7 @@ export function PromptComposer({
           )}
           placeholder={
             ready
-              ? "Send a message... (Shift+Enter for newline)"
+              ? "Send a message... (Enter for newline, Shift+Enter to send)"
               : "Connection is reconnecting... You can still type."
           }
           disabled={shouldDisableInput}

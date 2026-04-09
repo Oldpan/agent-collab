@@ -1034,6 +1034,96 @@ describe('nodeWsHandler', () => {
     expect(dispatches).toHaveLength(0);
   });
 
+  it('channel delta_fallback 即使包含 @agent 也不应触发新的协作唤醒', () => {
+    const sender = manager.createAgent({
+      name: 'FallbackSender',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/channel-fallback-sender',
+      channelId: 'default',
+    });
+    const helper = manager.createAgent({
+      name: 'FallbackHelper',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/channel-fallback-helper',
+      channelId: 'default',
+    });
+    const conv = manager.openAgentChannelThread(sender.agentId, 'default', null);
+    const helperConv = manager.openAgentChannelThread(helper.agentId, 'default', null);
+    if (!conv || !helperConv) throw new Error('missing channel conversations');
+
+    const socket = new FakeSocket();
+    const events: any[] = [];
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(socket as any, registry as any, (_conversationId, event) => {
+      events.push(event);
+    }, db, manager);
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-channel-fallback-mention',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'give the channel a direct answer',
+    });
+    db.prepare(
+      `INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES(?, ?, 'node/event', ?, ?)`,
+    ).run(
+      'run-channel-fallback-mention',
+      1,
+      JSON.stringify({
+        type: 'content.delta',
+        text: '@FallbackHelper 请顺手看一下这条频道回复。',
+      }),
+      1000,
+    );
+
+    socket.emit('message', JSON.stringify({
+      type: 'run.end',
+      runId: 'run-channel-fallback-mention',
+      conversationId: conv.id,
+      stopReason: 'end_turn',
+    }));
+
+    const fallbackRow = db.prepare(
+      `SELECT content, message_source as messageSource
+       FROM channel_messages
+       WHERE run_id = ? AND message_source = 'delta_fallback'
+       ORDER BY created_at DESC, seq DESC
+       LIMIT 1`,
+    ).get('run-channel-fallback-mention') as {
+      content: string;
+      messageSource: string | null;
+    } | undefined;
+    expect(fallbackRow).toMatchObject({
+      content: '@FallbackHelper 请顺手看一下这条频道回复。',
+      messageSource: 'delta_fallback',
+    });
+
+    const helperRunCount = db.prepare(
+      `SELECT COUNT(*) as count
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.id = ?`,
+    ).get(helperConv.id) as { count: number };
+    const helperQueueCount = db.prepare(
+      `SELECT COUNT(*) as count
+       FROM conversation_prompt_queue
+       WHERE conversation_id = ?`,
+    ).get(helperConv.id) as { count: number };
+    expect(helperRunCount.count).toBe(0);
+    expect(helperQueueCount.count).toBe(0);
+    expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
+    expect(dispatches).toHaveLength(0);
+  });
+
   it('run.event 中的 recovering 状态应更新会话状态', () => {
     const conv = manager.createConversation({ title: 'Recovering Test', nodeId: 'node-1' });
     const socket = new FakeSocket();

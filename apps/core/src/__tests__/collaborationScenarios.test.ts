@@ -1,51 +1,49 @@
 import { randomUUID } from 'node:crypto';
-import Fastify from 'fastify';
-import { afterEach, describe, expect, it } from 'vitest';
-import type { CoreToNode } from '@agent-collab/protocol';
-import type { Db } from '@agent-collab/runtime-acp';
-import { createRun, finishRun } from '@agent-collab/runtime-acp';
-import { createTestConfig, createTestDb } from './helpers.js';
-import { ConversationManager } from '../web/conversationManager.js';
-import { registerInternalAgentRoutes } from '../web/internalAgentRouter.js';
-import { AgentSkillsService } from '../services/agentSkillsService.js';
-import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
-import { buildChannelActivationContextText, buildChannelActivationPrompt } from '../web/channelActivationPrompt.js';
-import { buildTargetActivationContext } from '../web/activationContext.js';
-import { findMentionedAgents } from '../web/channelMentions.js';
-import { bumpAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
-import { listChannelSubscriptions } from '../web/channelSubscriptions.js';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { finishRun } from '@agent-collab/runtime-acp';
+import { TARGET_PARTICIPANT_ACTIVE_WINDOW_MS, upsertTargetParticipant } from '../web/targetParticipants.js';
+import { syncTaskThreadOwner } from '../web/threadTaskBindings.js';
+import type { CollaborationHarness } from './collaborationTestUtils.js';
 import {
-  listRecentTargetParticipants,
-  TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
-  upsertTargetParticipant,
-} from '../web/targetParticipants.js';
-import {
-  getThreadCollaborationSummary,
-  syncTaskThreadOwner,
-} from '../web/threadTaskBindings.js';
-
-type ScenarioHarness = {
-  db: Db;
-  manager: ConversationManager;
-  baseUrl: string;
-  close: () => Promise<void>;
-  dispatches: CoreToNode[];
-  state: Record<string, unknown>;
-};
+  conversationRunCount,
+  countMentionCooldowns,
+  createCollaborationHarness,
+  createConversationRun,
+  createJoinedAgent,
+  insertChannelMessage,
+  installDeterministicCollaborationClock,
+  latestConversationRunId,
+  latestDispatch,
+  latestRunDebug,
+  participantsBlock,
+  postUserChannelMessage,
+  queueRows,
+  requireChannelConversation,
+  restoreDeterministicCollaborationClock,
+  sendAgentMessage,
+  setConversationStatus,
+  settleHarness,
+  upsertSubscription,
+  waitForLocalDebug,
+} from './collaborationTestUtils.js';
 
 type ScenarioStep = {
   name: string;
-  run: (harness: ScenarioHarness) => Promise<void>;
+  run: (harness: CollaborationHarness) => Promise<void>;
 };
 
 type ScenarioSpec = {
   id: string;
   summary: string;
-  setup?: (harness: ScenarioHarness) => Promise<void>;
+  setup?: (harness: CollaborationHarness) => Promise<void>;
   steps: ScenarioStep[];
 };
 
 let harnessesToClose: Array<() => Promise<void>> = [];
+
+beforeEach(() => {
+  installDeterministicCollaborationClock();
+});
 
 afterEach(async () => {
   const closers = harnessesToClose;
@@ -53,6 +51,7 @@ afterEach(async () => {
   for (const close of closers.reverse()) {
     await close();
   }
+  restoreDeterministicCollaborationClock();
 });
 
 describe('collaborationScenarios', () => {
@@ -62,30 +61,29 @@ describe('collaborationScenarios', () => {
       summary: 'task thread 在 done 前后都应保持正确的 owner/fallback 语义',
       setup: async (harness) => {
         const channel = harness.manager.createChannel({ name: `scenario-task-${randomUUID().slice(0, 8)}` });
-        const rootAuthor = harness.manager.createAgent({
+        const rootAuthor = createJoinedAgent(harness, {
           name: 'ScenarioRootAuthor',
-          agentType: 'claude_acp',
-          nodeId: 'node-1',
+          channelId: channel.channelId,
           workspacePath: '/tmp/scenario-root-author',
-          channelId: channel.channelId,
         });
-        const owner = harness.manager.createAgent({
+        const owner = createJoinedAgent(harness, {
           name: 'ScenarioTaskOwner',
-          agentType: 'claude_acp',
-          nodeId: 'node-1',
-          workspacePath: '/tmp/scenario-task-owner',
           channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-task-owner',
         });
-        harness.manager.joinChannel(rootAuthor.agentId, channel.channelId);
-        harness.manager.joinChannel(owner.agentId, channel.channelId);
 
         const rootMessageId = 'scntask1-0000-0000-0000-000000000000';
-        const now = Date.now();
-        const rootSeq = allocateNextChannelMessageSeq(harness.db, channel.channelId);
-        harness.db.prepare(
-          `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
-           VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?)`,
-        ).run(rootMessageId, channel.channelId, rootAuthor.agentId, rootAuthor.name, `#${channel.name}`, 'Scenario task root', rootSeq, now);
+        const now = harness.now();
+        insertChannelMessage(harness, {
+          messageId: rootMessageId,
+          channelId: channel.channelId,
+          senderId: rootAuthor.agentId,
+          senderName: rootAuthor.name,
+          senderType: 'agent',
+          target: `#${channel.name}`,
+          content: 'Scenario task root',
+          createdAt: now,
+        });
         harness.db.prepare(
           `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
            VALUES('scenario-task-1', ?, 401, 'Scenario task root', 'Goal: keep owner semantics before done, then fall back after done without stale owner leakage.', 'in_progress', ?, ?, ?, ?, ?)`,
@@ -98,7 +96,6 @@ describe('collaborationScenarios', () => {
 
         harness.state = {
           channelId: channel.channelId,
-          channelName: channel.name,
           rootAuthorAgentId: rootAuthor.agentId,
           ownerAgentId: owner.agentId,
           threadRootId: rootMessageId.slice(0, 8),
@@ -112,21 +109,17 @@ describe('collaborationScenarios', () => {
             const ownerAgentId = harness.state.ownerAgentId as string;
             const threadRootId = harness.state.threadRootId as string;
 
-            const response = await fetchJson(harness, `/api/channels/${channelId}/messages`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                content: '请先同步一下这个 task thread 的当前状态。',
-                senderName: 'User',
-                replyTo: threadRootId,
-              }),
+            const response = await postUserChannelMessage(harness, {
+              channelId,
+              content: '请先同步一下这个 task thread 的当前状态。',
+              replyTo: threadRootId,
             });
             expect(response.status).toBe(201);
             await settleHarness();
 
-            const ownerConv = harness.manager.openAgentChannelThread(ownerAgentId, channelId, threadRootId);
-            if (!ownerConv) throw new Error('missing owner conversation');
+            const ownerConv = requireChannelConversation(harness, ownerAgentId, channelId, threadRootId);
             const ownerDebug = latestRunDebug(harness, ownerConv.id);
+            harness.state.ownerConversationId = ownerConv.id;
             expect(ownerDebug?.promptText).toContain('received a reply from User');
             expect(ownerDebug?.contextText).toContain('[Bound task-message for this thread]');
             expect(ownerDebug?.contextText).toContain('#401 [in_progress] @ScenarioTaskOwner — Scenario task root');
@@ -140,31 +133,25 @@ describe('collaborationScenarios', () => {
             const rootAuthorAgentId = harness.state.rootAuthorAgentId as string;
             const ownerAgentId = harness.state.ownerAgentId as string;
             const threadRootId = harness.state.threadRootId as string;
-            const staleAt = Date.now() - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS - 1_000;
-
-            harness.db.prepare(`UPDATE tasks SET status = 'done', updated_at = ? WHERE task_id = 'scenario-task-1'`).run(Date.now());
+            const ownerConversationId = harness.state.ownerConversationId as string;
+            harness.advanceTime(TARGET_PARTICIPANT_ACTIVE_WINDOW_MS + 1_000);
+            harness.db.prepare(`UPDATE tasks SET status = 'done', updated_at = ? WHERE task_id = 'scenario-task-1'`).run(harness.now());
             harness.db.prepare(
               `UPDATE target_participants
                SET role = 'owner', last_active_at = ?
                WHERE agent_id = ? AND channel_id = ? AND thread_root_id = ?`,
-            ).run(staleAt, ownerAgentId, channelId, threadRootId);
+            ).run(harness.now() - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS - 1_000, ownerAgentId, channelId, threadRootId);
 
-            const response = await fetchJson(harness, `/api/channels/${channelId}/messages`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                content: '这个 done task 还需要补一句总结。',
-                senderName: 'User',
-                replyTo: threadRootId,
-              }),
+            const response = await postUserChannelMessage(harness, {
+              channelId,
+              content: '这个 done task 还需要补一句总结。',
+              replyTo: threadRootId,
             });
             expect(response.status).toBe(201);
             await settleHarness();
 
-            const rootConv = harness.manager.openAgentChannelThread(rootAuthorAgentId, channelId, threadRootId);
-            if (!rootConv) throw new Error('missing root author conversation');
-
-            const staleOwnerRunCount = conversationRunCount(harness, ownerAgentId, channelId, threadRootId);
+            const rootConv = requireChannelConversation(harness, rootAuthorAgentId, channelId, threadRootId);
+            const staleOwnerRunCount = conversationRunCount(harness, null, channelId, threadRootId, ownerConversationId);
             expect(staleOwnerRunCount).toBe(1);
 
             const rootDebug = await waitForLocalDebug(harness, rootConv.id);
@@ -179,40 +166,28 @@ describe('collaborationScenarios', () => {
       summary: '主频道根消息一次 @ 多个 agent 时，active 目标先 queue，resume 后上下文不漂移',
       setup: async (harness) => {
         const channel = harness.manager.createChannel({ name: `scenario-root-${randomUUID().slice(0, 8)}` });
-        const bob = harness.manager.createAgent({
+        const bob = createJoinedAgent(harness, {
           name: 'ScenarioMentionBob',
-          agentType: 'claude_acp',
-          nodeId: 'node-1',
+          channelId: channel.channelId,
           workspacePath: '/tmp/scenario-mention-bob',
-          channelId: channel.channelId,
         });
-        const carol = harness.manager.createAgent({
+        const carol = createJoinedAgent(harness, {
           name: 'ScenarioMentionCarol',
-          agentType: 'claude_acp',
-          nodeId: 'node-1',
-          workspacePath: '/tmp/scenario-mention-carol',
           channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-mention-carol',
         });
-        harness.manager.joinChannel(bob.agentId, channel.channelId);
-        harness.manager.joinChannel(carol.agentId, channel.channelId);
 
-        const bobConv = harness.manager.openAgentChannelThread(bob.agentId, channel.channelId, null);
-        const carolConv = harness.manager.openAgentChannelThread(carol.agentId, channel.channelId, null);
-        if (!bobConv || !carolConv) throw new Error('missing root scenario conversations');
-
-        const bobSession = harness.db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
-          .get(bobConv.id) as { sessionKey: string };
-        createRun(harness.db, {
+        const bobConv = requireChannelConversation(harness, bob.agentId, channel.channelId, null);
+        const carolConv = requireChannelConversation(harness, carol.agentId, channel.channelId, null);
+        createConversationRun(harness, {
+          conversationId: bobConv.id,
           runId: 'scenario-root-active-bob',
-          sessionKey: bobSession.sessionKey,
           promptText: 'already active on root',
         });
-        harness.db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('active', bobConv.id);
+        setConversationStatus(harness, bobConv.id, 'active');
 
         harness.state = {
           channelId: channel.channelId,
-          bobAgentId: bob.agentId,
-          carolAgentId: carol.agentId,
           bobConversationId: bobConv.id,
           carolConversationId: carolConv.id,
           activeRunId: 'scenario-root-active-bob',
@@ -226,13 +201,9 @@ describe('collaborationScenarios', () => {
             const bobConversationId = harness.state.bobConversationId as string;
             const carolConversationId = harness.state.carolConversationId as string;
 
-            const response = await fetchJson(harness, `/api/channels/${channelId}/messages`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                content: '@ScenarioMentionBob @ScenarioMentionCarol 一起看下这个主频道问题。',
-                senderName: 'User',
-              }),
+            const response = await postUserChannelMessage(harness, {
+              channelId,
+              content: '@ScenarioMentionBob @ScenarioMentionCarol 一起看下这个主频道问题。',
             });
             expect(response.status).toBe(201);
             await settleHarness();
@@ -257,7 +228,7 @@ describe('collaborationScenarios', () => {
             const activeRunId = harness.state.activeRunId as string;
 
             finishRun(harness.db, { runId: activeRunId, stopReason: 'end_turn' });
-            harness.db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', bobConversationId);
+            setConversationStatus(harness, bobConversationId, 'idle');
             await harness.manager.onConversationSettled(bobConversationId);
             await settleHarness();
 
@@ -273,53 +244,39 @@ describe('collaborationScenarios', () => {
       summary: 'agent-only 线程协作里，mention 触发的 queue/resume 应保持一致上下文',
       setup: async (harness) => {
         const channel = harness.manager.createChannel({ name: `scenario-thread-${randomUUID().slice(0, 8)}` });
-        const alice = harness.manager.createAgent({
+        const alice = createJoinedAgent(harness, {
           name: 'ScenarioThreadAlice',
-          agentType: 'claude_acp',
-          nodeId: 'node-1',
+          channelId: channel.channelId,
           workspacePath: '/tmp/scenario-thread-alice',
-          channelId: channel.channelId,
         });
-        const bob = harness.manager.createAgent({
+        const bob = createJoinedAgent(harness, {
           name: 'ScenarioThreadBob',
-          agentType: 'claude_acp',
-          nodeId: 'node-1',
+          channelId: channel.channelId,
           workspacePath: '/tmp/scenario-thread-bob',
-          channelId: channel.channelId,
         });
-        const carol = harness.manager.createAgent({
+        const carol = createJoinedAgent(harness, {
           name: 'ScenarioThreadCarol',
-          agentType: 'claude_acp',
-          nodeId: 'node-1',
-          workspacePath: '/tmp/scenario-thread-carol',
           channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-thread-carol',
         });
-        harness.manager.joinChannel(alice.agentId, channel.channelId);
-        harness.manager.joinChannel(bob.agentId, channel.channelId);
-        harness.manager.joinChannel(carol.agentId, channel.channelId);
 
         const threadRootId = 'scntrd01';
-        const rootSeq = allocateNextChannelMessageSeq(harness.db, channel.channelId);
-        const now = Date.now();
-        harness.db.prepare(
-          `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
-           VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`,
-        ).run(
-          `${threadRootId}-0000-0000-0000-000000000000`,
-          channel.channelId,
-          alice.agentId,
-          alice.name,
-          `#${channel.name}`,
-          'Scenario thread root',
-          rootSeq,
-          now,
+        const now = harness.now();
+        insertChannelMessage(harness, {
+          messageId: `${threadRootId}-0000-0000-0000-000000000000`,
+          channelId: channel.channelId,
+          senderId: alice.agentId,
+          senderName: alice.name,
+          senderType: 'agent',
+          target: `#${channel.name}`,
+          content: 'Scenario thread root',
+          createdAt: now,
           threadRootId,
-        );
+        });
 
-        const aliceConv = harness.manager.openAgentChannelThread(alice.agentId, channel.channelId, threadRootId);
-        const bobConv = harness.manager.openAgentChannelThread(bob.agentId, channel.channelId, threadRootId);
-        const carolConv = harness.manager.openAgentChannelThread(carol.agentId, channel.channelId, threadRootId);
-        if (!aliceConv || !bobConv || !carolConv) throw new Error('missing thread scenario conversations');
+        const aliceConv = requireChannelConversation(harness, alice.agentId, channel.channelId, threadRootId);
+        const bobConv = requireChannelConversation(harness, bob.agentId, channel.channelId, threadRootId);
+        const carolConv = requireChannelConversation(harness, carol.agentId, channel.channelId, threadRootId);
 
         upsertTargetParticipant(harness.db, {
           agentId: alice.agentId,
@@ -343,31 +300,25 @@ describe('collaborationScenarios', () => {
           lastActiveAt: now,
         });
 
-        const bobSession = harness.db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
-          .get(bobConv.id) as { sessionKey: string };
-        createRun(harness.db, {
+        createConversationRun(harness, {
+          conversationId: bobConv.id,
           runId: 'scenario-thread-active-bob',
-          sessionKey: bobSession.sessionKey,
           promptText: 'already active in thread',
         });
-        harness.db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('active', bobConv.id);
-
-        const aliceSession = harness.db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
-          .get(aliceConv.id) as { sessionKey: string };
-        createRun(harness.db, {
+        setConversationStatus(harness, bobConv.id, 'active');
+        createConversationRun(harness, {
+          conversationId: aliceConv.id,
           runId: 'scenario-thread-alice-source',
-          sessionKey: aliceSession.sessionKey,
           promptText: 'source thread update',
         });
 
         harness.state = {
-          channelId: channel.channelId,
           channelName: channel.name,
           threadRootId,
           aliceAgentId: alice.agentId,
+          aliceConversationId: aliceConv.id,
           bobConversationId: bobConv.id,
           carolConversationId: carolConv.id,
-          aliceConversationId: aliceConv.id,
           activeRunId: 'scenario-thread-active-bob',
         };
       },
@@ -375,22 +326,19 @@ describe('collaborationScenarios', () => {
         {
           name: 'agent_mentions_dispatch_idle_target_and_queue_active_target',
           run: async (harness) => {
-            const channelId = harness.state.channelId as string;
+            const channelName = harness.state.channelName as string;
             const threadRootId = harness.state.threadRootId as string;
             const aliceAgentId = harness.state.aliceAgentId as string;
             const aliceConversationId = harness.state.aliceConversationId as string;
             const bobConversationId = harness.state.bobConversationId as string;
             const carolConversationId = harness.state.carolConversationId as string;
 
-            const response = await fetch(`${harness.baseUrl}/api/internal/agent/${aliceAgentId}/send`, {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                target: `#${harness.state.channelName as string}:${threadRootId}`,
-                content: 'Need both of you here, @ScenarioThreadBob and @ScenarioThreadCarol.',
-                kind: 'progress',
-                conversationId: aliceConversationId,
-              }),
+            const response = await sendAgentMessage(harness, {
+              agentId: aliceAgentId,
+              conversationId: aliceConversationId,
+              target: `#${channelName}:${threadRootId}`,
+              content: 'Need both of you here, @ScenarioThreadBob and @ScenarioThreadCarol.',
+              kind: 'progress',
             });
             expect(response.status).toBe(200);
             await settleHarness();
@@ -406,9 +354,6 @@ describe('collaborationScenarios', () => {
             const dispatchedParticipants = participantsBlock(carolDispatch?.contextText);
             expect(queuedParticipants).toBe(dispatchedParticipants);
             harness.state.threadQueuedParticipants = queuedParticipants;
-
-            const runCount = conversationRunCount(harness, null, channelId, threadRootId, carolConversationId);
-            expect(runCount).toBeGreaterThanOrEqual(1);
           },
         },
         {
@@ -418,7 +363,7 @@ describe('collaborationScenarios', () => {
             const activeRunId = harness.state.activeRunId as string;
 
             finishRun(harness.db, { runId: activeRunId, stopReason: 'end_turn' });
-            harness.db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', bobConversationId);
+            setConversationStatus(harness, bobConversationId, 'idle');
             await harness.manager.onConversationSettled(bobConversationId);
             await settleHarness();
 
@@ -429,11 +374,684 @@ describe('collaborationScenarios', () => {
         },
       ],
     },
+    {
+      id: 'subscribed_root_multi_round_prefers_recent_participants',
+      summary: 'subscribed_agents 根频道应先唤醒订阅者，再在后续轮次优先最近参与者',
+      setup: async (harness) => {
+        const channel = harness.manager.createChannel({
+          name: `scenario-subscribed-${randomUUID().slice(0, 8)}`,
+          collaborationMode: 'subscribed_agents',
+        });
+        const alpha = createJoinedAgent(harness, {
+          name: 'ScenarioSubscribedAlpha',
+          channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-subscribed-alpha',
+        });
+        const beta = createJoinedAgent(harness, {
+          name: 'ScenarioSubscribedBeta',
+          channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-subscribed-beta',
+        });
+        const gamma = createJoinedAgent(harness, {
+          name: 'ScenarioSubscribedGamma',
+          channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-subscribed-gamma',
+        });
+
+        for (const agent of [alpha, beta, gamma]) {
+          upsertSubscription(harness, { channelId: channel.channelId, agentId: agent.agentId });
+        }
+
+        harness.state = {
+          channelId: channel.channelId,
+          alphaAgentId: alpha.agentId,
+          betaAgentId: beta.agentId,
+          gammaAgentId: gamma.agentId,
+          alphaConversationId: requireChannelConversation(harness, alpha.agentId, channel.channelId, null).id,
+          betaConversationId: requireChannelConversation(harness, beta.agentId, channel.channelId, null).id,
+          gammaConversationId: requireChannelConversation(harness, gamma.agentId, channel.channelId, null).id,
+        };
+      },
+      steps: [
+        {
+          name: 'first_round_wakes_all_subscribers_with_consistent_participants',
+          run: async (harness) => {
+            const channelId = harness.state.channelId as string;
+            const alphaConversationId = harness.state.alphaConversationId as string;
+            const betaConversationId = harness.state.betaConversationId as string;
+            const gammaConversationId = harness.state.gammaConversationId as string;
+
+            const response = await postUserChannelMessage(harness, {
+              channelId,
+              content: '第一轮根频道广播，没有 recent participants。',
+            });
+            expect(response.status).toBe(201);
+            await settleHarness();
+
+            const alphaDebug = await waitForLocalDebug(harness, alphaConversationId);
+            const betaDebug = await waitForLocalDebug(harness, betaConversationId);
+            const gammaDebug = await waitForLocalDebug(harness, gammaConversationId);
+            const alphaParticipants = participantsBlock(alphaDebug.contextText);
+            expect(alphaParticipants).toContain('@ScenarioSubscribedAlpha (participant)');
+            expect(alphaParticipants).toContain('@ScenarioSubscribedBeta (participant)');
+            expect(alphaParticipants).toContain('@ScenarioSubscribedGamma (participant)');
+            expect(participantsBlock(betaDebug.contextText)).toBe(alphaParticipants);
+            expect(participantsBlock(gammaDebug.contextText)).toBe(alphaParticipants);
+
+            for (const conversationId of [alphaConversationId, betaConversationId, gammaConversationId]) {
+              const runId = latestConversationRunId(harness, conversationId);
+              expect(runId).toBeTruthy();
+              finishRun(harness.db, { runId: runId!, stopReason: 'end_turn' });
+              setConversationStatus(harness, conversationId, 'idle');
+              await harness.manager.onConversationSettled(conversationId);
+            }
+          },
+        },
+        {
+          name: 'second_round_uses_recent_participants_instead_of_falling_back_to_subscribers',
+          run: async (harness) => {
+            const channelId = harness.state.channelId as string;
+            const alphaAgentId = harness.state.alphaAgentId as string;
+            const betaAgentId = harness.state.betaAgentId as string;
+            const gammaAgentId = harness.state.gammaAgentId as string;
+            const alphaConversationId = harness.state.alphaConversationId as string;
+            const betaConversationId = harness.state.betaConversationId as string;
+            const gammaConversationId = harness.state.gammaConversationId as string;
+            harness.advanceTime(TARGET_PARTICIPANT_ACTIVE_WINDOW_MS + 1_000);
+
+            expect(betaAgentId).not.toBe(alphaAgentId);
+            expect(gammaAgentId).not.toBe(alphaAgentId);
+            upsertTargetParticipant(harness.db, {
+              agentId: alphaAgentId,
+              channelId,
+              threadRootId: null,
+              role: 'participant',
+              lastActiveAt: harness.now(),
+            });
+
+            const response = await postUserChannelMessage(harness, {
+              channelId,
+              content: '第二轮根频道广播，应该只命中 recent participant。',
+            });
+            expect(response.status).toBe(201);
+            await settleHarness();
+
+            expect(conversationRunCount(harness, null, channelId, null, alphaConversationId)).toBe(2);
+            expect(conversationRunCount(harness, null, channelId, null, betaConversationId)).toBe(1);
+            expect(conversationRunCount(harness, null, channelId, null, gammaConversationId)).toBe(1);
+
+            const alphaDebug = latestRunDebug(harness, alphaConversationId);
+            expect(participantsBlock(alphaDebug?.contextText)).toBe('@ScenarioSubscribedAlpha (participant)');
+          },
+        },
+      ],
+    },
+    {
+      id: 'mention_only_root_plain_message_no_wake',
+      summary: 'mention_only 根频道普通消息不应误唤醒任何 agent',
+      setup: async (harness) => {
+        const channel = harness.manager.createChannel({
+          name: `scenario-plain-${randomUUID().slice(0, 8)}`,
+          collaborationMode: 'mention_only',
+        });
+        const alpha = createJoinedAgent(harness, {
+          name: 'ScenarioPlainAlpha',
+          channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-plain-alpha',
+        });
+        const beta = createJoinedAgent(harness, {
+          name: 'ScenarioPlainBeta',
+          channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-plain-beta',
+        });
+
+        harness.state = {
+          channelId: channel.channelId,
+          alphaConversationId: requireChannelConversation(harness, alpha.agentId, channel.channelId, null).id,
+          betaConversationId: requireChannelConversation(harness, beta.agentId, channel.channelId, null).id,
+        };
+      },
+      steps: [
+        {
+          name: 'plain_root_message_keeps_all_agents_idle',
+          run: async (harness) => {
+            const channelId = harness.state.channelId as string;
+            const alphaConversationId = harness.state.alphaConversationId as string;
+            const betaConversationId = harness.state.betaConversationId as string;
+
+            const response = await postUserChannelMessage(harness, {
+              channelId,
+              content: '这是一个普通的根频道更新，没有任何显式 @mention。',
+            });
+            expect(response.status).toBe(201);
+            await settleHarness();
+
+            expect(harness.dispatches.filter((msg) => msg.type === 'run.dispatch')).toHaveLength(0);
+            expect(conversationRunCount(harness, null, channelId, null, alphaConversationId)).toBe(0);
+            expect(conversationRunCount(harness, null, channelId, null, betaConversationId)).toBe(0);
+            expect(queueRows(harness, alphaConversationId)).toHaveLength(0);
+            expect(queueRows(harness, betaConversationId)).toHaveLength(0);
+          },
+        },
+      ],
+    },
+    {
+      id: 'task_thread_mixed_priority_consistency',
+      summary: 'task thread 同时命中 owner、participant 和显式 mention 时，应保持 reason 优先级与上下文一致',
+      setup: async (harness) => {
+        const channel = harness.manager.createChannel({ name: `scenario-task-mix-${randomUUID().slice(0, 8)}` });
+        const owner = createJoinedAgent(harness, {
+          name: 'ScenarioMixOwner',
+          channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-mix-owner',
+        });
+        const helper = createJoinedAgent(harness, {
+          name: 'ScenarioMixHelper',
+          channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-mix-helper',
+        });
+        const mentioned = createJoinedAgent(harness, {
+          name: 'ScenarioMixMentioned',
+          channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-mix-mentioned',
+        });
+
+        const rootMessageId = 'mixscn01-0000-0000-0000-000000000000';
+        const threadRootId = rootMessageId.slice(0, 8);
+        const now = harness.now();
+        insertChannelMessage(harness, {
+          messageId: rootMessageId,
+          channelId: channel.channelId,
+          senderId: owner.agentId,
+          senderName: owner.name,
+          senderType: 'agent',
+          target: `#${channel.name}`,
+          content: 'Scenario mixed priority task root',
+          createdAt: now,
+        });
+        harness.db.prepare(
+          `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
+           VALUES('scenario-task-mix', ?, 512, 'Scenario mixed priority task', 'Goal: ensure owner, helper, and explicitly mentioned agent all see stable shared context while only the mentioned target gets mention reason.', 'in_progress', ?, ?, ?, ?, ?)`,
+        ).run(channel.channelId, owner.agentId, owner.name, rootMessageId, now, now);
+        syncTaskThreadOwner(harness.db, {
+          taskId: 'scenario-task-mix',
+          agentId: owner.agentId,
+          lastActiveAt: now,
+        });
+        upsertTargetParticipant(harness.db, {
+          agentId: owner.agentId,
+          channelId: channel.channelId,
+          threadRootId,
+          role: 'owner',
+          lastActiveAt: now,
+        });
+        upsertTargetParticipant(harness.db, {
+          agentId: helper.agentId,
+          channelId: channel.channelId,
+          threadRootId,
+          role: 'participant',
+          lastActiveAt: now,
+        });
+        upsertTargetParticipant(harness.db, {
+          agentId: mentioned.agentId,
+          channelId: channel.channelId,
+          threadRootId,
+          role: 'participant',
+          lastActiveAt: now,
+        });
+
+        harness.state = {
+          channelId: channel.channelId,
+          threadRootId,
+          ownerConversationId: requireChannelConversation(harness, owner.agentId, channel.channelId, threadRootId).id,
+          helperConversationId: requireChannelConversation(harness, helper.agentId, channel.channelId, threadRootId).id,
+          mentionedConversationId: requireChannelConversation(harness, mentioned.agentId, channel.channelId, threadRootId).id,
+        };
+      },
+      steps: [
+        {
+          name: 'explicit_mention_only_changes_reason_not_shared_context',
+          run: async (harness) => {
+            const channelId = harness.state.channelId as string;
+            const threadRootId = harness.state.threadRootId as string;
+            const ownerConversationId = harness.state.ownerConversationId as string;
+            const helperConversationId = harness.state.helperConversationId as string;
+            const mentionedConversationId = harness.state.mentionedConversationId as string;
+
+            const response = await postUserChannelMessage(harness, {
+              channelId,
+              content: '请先让 @ScenarioMixMentioned 看一下，再一起推进这个 task thread。',
+              replyTo: threadRootId,
+            });
+            expect(response.status).toBe(201);
+            await settleHarness();
+
+            const ownerDebug = await waitForLocalDebug(harness, ownerConversationId);
+            const helperDebug = await waitForLocalDebug(harness, helperConversationId);
+            const mentionedDebug = await waitForLocalDebug(harness, mentionedConversationId);
+
+            expect(ownerDebug.promptText).toContain('received a reply from User');
+            expect(helperDebug.promptText).toContain('received a reply from User');
+            expect(mentionedDebug.promptText).toContain('You were @mentioned');
+
+            const sharedParticipants = '@ScenarioMixOwner (owner)\n@ScenarioMixHelper (participant)\n@ScenarioMixMentioned (participant)';
+            expect(participantsBlock(ownerDebug.contextText)).toBe(sharedParticipants);
+            expect(participantsBlock(helperDebug.contextText)).toBe(sharedParticipants);
+            expect(participantsBlock(mentionedDebug.contextText)).toBe(sharedParticipants);
+
+            for (const debugRow of [ownerDebug, helperDebug, mentionedDebug]) {
+              expect(debugRow.contextText).toContain('[Bound task-message for this thread]');
+              expect(debugRow.contextText).toContain('#512 [in_progress] @ScenarioMixOwner — Scenario mixed priority task');
+              expect(debugRow.contextText).not.toContain('[Task-message board summary]');
+            }
+          },
+        },
+      ],
+    },
+    {
+      id: 'user_duplicate_mentions_single_queue',
+      summary: '同一条用户根消息重复 @ 同一个 agent 时，只应为该 target 生成一条 queue 并在后续只 resume 一次',
+      setup: async (harness) => {
+        const channel = harness.manager.createChannel({ name: `scenario-user-dup-${randomUUID().slice(0, 8)}` });
+        const bob = createJoinedAgent(harness, {
+          name: 'ScenarioUserDupBob',
+          channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-user-dup-bob',
+        });
+
+        const bobConv = requireChannelConversation(harness, bob.agentId, channel.channelId, null);
+        createConversationRun(harness, {
+          conversationId: bobConv.id,
+          runId: 'scenario-user-dup-active',
+          promptText: 'already active on root',
+        });
+        setConversationStatus(harness, bobConv.id, 'active');
+
+        harness.state = {
+          channelId: channel.channelId,
+          bobConversationId: bobConv.id,
+          activeRunId: 'scenario-user-dup-active',
+        };
+      },
+      steps: [
+        {
+          name: 'duplicate_mentions_only_enqueue_once',
+          run: async (harness) => {
+            const channelId = harness.state.channelId as string;
+            const bobConversationId = harness.state.bobConversationId as string;
+
+            const response = await postUserChannelMessage(harness, {
+              channelId,
+              content: '@ScenarioUserDupBob 先看一下这个问题，同一条消息里再 @ScenarioUserDupBob 一次也不应重复排队。',
+            });
+            expect(response.status).toBe(201);
+            await settleHarness();
+
+            expect(queueRows(harness, bobConversationId)).toHaveLength(1);
+            expect(queueRows(harness, bobConversationId)[0]?.promptText).toContain('You were @mentioned');
+            expect(
+              harness.dispatches.filter((msg) => msg.type === 'run.dispatch' && msg.conversationId === bobConversationId),
+            ).toHaveLength(0);
+            expect(conversationRunCount(harness, null, channelId, null, bobConversationId)).toBe(1);
+          },
+        },
+        {
+          name: 'settling_active_run_resumes_once_without_leftover_queue',
+          run: async (harness) => {
+            const bobConversationId = harness.state.bobConversationId as string;
+            const activeRunId = harness.state.activeRunId as string;
+
+            finishRun(harness.db, { runId: activeRunId, stopReason: 'end_turn' });
+            setConversationStatus(harness, bobConversationId, 'idle');
+            await harness.manager.onConversationSettled(bobConversationId);
+            await settleHarness();
+
+            const resumed = latestDispatch(harness, bobConversationId);
+            expect(resumed?.dispatchMode).toBe('resume');
+            expect(resumed?.prompt).toContain('You were @mentioned');
+            expect(queueRows(harness, bobConversationId)).toHaveLength(0);
+          },
+        },
+      ],
+    },
+    {
+      id: 'agent_duplicate_mentions_single_wake',
+      summary: '同一条 agent 根消息重复 @ 同一个目标时，只应唤醒一次并只记录一条 cooldown',
+      setup: async (harness) => {
+        const channel = harness.manager.createChannel({ name: `scenario-dup-${randomUUID().slice(0, 8)}` });
+        const alice = createJoinedAgent(harness, {
+          name: 'ScenarioDupAlice',
+          channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-dup-alice',
+        });
+        const bob = createJoinedAgent(harness, {
+          name: 'ScenarioDupBob',
+          channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-dup-bob',
+        });
+
+        const aliceConv = requireChannelConversation(harness, alice.agentId, channel.channelId, null);
+        const bobConv = requireChannelConversation(harness, bob.agentId, channel.channelId, null);
+        createConversationRun(harness, {
+          conversationId: aliceConv.id,
+          runId: 'scenario-dup-source',
+          promptText: 'root coordination from alice',
+        });
+
+        harness.state = {
+          channelId: channel.channelId,
+          channelName: channel.name,
+          aliceAgentId: alice.agentId,
+          bobAgentId: bob.agentId,
+          aliceConversationId: aliceConv.id,
+          bobConversationId: bobConv.id,
+        };
+      },
+      steps: [
+        {
+          name: 'duplicate_mentions_dispatch_once_and_record_one_cooldown_row',
+          run: async (harness) => {
+            const channelId = harness.state.channelId as string;
+            const channelName = harness.state.channelName as string;
+            const aliceAgentId = harness.state.aliceAgentId as string;
+            const bobAgentId = harness.state.bobAgentId as string;
+            const aliceConversationId = harness.state.aliceConversationId as string;
+            const bobConversationId = harness.state.bobConversationId as string;
+
+            const response = await sendAgentMessage(harness, {
+              agentId: aliceAgentId,
+              conversationId: aliceConversationId,
+              target: `#${channelName}`,
+              content: '请 @ScenarioDupBob 看一下，同一条消息里再 @ScenarioDupBob 一次也不应重复唤醒。',
+              kind: 'progress',
+            });
+            expect(response.status).toBe(200);
+            await settleHarness();
+
+            expect(conversationRunCount(harness, null, channelId, null, bobConversationId)).toBe(1);
+            expect(queueRows(harness, bobConversationId)).toHaveLength(0);
+            expect(
+              harness.dispatches.filter((msg) => msg.type === 'run.dispatch' && msg.conversationId === bobConversationId),
+            ).toHaveLength(1);
+            expect(countMentionCooldowns(harness, {
+              channelId,
+              fromAgentId: aliceAgentId,
+              toAgentId: bobAgentId,
+            })).toBe(1);
+
+            const bobDebug = await waitForLocalDebug(harness, bobConversationId);
+            expect(bobDebug.promptText).toContain('Another agent (@ScenarioDupAlice) explicitly asked for your help');
+          },
+        },
+      ],
+    },
+    {
+      id: 'same_agent_root_thread_queue_isolation',
+      summary: '同一 agent 的 root/thread conversation 同时 active 时，root mention 和 thread reply 应各自只进入对应 queue',
+      setup: async (harness) => {
+        const channel = harness.manager.createChannel({ name: `scenario-isolation-${randomUUID().slice(0, 8)}` });
+        const bob = createJoinedAgent(harness, {
+          name: 'ScenarioIsoBob',
+          channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-iso-bob',
+        });
+
+        const rootConv = requireChannelConversation(harness, bob.agentId, channel.channelId, null);
+        const threadRootId = 'isoqroot';
+        insertChannelMessage(harness, {
+          messageId: `${threadRootId}-0000-0000-0000-000000000000`,
+          channelId: channel.channelId,
+          senderId: bob.agentId,
+          senderName: bob.name,
+          senderType: 'agent',
+          target: `#${channel.name}`,
+          content: 'Isolation thread root',
+          createdAt: harness.now(),
+          threadRootId,
+        });
+        const threadConv = requireChannelConversation(harness, bob.agentId, channel.channelId, threadRootId);
+
+        createConversationRun(harness, {
+          conversationId: rootConv.id,
+          runId: 'scenario-isolation-root-active',
+          promptText: 'active root branch',
+        });
+        setConversationStatus(harness, rootConv.id, 'active');
+        createConversationRun(harness, {
+          conversationId: threadConv.id,
+          runId: 'scenario-isolation-thread-active',
+          promptText: 'active thread branch',
+        });
+        setConversationStatus(harness, threadConv.id, 'active');
+
+        harness.state = {
+          channelId: channel.channelId,
+          rootConversationId: rootConv.id,
+          threadConversationId: threadConv.id,
+          rootRunId: 'scenario-isolation-root-active',
+          threadRunId: 'scenario-isolation-thread-active',
+          threadRootId,
+        };
+      },
+      steps: [
+        {
+          name: 'root_mention_only_hits_root_queue',
+          run: async (harness) => {
+            const channelId = harness.state.channelId as string;
+            const rootConversationId = harness.state.rootConversationId as string;
+            const threadConversationId = harness.state.threadConversationId as string;
+
+            const response = await postUserChannelMessage(harness, {
+              channelId,
+              content: '@ScenarioIsoBob 先看一下 root 分支的问题。',
+            });
+            expect(response.status).toBe(201);
+            await settleHarness();
+
+            expect(queueRows(harness, rootConversationId)).toHaveLength(1);
+            expect(queueRows(harness, rootConversationId)[0]?.promptText).toContain('You were @mentioned');
+            expect(queueRows(harness, threadConversationId)).toHaveLength(0);
+          },
+        },
+        {
+          name: 'thread_reply_only_hits_thread_queue',
+          run: async (harness) => {
+            const channelId = harness.state.channelId as string;
+            const rootConversationId = harness.state.rootConversationId as string;
+            const threadConversationId = harness.state.threadConversationId as string;
+            const threadRootId = harness.state.threadRootId as string;
+
+            const response = await postUserChannelMessage(harness, {
+              channelId,
+              content: '线程分支这里也需要更新。',
+              replyTo: threadRootId,
+            });
+            expect(response.status).toBe(201);
+            await settleHarness();
+
+            expect(queueRows(harness, rootConversationId)).toHaveLength(1);
+            expect(queueRows(harness, threadConversationId)).toHaveLength(1);
+            expect(queueRows(harness, threadConversationId)[0]?.promptText).toContain('received a reply from User');
+          },
+        },
+        {
+          name: 'settling_each_branch_only_resumes_its_own_queue',
+          run: async (harness) => {
+            const rootConversationId = harness.state.rootConversationId as string;
+            const threadConversationId = harness.state.threadConversationId as string;
+            const rootRunId = harness.state.rootRunId as string;
+            const threadRunId = harness.state.threadRunId as string;
+
+            finishRun(harness.db, { runId: rootRunId, stopReason: 'end_turn' });
+            setConversationStatus(harness, rootConversationId, 'idle');
+            await harness.manager.onConversationSettled(rootConversationId);
+            await settleHarness();
+
+            const rootResume = latestDispatch(harness, rootConversationId);
+            expect(rootResume?.dispatchMode).toBe('resume');
+            expect(rootResume?.prompt).toContain('You were @mentioned');
+            expect(queueRows(harness, threadConversationId)).toHaveLength(1);
+
+            finishRun(harness.db, { runId: threadRunId, stopReason: 'end_turn' });
+            setConversationStatus(harness, threadConversationId, 'idle');
+            await harness.manager.onConversationSettled(threadConversationId);
+            await settleHarness();
+
+            const threadResume = latestDispatch(harness, threadConversationId);
+            expect(threadResume?.dispatchMode).toBe('resume');
+            expect(threadResume?.prompt).toContain('received a reply from User');
+          },
+        },
+      ],
+    },
+    {
+      id: 'agent_mention_cooldown_direction_and_boundary',
+      summary: 'agent mention cooldown 应区分方向，并在超出边界后允许重新唤醒',
+      setup: async (harness) => {
+        const channel = harness.manager.createChannel({ name: `scenario-cooldown-${randomUUID().slice(0, 8)}` });
+        const alice = createJoinedAgent(harness, {
+          name: 'ScenarioCoolAlice',
+          channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-cool-alice',
+        });
+        const bob = createJoinedAgent(harness, {
+          name: 'ScenarioCoolBob',
+          channelId: channel.channelId,
+          workspacePath: '/tmp/scenario-cool-bob',
+        });
+
+        const aliceConv = requireChannelConversation(harness, alice.agentId, channel.channelId, null);
+        const bobConv = requireChannelConversation(harness, bob.agentId, channel.channelId, null);
+        createConversationRun(harness, {
+          conversationId: aliceConv.id,
+          runId: 'scenario-cooldown-alice-source',
+          promptText: 'root coordination from alice',
+        });
+
+        harness.state = {
+          channelId: channel.channelId,
+          channelName: channel.name,
+          aliceAgentId: alice.agentId,
+          bobAgentId: bob.agentId,
+          aliceConversationId: aliceConv.id,
+          bobConversationId: bobConv.id,
+        };
+      },
+      steps: [
+        {
+          name: 'same_direction_repeat_is_suppressed_within_cooldown',
+          run: async (harness) => {
+            const channelName = harness.state.channelName as string;
+            const aliceAgentId = harness.state.aliceAgentId as string;
+            const bobAgentId = harness.state.bobAgentId as string;
+            const aliceConversationId = harness.state.aliceConversationId as string;
+            const bobConversationId = harness.state.bobConversationId as string;
+            const channelId = harness.state.channelId as string;
+
+            const first = await sendAgentMessage(harness, {
+              agentId: aliceAgentId,
+              conversationId: aliceConversationId,
+              target: `#${channelName}`,
+              content: 'First ping to @ScenarioCoolBob.',
+              kind: 'progress',
+            });
+            expect(first.status).toBe(200);
+            await settleHarness();
+
+            expect(conversationRunCount(harness, null, channelId, null, bobConversationId)).toBe(1);
+            expect(countMentionCooldowns(harness, {
+              channelId,
+              fromAgentId: aliceAgentId,
+              toAgentId: bobAgentId,
+            })).toBe(1);
+
+            harness.advanceTime(30_000);
+            const second = await sendAgentMessage(harness, {
+              agentId: aliceAgentId,
+              conversationId: aliceConversationId,
+              target: `#${channelName}`,
+              content: 'Second ping to @ScenarioCoolBob within cooldown.',
+              kind: 'progress',
+            });
+            expect(second.status).toBe(200);
+            await settleHarness();
+
+            expect(conversationRunCount(harness, null, channelId, null, bobConversationId)).toBe(1);
+            expect(queueRows(harness, bobConversationId)).toHaveLength(0);
+          },
+        },
+        {
+          name: 'reverse_direction_is_tracked_separately',
+          run: async (harness) => {
+            const channelName = harness.state.channelName as string;
+            const aliceAgentId = harness.state.aliceAgentId as string;
+            const bobAgentId = harness.state.bobAgentId as string;
+            const aliceConversationId = harness.state.aliceConversationId as string;
+            const bobConversationId = harness.state.bobConversationId as string;
+            const channelId = harness.state.channelId as string;
+
+            const reverse = await sendAgentMessage(harness, {
+              agentId: bobAgentId,
+              conversationId: bobConversationId,
+              target: `#${channelName}`,
+              content: 'Reply ping to @ScenarioCoolAlice from Bob.',
+              kind: 'progress',
+            });
+            expect(reverse.status).toBe(200);
+            await settleHarness();
+
+            const aliceQueued = queueRows(harness, aliceConversationId);
+            expect(aliceQueued).toHaveLength(1);
+            expect(aliceQueued[0]?.promptText).toContain('Another agent (@ScenarioCoolBob) explicitly asked for your help');
+            expect(countMentionCooldowns(harness, {
+              channelId,
+              fromAgentId: bobAgentId,
+              toAgentId: aliceAgentId,
+            })).toBe(1);
+          },
+        },
+        {
+          name: 'expired_same_direction_cooldown_allows_retrigger',
+          run: async (harness) => {
+            const channelName = harness.state.channelName as string;
+            const aliceAgentId = harness.state.aliceAgentId as string;
+            const bobAgentId = harness.state.bobAgentId as string;
+            const aliceConversationId = harness.state.aliceConversationId as string;
+            const bobConversationId = harness.state.bobConversationId as string;
+            const channelId = harness.state.channelId as string;
+            const latestBobRunId = latestConversationRunId(harness, bobConversationId);
+
+            expect(latestBobRunId).toBeTruthy();
+            finishRun(harness.db, { runId: latestBobRunId!, stopReason: 'end_turn' });
+            setConversationStatus(harness, bobConversationId, 'idle');
+            await harness.manager.onConversationSettled(bobConversationId);
+            harness.advanceTime(30_001);
+
+            const third = await sendAgentMessage(harness, {
+              agentId: aliceAgentId,
+              conversationId: aliceConversationId,
+              target: `#${channelName}`,
+              content: 'Third ping to @ScenarioCoolBob after cooldown expiry.',
+              kind: 'progress',
+            });
+            expect(third.status).toBe(200);
+            await settleHarness();
+
+            expect(conversationRunCount(harness, null, channelId, null, bobConversationId)).toBe(2);
+            expect(countMentionCooldowns(harness, {
+              channelId,
+              fromAgentId: aliceAgentId,
+              toAgentId: bobAgentId,
+            })).toBe(1);
+          },
+        },
+      ],
+    },
   ];
 
   for (const scenario of scenarios) {
     it(`${scenario.id}: ${scenario.summary}`, async () => {
-      const harness = await createScenarioHarness();
+      const harness = await createCollaborationHarness();
       harnessesToClose.push(harness.close);
       if (scenario.setup) await scenario.setup(harness);
       for (const step of scenario.steps) {
@@ -442,313 +1060,3 @@ describe('collaborationScenarios', () => {
     });
   }
 });
-
-async function createScenarioHarness(): Promise<ScenarioHarness> {
-  const db = createTestDb();
-  const dispatches: CoreToNode[] = [];
-  const fakeRegistry = {
-    getNode(nodeId: string) {
-      return {
-        nodeId,
-        hostname: 'scenario-node',
-        agentTypes: ['claude_acp', 'codex_acp'],
-        version: 'test',
-      };
-    },
-    send(_nodeId: string, msg: CoreToNode) {
-      dispatches.push(msg);
-      return true;
-    },
-  };
-  const config = createTestConfig({ contextReplayEnabled: true, contextReplayRuns: 16 });
-  const manager = new ConversationManager({
-    db,
-    config,
-    nodeRegistry: fakeRegistry as any,
-  });
-  manager.start();
-
-  const app = Fastify({ logger: false });
-  const skillsService = new AgentSkillsService({
-    getAgentById: (agentId) => manager.getAgent(agentId),
-    broker: {
-      async listSkills(_nodeId: string, skillRoots: string[]) {
-        return {
-          path: null,
-          roots: skillRoots,
-          skills: [],
-          entries: [],
-        };
-      },
-      async readSkillFile(_nodeId: string, _skillRoots: string[], _params: unknown, skillPath: string) {
-        return {
-          path: skillPath,
-          content: '# Skill\nplaceholder',
-          mimeType: 'text/markdown' as const,
-          size: 18,
-          modifiedAt: 1,
-        };
-      },
-    } as any,
-  });
-
-  registerInternalAgentRoutes(app, db, manager, () => {}, () => {}, config.humanUserName, skillsService);
-
-  app.post<{ Params: { id: string }; Body: { content: string; senderName?: string; replyTo?: string } }>(
-    '/api/channels/:id/messages',
-    async (req, reply) => {
-      const channel = manager.getChannel(req.params.id);
-      if (!channel) {
-        reply.code(404);
-        return { error: 'Channel not found' };
-      }
-      const { content, senderName = 'User', replyTo } = req.body ?? {};
-      if (!content) {
-        reply.code(400);
-        return { error: 'content is required' };
-      }
-
-      const now = Date.now();
-      const messageId = `msg-${randomUUID()}`;
-      const seq = allocateNextChannelMessageSeq(db, req.params.id);
-      const threadRootId = replyTo ?? null;
-      const target = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
-      db.prepare(
-        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-         VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, NULL, ?)`,
-      ).run(messageId, req.params.id, senderName, target, content, seq, now, threadRootId);
-
-      const mentionedAgents = findMentionedAgents(content, manager.listAgents(req.params.id));
-      const pendingNotifications = new Map<string, { reason: 'mention' | 'thread_reply' | 'channel_activity'; role: 'owner' | 'participant' }>();
-      const reasonPriority = (reason: 'mention' | 'thread_reply' | 'channel_activity'): number => (
-        reason === 'mention' ? 3 : reason === 'thread_reply' ? 2 : 1
-      );
-      const rolePriority = (role: 'owner' | 'participant'): number => (
-        role === 'owner' ? 2 : 1
-      );
-      const queueAgentNotification = (
-        agentId: string,
-        reason: 'mention' | 'thread_reply' | 'channel_activity',
-        role: 'owner' | 'participant',
-      ) => {
-        const existing = pendingNotifications.get(agentId);
-        if (!existing) {
-          pendingNotifications.set(agentId, { reason, role });
-          return;
-        }
-        pendingNotifications.set(agentId, {
-          reason: reasonPriority(reason) > reasonPriority(existing.reason) ? reason : existing.reason,
-          role: rolePriority(role) > rolePriority(existing.role) ? role : existing.role,
-        });
-      };
-
-      const historyTarget = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
-      const flushAgentNotifications = () => {
-        for (const [agentId, { role }] of pendingNotifications.entries()) {
-          upsertTargetParticipant(db, {
-            agentId,
-            channelId: req.params.id,
-            threadRootId: threadRootId ?? null,
-            role,
-            lastActiveAt: now,
-          });
-        }
-
-        for (const [agentId, { reason }] of pendingNotifications.entries()) {
-          const conv = manager.openAgentChannelThread(agentId, req.params.id, threadRootId ?? null);
-          if (!conv) continue;
-          const activationContext = buildTargetActivationContext(db, {
-            agentId,
-            channelId: req.params.id,
-            replyTarget: conv.replyTarget ?? historyTarget,
-            triggerSeq: seq,
-            threadRootId: threadRootId ?? null,
-          });
-          void manager.submitPrompt(
-            conv.id,
-            buildChannelActivationPrompt({
-              channelName: channel.name,
-              target: historyTarget,
-              replyTarget: activationContext.replyTarget,
-              senderName,
-              content,
-              reason,
-            }),
-            {
-              recordAsUserMessage: false,
-              activationContextText: buildChannelActivationContextText({
-                target: historyTarget,
-                recentMessages: activationContext.recentMessages,
-                rootMessage: activationContext.rootMessage,
-                unreadCount: activationContext.unreadCount,
-                oldestVisibleSeq: activationContext.oldestVisibleSeq,
-                participants: activationContext.participants,
-                boundTask: activationContext.boundTask,
-                openTasks: activationContext.openTasks,
-              }) || undefined,
-              replayOverlapRecentMessages: activationContext.recentMessages,
-            },
-          ).then(() => {
-            bumpAgentMessageCheckpoint(db, agentId, req.params.id, seq, threadRootId ?? null);
-          }).catch(() => {});
-        }
-      };
-
-      if (threadRootId) {
-        const summary = getThreadCollaborationSummary(db, {
-          channelId: req.params.id,
-          threadRootId,
-        });
-        const participants = listRecentTargetParticipants(db, {
-          channelId: req.params.id,
-          threadRootId,
-          activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
-        });
-        const normalizedParticipants = summary.boundTask?.status === 'done'
-          ? participants.map((participant) => ({ ...participant, role: 'participant' as const }))
-          : participants;
-        const rootMsg = db.prepare(
-          `SELECT sender_id as senderId, sender_type as senderType
-           FROM channel_messages
-           WHERE channel_id = ? AND substr(message_id, 1, 8) = ?
-           LIMIT 1`,
-        ).get(req.params.id, threadRootId) as { senderId: string; senderType: string } | undefined;
-
-        if (summary.ownerAgentId) {
-          queueAgentNotification(summary.ownerAgentId, 'thread_reply', 'owner');
-        }
-        if (normalizedParticipants.length === 0 && !summary.ownerAgentId && rootMsg?.senderType === 'agent') {
-          queueAgentNotification(rootMsg.senderId, 'thread_reply', 'owner');
-        } else {
-          for (const participant of normalizedParticipants) {
-            queueAgentNotification(participant.agentId, 'thread_reply', participant.role);
-          }
-        }
-      }
-
-      for (const agent of mentionedAgents) {
-        queueAgentNotification(agent.agentId, 'mention', threadRootId ? 'participant' : 'owner');
-      }
-
-      if (!threadRootId && mentionedAgents.length === 0 && channel.collaborationMode === 'subscribed_agents') {
-        const rootParticipants = listRecentTargetParticipants(db, {
-          channelId: req.params.id,
-          threadRootId: null,
-          activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
-        });
-        const subscribedAgents = listChannelSubscriptions(db, req.params.id);
-        const agentsToWake = rootParticipants.length > 0
-          ? rootParticipants.map((participant) => ({
-              agentId: participant.agentId,
-              role: participant.role,
-            }))
-          : subscribedAgents.map((agent) => ({
-              agentId: agent.agentId,
-              role: 'participant' as const,
-            }));
-
-        for (const agent of agentsToWake) {
-          queueAgentNotification(agent.agentId, 'channel_activity', agent.role);
-        }
-      }
-
-      flushAgentNotifications();
-      reply.code(201);
-      return { messageId, seq };
-    },
-  );
-
-  await app.listen({ port: 0, host: '127.0.0.1' });
-  const addr = app.server.address() as { port: number };
-  const baseUrl = `http://127.0.0.1:${addr.port}`;
-
-  return {
-    db,
-    manager,
-    baseUrl,
-    dispatches,
-    state: {},
-    close: async () => {
-      manager.close();
-      await app.close();
-      db.close();
-    },
-  };
-}
-
-async function fetchJson(harness: ScenarioHarness, path: string, init?: RequestInit) {
-  const res = await fetch(`${harness.baseUrl}${path}`, init);
-  return {
-    status: res.status,
-    body: res.status === 204 ? null : await res.json(),
-  };
-}
-
-function latestRunDebug(harness: ScenarioHarness, conversationId: string) {
-  return harness.db.prepare(
-    `SELECT prompt_text as promptText, context_text as contextText
-     FROM run_debug_inputs
-     WHERE conversation_id = ?
-     ORDER BY created_at DESC
-     LIMIT 1`,
-  ).get(conversationId) as { promptText: string; contextText: string | null } | undefined;
-}
-
-function queueRows(harness: ScenarioHarness, conversationId: string) {
-  return harness.db.prepare(
-    `SELECT prompt_text as promptText, activation_context_text as activationContextText
-     FROM conversation_prompt_queue
-     WHERE conversation_id = ?
-     ORDER BY queue_id ASC`,
-  ).all(conversationId) as Array<{ promptText: string; activationContextText: string | null }>;
-}
-
-function latestDispatch(harness: ScenarioHarness, conversationId: string) {
-  const runs = harness.dispatches.filter((msg): msg is Extract<CoreToNode, { type: 'run.dispatch' }> => msg.type === 'run.dispatch');
-  return [...runs].reverse().find((msg) => msg.conversationId === conversationId);
-}
-
-function participantsBlock(text?: string | null): string {
-  return /\[Active participants on this target\]\n([\s\S]*?)(?:\n\n\[|$)/.exec(text ?? '')?.[1]?.trim() ?? '';
-}
-
-function conversationRunCount(
-  harness: ScenarioHarness,
-  agentId: string | null,
-  channelId: string,
-  threadRootId: string | null,
-  conversationId?: string,
-): number {
-  if (conversationId) {
-    const row = harness.db.prepare(
-      `SELECT COUNT(*) as count
-       FROM runs r
-       JOIN conversations c ON c.session_key = r.session_key
-       WHERE c.id = ?`,
-    ).get(conversationId) as { count: number };
-    return row.count;
-  }
-  const row = harness.db.prepare(
-    `SELECT COUNT(*) as count
-     FROM runs r
-     JOIN conversations c ON c.session_key = r.session_key
-     WHERE c.agent_id = ? AND c.channel_id = ? AND c.thread_root_id ${threadRootId ? '= ?' : 'IS NULL'}`,
-  ).get(...(threadRootId ? [agentId, channelId, threadRootId] : [agentId, channelId])) as { count: number };
-  return row.count;
-}
-
-async function settleHarness(): Promise<void> {
-  await new Promise((resolve) => setTimeout(resolve, 15));
-}
-
-async function waitForLocalDebug(
-  harness: ScenarioHarness,
-  conversationId: string,
-): Promise<{ promptText: string; contextText: string | null }> {
-  for (let attempt = 0; attempt < 20; attempt += 1) {
-    const row = latestRunDebug(harness, conversationId);
-    if (row) return row;
-    await settleHarness();
-  }
-  throw new Error(`No run_debug_inputs row appeared for conversation ${conversationId}.`);
-}

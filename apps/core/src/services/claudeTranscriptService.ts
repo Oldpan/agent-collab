@@ -15,6 +15,7 @@ import {
 } from './codexTranscriptService.js';
 
 const MAX_INLINE_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
+const HEURISTIC_TRANSCRIPT_LOOKBACK_MS = 24 * 60 * 60 * 1000;
 
 export class ClaudeTranscriptService {
   private readonly db: Db;
@@ -46,12 +47,14 @@ export class ClaudeTranscriptService {
     const replyTarget = (conversation.replyTarget ?? '').trim();
     if (!replyTarget) throw new Error('Conversation has no reply target.');
     const acpSessionId = this.getAcpSessionIdByConversationId(conversationId)?.trim() || undefined;
+    const heuristicTranscriptCutoff = !acpSessionId ? (Date.now() - HEURISTIC_TRANSCRIPT_LOOKBACK_MS) : null;
 
     const listing = await this.broker.listFiles(conversation.nodeId, conversation.workspacePath);
     const exactSessionRollouts: CodexDebugRollout[] = [];
     const heuristicRollouts: CodexDebugRollout[] = [];
 
     for (const file of listing.files) {
+      if (heuristicTranscriptCutoff !== null && file.modifiedAt < heuristicTranscriptCutoff) continue;
       if (file.size > MAX_INLINE_TRANSCRIPT_BYTES) continue;
       const result = await this.broker.readFile(conversation.nodeId, conversation.workspacePath, file.path).catch(() => null);
       if (!result) continue;

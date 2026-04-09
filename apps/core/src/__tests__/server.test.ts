@@ -27,7 +27,7 @@ import {
   syncTaskThreadOwner,
 } from '../web/threadTaskBindings.js';
 import { isValidTransition } from '../web/taskStatusTransitions.js';
-import type { TaskInfo } from '@agent-collab/protocol';
+import { buildThreadShortId, type TaskInfo } from '@agent-collab/protocol';
 
 type TestTaskClaimRow = {
   taskId: string;
@@ -540,7 +540,7 @@ beforeAll(async () => {
       }
 
       const requestedThreadRootId = typeof req.body?.threadRootId === 'string' && req.body.threadRootId.trim()
-        ? req.body.threadRootId.trim().slice(0, 8)
+        ? req.body.threadRootId.trim()
         : null;
       const requestedMessageId = typeof req.body?.messageId === 'string' && req.body.messageId.trim()
         ? req.body.messageId.trim()
@@ -604,7 +604,7 @@ beforeAll(async () => {
   };
 
   const mapAgentTaskRow = (row: AgentTaskListRow, dmChannelId: string) => {
-    const linkedThreadShortId = row.messageId ? row.messageId.slice(0, 8) : null;
+    const linkedThreadShortId = row.messageId ? buildThreadShortId(row.messageId) : null;
     const sourceType = row.channelId === dmChannelId ? 'dm' : 'channel';
     return {
       taskId: row.taskId,
@@ -1013,7 +1013,7 @@ beforeAll(async () => {
           return { error: 'Task is already claimed by another user' };
         }
 
-        const threadRootId = current.messageId.slice(0, 8);
+        const threadRootId = buildThreadShortId(current.messageId);
         const kickoffSeq = allocateNextChannelMessageSeq(db, req.params.id);
         db.transaction(() => {
           db.prepare(
@@ -1185,6 +1185,21 @@ afterAll(async () => {
 async function fetchJson(path: string, init?: RequestInit) {
   const res = await fetch(`${baseUrl}${path}`, init);
   return { status: res.status, body: res.status === 204 ? null : await res.json() };
+}
+
+async function waitForRunDebug(conversationId: string): Promise<{ promptText: string; contextText: string | null }> {
+  for (let attempt = 0; attempt < 20; attempt += 1) {
+    const row = db.prepare(
+      `SELECT prompt_text as promptText, context_text as contextText
+       FROM run_debug_inputs
+       WHERE conversation_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(conversationId) as { promptText: string; contextText: string | null } | undefined;
+    if (row) return row;
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+  throw new Error(`No run_debug_inputs row appeared for conversation ${conversationId}.`);
 }
 
 /**
@@ -1441,7 +1456,7 @@ describe('REST API', () => {
     });
 
     expect(result.status).toBe(200);
-    expect(result.body.replyTarget).toBe('dm:@oldpan:task-roo');
+    expect(result.body.replyTarget).toBe(`dm:@oldpan:${buildThreadShortId('task-root-0000-0000-0000-0000000000000000')}`);
   });
 
   it('POST /api/conversations/:id/open-thread 在缺失 snapshot 时不应把普通触发消息当成 DM thread root', async () => {
@@ -1517,13 +1532,13 @@ describe('REST API', () => {
         taskId: 'agent-channel-task',
         sourceType: 'channel',
         sourceLabel: '#default',
-        linkedThreadShortId: 'agtask01',
+        linkedThreadShortId: buildThreadShortId('agtask01-0000-0000-0000-000000000000'),
       }),
       expect.objectContaining({
         taskId: 'agent-dm-task',
         sourceType: 'dm',
         sourceLabel: 'DM',
-        linkedThreadShortId: 'dmtask01',
+        linkedThreadShortId: buildThreadShortId('dmtask01-0000-0000-0000-000000000000'),
       }),
     ]));
   });
@@ -2362,13 +2377,7 @@ describe('REST API', () => {
     ).get(carolConv.id) as { count: number };
     expect(carolRunCount.count).toBe(1);
 
-    const carolDebug = db.prepare(
-      `SELECT prompt_text as promptText, context_text as contextText
-       FROM run_debug_inputs
-       WHERE conversation_id = ?
-       ORDER BY created_at DESC
-       LIMIT 1`,
-    ).get(carolConv.id) as { promptText: string; contextText: string | null } | undefined;
+    const carolDebug = await waitForRunDebug(carolConv.id);
     expect(carolDebug?.promptText).toContain(`[System: Your collaborative thread in #${channel.name} received a reply from User.]`);
 
     const participantsBlock = (text?: string | null) => (
@@ -2589,13 +2598,7 @@ describe('REST API', () => {
     ).get(staleOwner.agentId, channel.channelId, rootMessageId.slice(0, 8)) as { count: number };
     expect(staleConvCount.count).toBe(0);
 
-    const rootDebug = db.prepare(
-      `SELECT prompt_text as promptText, context_text as contextText
-       FROM run_debug_inputs
-       WHERE conversation_id = ?
-       ORDER BY created_at DESC
-       LIMIT 1`,
-    ).get(rootConv.id) as { promptText: string; contextText: string | null } | undefined;
+    const rootDebug = await waitForRunDebug(rootConv.id);
     expect(rootDebug?.promptText).toContain(`[System: Your collaborative thread in #${channel.name} received a reply from User.]`);
     expect(rootDebug?.contextText).toContain('[Bound task-message for this thread]');
     expect(rootDebug?.contextText).toContain('#31 [done] @RootAuthor — Done task root');
@@ -2694,6 +2697,7 @@ describe('REST API', () => {
 
   it('POST /api/channels/:id/messages 在 task thread 中同时命中 assignee、recent participant 和显式 @mention 时应保持 reason 优先级与 participants 一致', async () => {
     const now = Date.now();
+    const channel = manager.createChannel({ name: `mix-priority-${randomUUID().slice(0, 8)}` });
     const owner = manager.createAgent({
       name: 'MixOwner',
       agentType: 'claude_acp',
@@ -2712,44 +2716,44 @@ describe('REST API', () => {
       nodeId: 'missing-node',
       workspacePath: '/tmp/mix-mentioned',
     });
-    manager.joinChannel(owner.agentId, 'default');
-    manager.joinChannel(helper.agentId, 'default');
-    manager.joinChannel(mentioned.agentId, 'default');
+    manager.joinChannel(owner.agentId, channel.channelId);
+    manager.joinChannel(helper.agentId, channel.channelId);
+    manager.joinChannel(mentioned.agentId, channel.channelId);
 
     const rootMessageId = 'mixa1u00-0000-0000-0000-000000000000';
     const threadRootId = rootMessageId.slice(0, 8);
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
-       VALUES(?, 'default', ?, ?, 'agent', '#default', ?, ?, ?)`,
-    ).run(rootMessageId, owner.agentId, owner.name, 'Task root kickoff', allocateNextChannelMessageSeq(db, 'default'), now);
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?)`,
+    ).run(rootMessageId, channel.channelId, owner.agentId, owner.name, `#${channel.name}`, 'Task root kickoff', allocateNextChannelMessageSeq(db, channel.channelId), now);
     db.prepare(
       `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
-       VALUES('task-mix-a1u', 'default', 301, 'Mixed priority task', 'Goal: verify assignee, recent participant, and explicit mention all wake together with stable context.', 'in_progress', ?, ?, ?, ?, ?)`,
-    ).run(owner.agentId, owner.name, rootMessageId, now, now);
+       VALUES('task-mix-a1u', ?, 301, 'Mixed priority task', 'Goal: verify assignee, recent participant, and explicit mention all wake together with stable context.', 'in_progress', ?, ?, ?, ?, ?)`,
+    ).run(channel.channelId, owner.agentId, owner.name, rootMessageId, now, now);
 
     upsertTargetParticipant(db, {
       agentId: owner.agentId,
-      channelId: 'default',
+      channelId: channel.channelId,
       threadRootId,
       role: 'owner',
       lastActiveAt: now,
     });
     upsertTargetParticipant(db, {
       agentId: helper.agentId,
-      channelId: 'default',
+      channelId: channel.channelId,
       threadRootId,
       role: 'participant',
       lastActiveAt: now,
     });
     upsertTargetParticipant(db, {
       agentId: mentioned.agentId,
-      channelId: 'default',
+      channelId: channel.channelId,
       threadRootId,
       role: 'participant',
       lastActiveAt: now,
     });
 
-    const response = await fetchJson('/api/channels/default/messages', {
+    const response = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -2761,9 +2765,9 @@ describe('REST API', () => {
 
     expect(response.status).toBe(201);
 
-    const ownerConv = manager.openAgentChannelThread(owner.agentId, 'default', threadRootId);
-    const helperConv = manager.openAgentChannelThread(helper.agentId, 'default', threadRootId);
-    const mentionedConv = manager.openAgentChannelThread(mentioned.agentId, 'default', threadRootId);
+    const ownerConv = manager.openAgentChannelThread(owner.agentId, channel.channelId, threadRootId);
+    const helperConv = manager.openAgentChannelThread(helper.agentId, channel.channelId, threadRootId);
+    const mentionedConv = manager.openAgentChannelThread(mentioned.agentId, channel.channelId, threadRootId);
     expect(ownerConv).not.toBeNull();
     expect(helperConv).not.toBeNull();
     expect(mentionedConv).not.toBeNull();
@@ -2790,9 +2794,9 @@ describe('REST API', () => {
        LIMIT 1`,
     ).get(mentionedConv?.id) as { promptText: string; contextText: string | null } | undefined;
 
-    expect(ownerDebug?.promptText).toContain('Your collaborative thread in #default received a reply from User.');
-    expect(helperDebug?.promptText).toContain('Your collaborative thread in #default received a reply from User.');
-    expect(mentionedDebug?.promptText).toContain('You were @mentioned in #default by User.');
+    expect(ownerDebug?.promptText).toContain(`Your collaborative thread in #${channel.name} received a reply from User.`);
+    expect(helperDebug?.promptText).toContain(`Your collaborative thread in #${channel.name} received a reply from User.`);
+    expect(mentionedDebug?.promptText).toContain(`You were @mentioned in #${channel.name} by User.`);
 
     const participantsBlock = (text?: string | null) => (
       /\[Active participants on this target\]\n([\s\S]*?)(?:\n\n\[|$)/.exec(text ?? '')?.[1]?.trim() ?? ''
@@ -3006,7 +3010,7 @@ describe('REST API', () => {
 
     expect(status).toBe(200);
     const task = (body.tasks as Array<{ taskId: string; linkedThreadShortId?: string | null }>).find((item) => item.taskId === 'task-list-root');
-    expect(task?.linkedThreadShortId).toBe('feedbeef');
+    expect(task?.linkedThreadShortId).toBe(buildThreadShortId('feedbeef-0000-0000-0000-000000000000'));
   });
 
   it('PATCH /api/channels/:id/tasks/:num/status 标记 done 时应清空 task root owner', async () => {
@@ -3073,7 +3077,7 @@ describe('REST API', () => {
     expect(status).toBe(201);
     expect(body.status).toBe('in_progress');
     expect(body.assigneeName).toBe('Alice');
-    expect(body.linkedThreadShortId).toBe('claimfee');
+    expect(body.linkedThreadShortId).toBe(buildThreadShortId('claimfeed-0000-0000-0000-000000000000'));
     expect(body.description).toContain('Goal: turn this into a tracked task');
 
     const messageRow = db.prepare(
@@ -3259,27 +3263,32 @@ describe('REST API', () => {
     expect(claimed.body.assigneeId).toBe(agent.agentId);
     expect(claimed.body.assigneeName).toBe(agent.name);
 
+    const taskThreadRootId = claimed.body.linkedThreadShortId as string;
+    expect(taskThreadRootId).toBe(buildThreadShortId('assignfeed-0000-0000-0000-000000000000'));
     const owner = db.prepare(
       `SELECT role FROM target_participants
-       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = 'assignfe'`,
-    ).get(agent.agentId) as { role: string } | undefined;
+       WHERE agent_id = ? AND channel_id = 'default' AND thread_root_id = ?`,
+    ).get(agent.agentId, taskThreadRootId) as { role: string } | undefined;
     expect(owner?.role).toBe('owner');
 
     const kickoff = db.prepare(
-      `SELECT sender_name as senderName, content, thread_root_id as threadRootId
+      `SELECT sender_name as senderName, content, target, thread_root_id as threadRootId
        FROM channel_messages
-       WHERE channel_id = 'default' AND thread_root_id = 'assignfe'
+       WHERE channel_id = 'default' AND sender_name = 'Alice' AND content LIKE '@AssignMe%'
        ORDER BY seq DESC
        LIMIT 1`,
-    ).get() as { senderName: string; content: string; threadRootId: string };
+    ).get() as { senderName: string; content: string; target: string; threadRootId: string } | undefined;
+    expect(kickoff).toBeTruthy();
+    if (!kickoff) throw new Error('missing kickoff thread reply');
     expect(kickoff.senderName).toBe('Alice');
-    expect(kickoff.threadRootId).toBe('assignfe');
+    expect(kickoff.threadRootId).toBe(taskThreadRootId);
+    expect(kickoff.target).toBe(`#default:${taskThreadRootId}`);
     expect(kickoff.content).toContain('@AssignMe');
     expect(kickoff.content).toContain('Task brief / goal / done criteria:');
     expect(kickoff.content).toContain('Goal: have the agent start from the task thread.');
 
     const branch = manager.listConversations().find((conversation) =>
-      conversation.agentId === agent.agentId && conversation.channelId === 'default' && conversation.threadRootId === 'assignfe');
+      conversation.agentId === agent.agentId && conversation.channelId === 'default' && conversation.threadRootId === taskThreadRootId);
     expect(branch).toBeTruthy();
   });
 

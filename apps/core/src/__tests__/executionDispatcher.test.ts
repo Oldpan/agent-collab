@@ -172,7 +172,7 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.systemPromptText).toContain('Treat the current `reply_target` as the shared work surface for that conversation.');
     expect(dispatch.systemPromptText).toContain('If you need another agent\'s help in a channel or thread, explicitly `@mention` them');
     expect(dispatch.systemPromptText).toContain('If you are not the owner of the current task thread, default to coordination, review, or support');
-    expect(dispatch.systemPromptText).toContain('If you are only answering a question, clarifying, or having a short conversation, do **not** claim a task.');
+    expect(dispatch.systemPromptText).toContain('Only create or claim a task in a primary DM if the user explicitly wants task tracking');
     expect(dispatch.systemPromptText).toContain('If fulfilling a message requires action beyond replying');
     expect(dispatch.systemPromptText).toContain('claim_tasks') ;
     expect(dispatch.systemPromptText).toContain('message_ids=["msgid"], description="goal and done criteria"');

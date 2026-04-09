@@ -458,7 +458,7 @@ server.tool(
 
 server.tool(
   'create_tasks',
-  "Create one or more new task-messages in a top-level channel or DM. Each task requires a title and a brief that states the goal and done criteria. Each created task gets a task root message and a default thread. Use this only for genuinely new work or subtasks. Do not use it to convert an existing message — use claim_tasks with message_ids instead. In a primary DM, the platform will open the task thread automatically and mirror lifecycle status in the main DM. Do not manually send follow-up messages in the main DM after the handoff starts.",
+  "Create one or more new task-messages in a top-level channel or DM. Each task requires a title and a brief that states the goal and done criteria. Each created task gets a task root message and a default thread. Use this only for genuinely new work or subtasks. Do not use it to convert an existing message — use claim_tasks with message_ids instead. Do not use this for ordinary primary-DM conversation; in a primary DM, default to a direct reply unless the user explicitly wants task tracking or the request clearly needs multi-step tracked work. In a primary DM, the platform will open the task thread automatically and mirror lifecycle status in the main DM. Do not manually send follow-up messages in the main DM after the handoff starts.",
   {
     channel: z.string().describe("The channel or DM to create tasks in — e.g. '#general' or 'dm:@User'"),
     tasks: z
@@ -515,7 +515,7 @@ server.tool(
 
 server.tool(
   'claim_message',
-  `Compatibility alias for claim_tasks(message_ids=[...]). Promote one or more existing top-level channel or DM messages into task-messages and claim them. Use the 8-character msg= ID from received messages or read_history. In the current primary DM, you may use message_ids=["current"] to claim the latest user request instead of manually picking an older msg id. Each promoted message becomes the task root and default thread. In a primary DM, the platform will hand the task off to its task thread and mirror lifecycle status in the main DM; do not manually continue in the main DM after that starts. If a message is already a task-message, the claim fails. Thread messages cannot be converted. The task brief is required; use separate calls when promoted messages need different briefs.`,
+  `Compatibility alias for claim_tasks(message_ids=[...]). Promote one or more existing top-level channel or DM messages into task-messages and claim them. Use the 8-character msg= ID from received messages or read_history. In the current primary DM, you may use message_ids=["current"] to claim the latest user request instead of manually picking an older msg id. Do not use this for ordinary primary-DM conversation; in a primary DM, default to a direct reply unless the user explicitly wants task tracking or the request clearly needs multi-step tracked work. Each promoted message becomes the task root and default thread. In a primary DM, the platform will hand the task off to its task thread and mirror lifecycle status in the main DM; do not manually continue in the main DM after that starts. If a message is already a task-message, the claim fails. Thread messages cannot be converted. The task brief is required; use separate calls when promoted messages need different briefs.`,
   {
     channel: z.string().describe("The channel or DM — e.g. '#engineering' or 'dm:@User'"),
     message_ids: z.array(z.string()).describe("8-char message IDs (the msg= value from check_messages or read_history, e.g. ['a1b2c3d4']). In the current primary DM you may use ['current'] to claim the latest user request."),
@@ -616,7 +616,7 @@ server.tool(
 1. By task number: claim existing tasks shown in list_tasks. Use task_numbers=[1, 3].
 2. By message ID: convert a regular top-level channel or DM message into a task and claim it. Use message_ids=["a1b2c3d4"] with description="goal and done criteria". In the current primary DM, prefer message_ids=["current"] for the latest user request.
 
-Thread messages cannot be claimed or converted into tasks. If a task is in "todo" status, claiming auto-advances it to "in_progress". If another agent already claimed it, the claim fails — do not work on that task, move on. In a primary DM, a successful claim is handed off to the task thread automatically; stop the current run and let the thread continue the work. Always claim before starting any work to prevent duplicate effort.`,
+Thread messages cannot be claimed or converted into tasks. If a task is in "todo" status, claiming auto-advances it to "in_progress". If another agent already claimed it, the claim fails — do not work on that task, move on. Do not use this for ordinary primary-DM conversation; in a primary DM, default to a direct reply unless the user explicitly wants task tracking or the request clearly needs multi-step tracked work. In a primary DM, a successful claim is handed off to the task thread automatically; stop the current run and let the thread continue the work. Claim before starting trackable execution work.`,
   {
     channel: z.string().describe("The channel or DM whose tasks to claim — e.g. '#general' or 'dm:@User'"),
     task_numbers: z.array(z.number()).optional().describe('Task numbers to claim (e.g. [1, 3, 5])'),

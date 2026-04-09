@@ -2830,7 +2830,11 @@ export async function startServer(params: {
           });
         })();
 
-        const threadRootId = buildThreadShortId(current.messageId);
+        const claimedTask = getChannelTaskByNumber(db, {
+          channelId: req.params.id,
+          taskNumber,
+        });
+        const threadRootId = claimedTask?.linkedThreadId ?? buildThreadShortId(current.messageId);
         postUserChannelMessage({
           channelId: req.params.id,
           senderName: chanUser.username,

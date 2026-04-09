@@ -284,7 +284,7 @@ function ThreadComposer({
       }
       if (e.key === "Escape") { e.preventDefault(); setMentionQuery(null); return; }
     }
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); void handleSubmit(); }
+    if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); void handleSubmit(); }
   }, [mentionQuery, mentionCandidates, mentionIndex, selectMention, handleSubmit]);
 
   return (
@@ -317,7 +317,7 @@ function ThreadComposer({
             "min-h-[36px] max-h-[160px] flex-1 resize-none rounded-sm border border-transparent bg-transparent px-2 py-1.5 text-sm text-zinc-900",
             "placeholder:text-zinc-400 focus:outline-none disabled:opacity-50",
           )}
-          placeholder="Reply in thread..."
+          placeholder="Reply in thread... (Enter for newline, Shift+Enter to send)"
           disabled={sending}
           rows={1}
         />

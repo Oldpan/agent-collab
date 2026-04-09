@@ -1,6 +1,6 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import Fastify from 'fastify';
-import type { CoreToNode } from '@agent-collab/protocol';
+import { buildThreadShortId, type CoreToNode } from '@agent-collab/protocol';
 import type { Db } from '@agent-collab/runtime-acp';
 import { createRun, finishRun } from '@agent-collab/runtime-acp';
 import { createTestConfig, createTestDb } from './helpers.js';
@@ -377,7 +377,7 @@ describe('internalAgentRouter', () => {
       success: true,
       messageId: 'currtask-0000-0000-0000-000000000000',
       handoffStarted: true,
-      threadTarget: 'dm:@oldpan:currtask',
+      threadTarget: `dm:@oldpan:${buildThreadShortId('currtask-0000-0000-0000-000000000000')}`,
     });
     expect(claimBody.results[0].threadConversationId).toBeTruthy();
     await settleDispatches();
@@ -393,7 +393,7 @@ describe('internalAgentRouter', () => {
     ).get(claimBody.results[0].threadConversationId) as { promptText: string } | undefined;
     expect(threadRun?.promptText).toContain('[DM Task Thread Handoff]');
     expect(threadRun?.promptText).toContain('[Current conversation target]');
-    expect(threadRun?.promptText).toContain('reply_target: dm:@oldpan:currtask');
+    expect(threadRun?.promptText).toContain(`reply_target: dm:@oldpan:${buildThreadShortId('currtask-0000-0000-0000-000000000000')}`);
     expect(threadRun?.promptText).toContain('Inspect current memory usage and summarize the result in the task thread.');
     const threadDebug = db.prepare(
       `SELECT context_text as contextText
@@ -418,7 +418,7 @@ describe('internalAgentRouter', () => {
 
     expect(blockedRes.status).toBe(409);
     expect(await blockedRes.json()).toEqual({
-      error: 'This run already handed off DM task work to dm:@oldpan:currtask. Do not continue work in dm:@oldpan; the platform mirrors task status there and detailed execution belongs in the task thread conversation.',
+      error: `This run already handed off DM task work to dm:@oldpan:${buildThreadShortId('currtask-0000-0000-0000-000000000000')}. Do not continue work in dm:@oldpan; the platform mirrors task status there and detailed execution belongs in the task thread conversation.`,
     });
 
     const lifecycleRow = db.prepare(
@@ -489,7 +489,7 @@ describe('internalAgentRouter', () => {
     });
     expect(invalidSendRes.status).toBe(409);
     expect(await invalidSendRes.json()).toEqual({
-      error: 'This run already handed off DM task work to dm:@oldpan:keepovrd. Do not continue work in dm:@oldpan; the platform mirrors task status there and detailed execution belongs in the task thread conversation.',
+      error: `This run already handed off DM task work to dm:@oldpan:${buildThreadShortId('keepovrd-0000-0000-0000-000000000000')}. Do not continue work in dm:@oldpan; the platform mirrors task status there and detailed execution belongs in the task thread conversation.`,
     });
 
     const rows = db.prepare(
@@ -556,7 +556,7 @@ describe('internalAgentRouter', () => {
     expect(createBody.tasks[0].taskNumber).toBe(1);
     expect(createBody.tasks[0].handoffStarted).toBe(true);
     expect(createBody.tasks[0].threadConversationId).toBeTruthy();
-    expect(createBody.tasks[0].threadTarget).toBe(`dm:@oldpan:${createBody.tasks[0].messageId.slice(0, 8)}`);
+    expect(createBody.tasks[0].threadTarget).toBe(`dm:@oldpan:${buildThreadShortId(createBody.tasks[0].messageId)}`);
     const createdTaskRow = db.prepare(
       `SELECT status, claimed_by_agent_id as claimedByAgentId
        FROM tasks
@@ -2563,7 +2563,7 @@ describe('internalAgentRouter', () => {
       success: true,
       messageId: 'claimmsgdm-0000-0000-0000-000000000000',
       handoffStarted: true,
-      threadTarget: 'dm:@oldpan:claimmsg',
+      threadTarget: `dm:@oldpan:${buildThreadShortId('claimmsgdm-0000-0000-0000-000000000000')}`,
     });
 
     const blockedRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
@@ -2684,16 +2684,16 @@ describe('internalAgentRouter', () => {
 
     expect(res.status).toBe(200);
     const body = await res.json() as {
-      results: Array<{ taskNumber?: number; success: boolean; messageId?: string; context?: Array<unknown> }>;
+      results: Array<{ taskNumber?: number; success: boolean; messageId?: string; context?: Array<unknown>; agentTaskRef?: string }>;
     };
-    expect(body.results).toEqual([
-      {
-        taskNumber: 1,
-        success: true,
-        messageId: 'dmclaim0-0000-0000-0000-000000000000',
-        context: [],
-      },
-    ]);
+    expect(body.results).toHaveLength(1);
+    expect(body.results[0]).toMatchObject({
+      taskNumber: 1,
+      success: true,
+      messageId: 'dmclaim0-0000-0000-0000-000000000000',
+      context: [],
+    });
+    expect(body.results[0]?.agentTaskRef).toBeTruthy();
 
     const taskRow = db.prepare(
       `SELECT channel_id as channelId, status, claimed_by_agent_id as claimedByAgentId
@@ -2921,7 +2921,9 @@ describe('internalAgentRouter', () => {
       }),
     });
     expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: 'Only a channel user can mark a task done' });
+    expect(await res.json()).toEqual({
+      error: 'Only a human user can mark a task done. If your work is complete, move it to in_review first unless the user explicitly approved done.',
+    });
 
     participant = db.prepare(
       `SELECT role FROM target_participants

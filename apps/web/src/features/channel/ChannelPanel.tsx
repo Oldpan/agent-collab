@@ -458,7 +458,7 @@ function ChannelComposer({
           return;
         }
       }
-      if (e.key === "Enter" && !e.shiftKey) {
+      if (e.key === "Enter" && e.shiftKey) {
         e.preventDefault();
         void handleSubmit();
       }
@@ -545,7 +545,7 @@ function ChannelComposer({
             "min-h-[40px] max-h-[200px] flex-1 resize-none rounded-sm border border-transparent bg-transparent px-3 py-2 text-sm text-zinc-900",
             "placeholder:text-zinc-400 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50",
           )}
-          placeholder="Send a message... (@ to mention, Shift+Enter for newline)"
+          placeholder="Send a message... (@ to mention, Enter for newline, Shift+Enter to send)"
           disabled={sending}
           onKeyDown={handleKeyDown}
           rows={1}
