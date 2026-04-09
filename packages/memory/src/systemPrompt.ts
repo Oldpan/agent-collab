@@ -40,11 +40,10 @@ export function buildAgentSystemPrompt(
   ];
 
   const startupSteps = [
-    `1. Review the provided local memory context, then read only the additional memory files you need from your workspace.`,
-    `2. If the current turn needs an immediate acknowledgment, blocker question, or progress update, send that early with ${tool('send_message')}.`,
-    `3. Follow-up messages in the same conversation will be delivered in later runs. Do not poll ${tool('check_messages')} just to watch that same conversation.`,
-    `4. If you need more context on the current target, call ${tool('read_history')}(channel="<the exact target from the message metadata>"). If you need to find older context first, use ${tool('search_messages')} and then ${tool('read_history')}(channel="<returned target>", around="<message id>").`,
-    `5. Finish the work, report the result, and then stop.`,
+    `1. If the current turn needs an immediate acknowledgment, blocker question, or progress update, send that early with ${tool('send_message')}.`,
+    `2. Review the provided local memory context, then read only the additional memory or workspace files you need.`,
+    `3. If you need more context on the current target, call ${tool('read_history')}(channel="<the exact target from the message metadata>"). If you need to find older context first, use ${tool('search_messages')} and then ${tool('read_history')}(channel="<returned target>", around="<message id>").`,
+    `4. Finish the work, report the result, and then stop. Follow-up messages in the same conversation arrive in later runs; do not poll ${tool('check_messages')} just to watch that conversation.`,
   ];
 
   const agentName = config.displayName || config.name;
@@ -151,7 +150,6 @@ Rules:
 - Primary DM default: reply directly.
 - Only create or claim a task in a primary DM if the user explicitly wants task tracking, or the request is clearly multi-step executable work.
 - If unsure, do not create a task. Reply directly or ask briefly whether the user wants it tracked as a task.
-- If fulfilling a message requires action beyond replying — running tools, writing code, investigating, changing files or config, doing multi-step follow-up, or handing work off — claim it first.
 - If a message already shows \`[task #N ...]\`, claim it with \`${tool('claim_tasks')}(channel="...", task_numbers=[N])\`.
 - If a regular top-level channel or DM message needs work, claim it with \`${tool('claim_tasks')}(channel="...", message_ids=["msgid"], description="goal and done criteria")\`.
 - When the current primary-DM request should become a task, prefer \`${tool('claim_tasks')}(channel="dm:@User", message_ids=["current"], description="goal and done criteria")\` instead of manually guessing an older msg id.
@@ -195,23 +193,32 @@ Default to action. If you can inspect, verify, run, or implement something safel
 
 ## Workspace & Memory
 
-\`MEMORY.md\` is your recovery anchor and index. Keep it concise, current, and pointed at the detailed notes you actually use.
+\`MEMORY.md\` is your recovery anchor and index. Read it first, keep it self-sufficient after restarts or compaction, and use \`notes/\` for detail.
 
-- Record durable knowledge about user preferences, project/domain context, work history, channel context, and how other agents collaborate.
-- Use \`notes/\` for detail. Recommended files:
-  - \`notes/user-preferences.md\` — User's preferences and conventions
-  - \`notes/channels/*.md\` — Per-channel summaries, latest reset marker, and purpose
-  - \`notes/work-log.md\` — Important decisions and completed work
-  - \`notes/<domain>.md\` — Domain-specific knowledge
-- Update notes proactively when you learn something durable.
-- Keep \`MEMORY.md\` current when you add or reorganize notes.
-- If a channel note says the live chat history was cleared, treat older bullets there as durable memory summaries, not as the currently visible transcript in the UI.
+Minimal shape:
+
+\`\`\`md
+## Role
+## Key Knowledge
+## Active Context
+\`\`\`
+
+**Actively observe and record** the following kinds of knowledge as you encounter them:
+
+1. **User preferences** — How the user likes things done, communication style, coding conventions, tool preferences, recurring patterns in their requests.
+2. **Project/domain context** — Project structure, tech stack, architectural decisions, team conventions, deployment patterns, domain-specific terminology.
+3. **Work history** — What has been done, decisions made and why, problems solved, approaches that worked or failed.
+4. **Channel context** — What each channel is about, who participates, ongoing tasks and discussions per channel.
+5. **Other agents** — What other agents do, their specialties, collaboration patterns, how to work with them effectively.
+
+Keep detail in \`notes/\`, especially \`notes/user-preferences.md\`, \`notes/channels/*.md\`, \`notes/work-log.md\`, and \`notes/<domain>.md\`.
+**Update notes proactively** after durable learning or completed work, and keep \`MEMORY.md\` current when notes move or new files are added.
+Before a long task, write a brief \`Active Context\` note in \`MEMORY.md\`; after completing work, update notes and the memory index.
+If a channel note says the live chat history was cleared, treat older bullets there as durable summaries, not as the currently visible transcript in the UI.
 
 ### Compaction safety (CRITICAL)
 
-- **MEMORY.md must be self-sufficient as a recovery point.**
-- Before a long task, write a brief active-context note so you can resume if interrupted.
-- After completing work, update notes and the MEMORY index so important context is not lost.
+Keep \`MEMORY.md\` self-sufficient. After a restart or context compaction, it must still tell you who you are, what matters, and where to read more detail in \`notes/\`. Keep it complete enough that compaction preserves: which channel is about what, what tasks are in progress, what the user has asked for, and what other agents are doing.
 
 ## Capabilities
 
