@@ -36,6 +36,29 @@ describe('workspaceFs', () => {
     expect(result.content).toContain('# Memory');
   });
 
+  it('应支持读取常见图片预览并返回 data url', () => {
+    const root = createWorkspace();
+    const pngBytes = Buffer.from('89504E470D0A1A0A0000000D49484452', 'hex');
+    fs.writeFileSync(path.join(root, 'notes', 'plot.png'), pngBytes);
+
+    const result = readWorkspaceFile(root, 'notes/plot.png');
+
+    expect(result.mimeType).toBe('image/png');
+    expect(result.content.startsWith('data:image/png;base64,')).toBe(true);
+    expect(result.size).toBe(pngBytes.length);
+  });
+
+  it('应将 svg 当作图片预览返回', () => {
+    const root = createWorkspace();
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"></svg>';
+    fs.writeFileSync(path.join(root, 'notes', 'diagram.svg'), svg, 'utf8');
+
+    const result = readWorkspaceFile(root, 'notes/diagram.svg');
+
+    expect(result.mimeType).toBe('image/svg+xml');
+    expect(result.content.startsWith('data:image/svg+xml;base64,')).toBe(true);
+  });
+
   it('应支持写入和追加文本文件', () => {
     const root = createWorkspace();
 

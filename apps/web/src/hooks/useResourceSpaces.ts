@@ -14,6 +14,7 @@ type ResourceSpacesState = {
   setLoading: (loading: boolean) => void;
   addResourceSpace: (resourceSpace: ResourceSpaceInfo) => void;
   replaceResourceSpace: (resourceSpace: ResourceSpaceInfo) => void;
+  removeResourceSpace: (resourceSpaceId: string) => void;
 };
 
 const useResourceSpacesStore = create<ResourceSpacesState>((set) => ({
@@ -29,6 +30,10 @@ const useResourceSpacesStore = create<ResourceSpacesState>((set) => ({
         item.resourceSpaceId === resourceSpace.resourceSpaceId ? resourceSpace : item,
       ),
     })),
+  removeResourceSpace: (resourceSpaceId) =>
+    set((state) => ({
+      resourceSpaces: state.resourceSpaces.filter((item) => item.resourceSpaceId !== resourceSpaceId),
+    })),
 }));
 
 export function useResourceSpaces() {
@@ -39,6 +44,7 @@ export function useResourceSpaces() {
     setLoading,
     addResourceSpace,
     replaceResourceSpace,
+    removeResourceSpace,
   } = useResourceSpacesStore();
 
   useEffect(() => {
@@ -76,6 +82,11 @@ export function useResourceSpaces() {
     return resourceSpace;
   }, [replaceResourceSpace]);
 
+  const deleteResourceSpace = useCallback(async (resourceSpaceId: string) => {
+    await api.deleteResourceSpace(resourceSpaceId);
+    removeResourceSpace(resourceSpaceId);
+  }, [removeResourceSpace]);
+
   const refreshResourceSpaces = useCallback(async () => {
     setLoading(true);
     try {
@@ -92,6 +103,7 @@ export function useResourceSpaces() {
     loading,
     createResourceSpace,
     updateResourceSpace,
+    deleteResourceSpace,
     refreshResourceSpaces,
   };
 }

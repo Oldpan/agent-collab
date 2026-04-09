@@ -507,6 +507,71 @@ describe('nodeWsHandler', () => {
     expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
   });
 
+  it('plan/task updated 噪音 delta 不应落 delta_fallback 聊天记录', () => {
+    const agent = manager.createAgent({
+      name: 'PlanNoiseBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/plan-noise-bob-contract',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const socket = new FakeSocket();
+    const events: any[] = [];
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(socket as any, registry as any, (_conversationId, event) => {
+      events.push(event);
+    }, db, manager);
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-plan-delta-fallback-1',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'hello',
+    });
+
+    db.prepare(
+      `INSERT INTO events(run_id, seq, method, payload_json, created_at)
+       VALUES
+       (?, 1, 'node/event', ?, ?),
+       (?, 2, 'node/event', ?, ?)`,
+    ).run(
+      'run-plan-delta-fallback-1',
+      JSON.stringify({
+        type: 'content.delta',
+        text: '[plan] Plan updated',
+      }),
+      1000,
+      'run-plan-delta-fallback-1',
+      JSON.stringify({
+        type: 'content.delta',
+        text: 'Task updated',
+      }),
+      1001,
+    );
+
+    socket.emit('message', JSON.stringify({
+      type: 'run.end',
+      runId: 'run-plan-delta-fallback-1',
+      conversationId: conv.id,
+      stopReason: 'end_turn',
+    }));
+
+    const fallbackCount = db.prepare(
+      `SELECT COUNT(*) as count
+       FROM channel_messages
+       WHERE run_id = ? AND message_source = 'delta_fallback'`,
+    ).get('run-plan-delta-fallback-1') as { count: number };
+    expect(fallbackCount.count).toBe(0);
+    expect(events.some((event) => event.type === 'conversation.status' && event.status === 'idle')).toBe(true);
+  });
+
   it('私聊 run 已绑定 send_message 时应允许正常完成', () => {
     const agent = manager.createAgent({
       name: 'Alice',

@@ -322,8 +322,15 @@ function normalizeComparisonText(text: string): string {
 function stripLegacyStatusText(text: string): string {
   return text
     .split('\n')
+    .filter((line) => !/^\s*(?:-\s*)?(?:\[(?:plan|task)\]\s*)?(?:plan|task)\s+updated\s*$/i.test(line))
     .filter((line) => !/^\s*(?:-\s*)?\[(?:plan|task)\]\b/i.test(line))
     .join('\n');
+}
+
+function stripFallbackNoiseTokens(text: string): string {
+  return text
+    .replace(/\[(?:plan|task)\]\s*(?:plan|task)\s+updated/ig, '')
+    .replace(/(?:plan|task)\s+updated/ig, '');
 }
 
 function stripInternalReminderTail(text: string): string {
@@ -333,11 +340,20 @@ function stripInternalReminderTail(text: string): string {
 }
 
 function cleanFallbackText(text: string): string {
-  return stripInternalReminderTail(stripLegacyStatusText(text)).trim();
+  return stripInternalReminderTail(stripFallbackNoiseTokens(stripLegacyStatusText(text))).trim();
+}
+
+function isIgnorablePlanOrTaskFallbackText(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  return normalized === 'plan updated'
+    || normalized === 'task updated'
+    || normalized === '[plan] plan updated'
+    || normalized === '[task] task updated';
 }
 
 function isIgnorableFallbackText(text: string): boolean {
-  return text.includes(`Empty response: {'content':`);
+  return text.includes(`Empty response: {'content':`)
+    || isIgnorablePlanOrTaskFallbackText(text);
 }
 
 function hasSubstantiveFallbackText(text: string): boolean {

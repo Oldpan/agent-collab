@@ -1,5 +1,6 @@
 import type { ActivationContextMessage } from './activationContext.js';
 import type { TargetParticipant } from './targetParticipants.js';
+import { sanitizePromptHistoryContent } from './promptHistorySanitizer.js';
 
 const MESSAGE_SEPARATOR = '\n\n---\n\n';
 
@@ -111,10 +112,18 @@ export function buildChannelActivationContextText(params: ChannelActivationConte
 
 export function buildExactTargetHistoryContextText(params: ExactTargetHistoryContextParams): string {
   const parts: string[] = [];
+  const visibleRecentMessages = (params.recentMessages ?? [])
+    .map((message) => {
+      const content = sanitizePromptHistoryContent(message.content, message.senderType);
+      return content
+        ? { ...message, content }
+        : null;
+    })
+    .filter((message): message is ActivationContextMessage => Boolean(message));
 
-  if (params.recentMessages && params.recentMessages.length > 0) {
+  if (visibleRecentMessages.length > 0) {
     parts.push(
-      `[Recent messages on this exact target]\n${params.recentMessages.map(formatPromptMessage).join(MESSAGE_SEPARATOR)}`,
+      `[Recent messages on this exact target]\n${visibleRecentMessages.map(formatPromptMessage).join(MESSAGE_SEPARATOR)}`,
     );
   }
 
@@ -136,9 +145,9 @@ export function buildExactTargetHistoryContextText(params: ExactTargetHistoryCon
 }
 
 function formatPromptMessage(message: ActivationContextMessage): string {
+  const visibleContent = sanitizePromptHistoryContent(message.content, message.senderType);
   const firstLine = [
     `target: ${message.target}`,
-    `msg: ${message.messageId.slice(0, 8)}`,
     `seq: ${message.seq}`,
   ].join('  ');
   const secondLineParts = [
@@ -152,6 +161,6 @@ function formatPromptMessage(message: ActivationContextMessage): string {
     secondLineParts.join('  '),
     '',
     '[Message body]',
-    message.content,
+    visibleContent,
   ].join('\n');
 }

@@ -343,6 +343,89 @@ describe('ExecutionDispatcher', () => {
     expect(secondDispatch.contextText).not.toContain('[Inbox]');
   });
 
+  it('恢复 prompt 应过滤 recent history / continuity 中纯 [plan]/[task] updated 噪音', async () => {
+    manager.close();
+    db.close();
+    db = createTestDb();
+    sent.length = 0;
+    manager = new ConversationManager({
+      db,
+      config: createTestConfig({ contextReplayEnabled: true, contextReplayRuns: 16 }),
+      nodeRegistry: fakeRegistry as any,
+    });
+    manager.start();
+
+    const agent = manager.createAgent({
+      name: 'Recover Noise Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/recover-noise-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    await manager.submitPrompt(conv.id, 'seed');
+    const firstDispatch = sent[0]?.msg;
+    if (!firstDispatch || firstDispatch.type !== 'run.dispatch') throw new Error('missing first dispatch');
+
+    const dmChannelId = `dm:${agent.agentId}`;
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id)
+       VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`,
+    ).run(
+      'noise-replay-msg',
+      dmChannelId,
+      agent.agentId,
+      agent.name,
+      'dm:@oldpan',
+      '[plan] Plan updated',
+      allocateNextChannelMessageSeq(db, dmChannelId),
+      Date.now() + 1,
+      firstDispatch.runId,
+    );
+    finishRun(db, { runId: firstDispatch.runId, stopReason: 'end_turn' });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', conv.id);
+
+    const recentPayloads = [
+      { senderId: 'user', senderName: 'oldpan', senderType: 'user', content: '现在跑的如何' },
+      { senderId: 'user', senderName: 'oldpan', senderType: 'user', content: '补一个 recent-1' },
+      { senderId: 'user', senderName: 'oldpan', senderType: 'user', content: '补一个 recent-2' },
+      { senderId: 'user', senderName: 'oldpan', senderType: 'user', content: '补一个 recent-3' },
+      { senderId: 'user', senderName: 'oldpan', senderType: 'user', content: '补一个 recent-4' },
+      { senderId: 'user', senderName: 'oldpan', senderType: 'user', content: '补一个 recent-5' },
+      { senderId: agent.agentId, senderName: agent.name, senderType: 'agent', content: '[plan] Plan updated\n\n[plan] Plan updated' },
+      { senderId: agent.agentId, senderName: agent.name, senderType: 'agent', content: '我先检查服务进程、接口健康和 GPU 占用。' },
+    ] as const;
+
+    for (const [index, row] of recentPayloads.entries()) {
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+         VALUES(?, ?, ?, ?, ?, 'dm:@oldpan', ?, ?, ?)`,
+      ).run(
+        `noise-recent-${index + 1}`,
+        dmChannelId,
+        row.senderId,
+        row.senderName,
+        row.senderType,
+        row.content,
+        allocateNextChannelMessageSeq(db, dmChannelId),
+        Date.now() + 2 + index,
+      );
+    }
+
+    await manager.submitPrompt(conv.id, '继续测 plain 测试集', { senderName: 'oldpan' });
+
+    const secondDispatch = sent[1]?.msg;
+    if (!secondDispatch || secondDispatch.type !== 'run.dispatch') throw new Error('missing second dispatch');
+    expect(secondDispatch.dispatchMode).toBe('resume');
+    expect(secondDispatch.contextText ?? '').toContain('Context (previous messages, for continuity after restart):');
+    expect(secondDispatch.contextText ?? '').toContain('User: seed');
+    expect(secondDispatch.contextText ?? '').toContain('[Recent messages on this exact target]');
+    expect(secondDispatch.contextText ?? '').toContain('现在跑的如何');
+    expect(secondDispatch.contextText ?? '').toContain('我先检查服务进程、接口健康和 GPU 占用。');
+    expect(secondDispatch.contextText ?? '').not.toContain('Plan updated');
+  });
+
   it('history_reset_at 之后 resume 不应 replay reset 之前的旧 runs', async () => {
     const agent = manager.createAgent({
       name: 'Reset Boundary Bob',

@@ -88,7 +88,7 @@ export function App() {
   const { agents, createAgent, updateAgent, deleteAgent, refreshAgents } = useAgents();
   const { machines, createMachine, deleteMachine } = useMachines();
   const { channels, createChannel, updateChannel: updateChannelInStore } = useChannels();
-  const { resourceSpaces, createResourceSpace } = useResourceSpaces();
+  const { resourceSpaces, createResourceSpace, deleteResourceSpace } = useResourceSpaces();
   const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [searchFocusTarget, setSearchFocusTarget] = useState<SearchFocusTarget | null>(null);
   const [channelTaskContextAgent, setChannelTaskContextAgent] = useState<ChannelTaskContextAgent | null>(null);
@@ -398,6 +398,7 @@ export function App() {
       sidebarCollapsed={!isMobile ? resourcesSidebarCollapsed : undefined}
       onExitResources={handleExitResources}
       onCreateResourceSpace={createResourceSpace}
+      onDeleteResourceSpace={deleteResourceSpace}
       onOpenConversation={(conversation) => {
         upsertConversation(conversation, { select: true });
         setSelectedChannelId(null);

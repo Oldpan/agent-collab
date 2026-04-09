@@ -26,6 +26,7 @@ export class ResourceSpaceService {
   private readonly getResourceSpaceById: (resourceSpaceId: string) => ResourceSpaceRecord | null;
   private readonly broker: AgentWorkspaceBroker;
   private readonly nodeRegistry: NodeRegistry;
+  private readonly preferredSharedMountNodes = new Map<string, string>();
 
   constructor(params: {
     getResourceSpaceById: (resourceSpaceId: string) => ResourceSpaceRecord | null;
@@ -71,17 +72,38 @@ export class ResourceSpaceService {
   ): Promise<T> {
     const candidateNodeIds = this.resolveCandidateNodeIds(resourceSpace);
     let lastError: unknown = null;
+    const attemptSummaries: string[] = [];
 
     for (const nodeId of candidateNodeIds) {
       try {
-        return await operation(nodeId);
+        const result = await operation(nodeId);
+        if (resourceSpace.backendType === 'shared_mount') {
+          this.preferredSharedMountNodes.set(resourceSpace.resourceSpaceId, nodeId);
+        }
+        return result;
       } catch (error) {
         lastError = error;
+        attemptSummaries.push(formatNodeAttemptSummary(nodeId, error));
         if (resourceSpace.backendType === 'shared_mount' && canTryNextSharedNode(error)) {
           continue;
         }
+        if (resourceSpace.backendType === 'node_path') {
+          const mapped = mapResourceSpaceError(error);
+          throw new ResourceSpaceServiceError(
+            mapped.statusCode,
+            `Node ${nodeId}: ${mapped.message}`,
+          );
+        }
         throw error;
       }
+    }
+
+    if (resourceSpace.backendType === 'shared_mount' && attemptSummaries.length > 0) {
+      const mapped = mapResourceSpaceError(lastError);
+      throw new ResourceSpaceServiceError(
+        mapped.statusCode,
+        `Unable to read shared resource space. Attempts: ${attemptSummaries.join(' | ')}`,
+      );
     }
 
     throw lastError ?? new Error('No node could access this resource space.');
@@ -98,7 +120,8 @@ export class ResourceSpaceService {
     const onlineNodes = this.nodeRegistry
       .listNodes()
       .sort((a, b) => b.lastSeen - a.lastSeen);
-    const preferredNodeId = resourceSpace.nodeId ?? null;
+    const stickyNodeId = this.preferredSharedMountNodes.get(resourceSpace.resourceSpaceId) ?? null;
+    const preferredNodeId = stickyNodeId ?? resourceSpace.nodeId ?? null;
     const preferred = preferredNodeId
       ? onlineNodes.filter((node) => node.nodeId === preferredNodeId).map((node) => node.nodeId)
       : [];
@@ -123,6 +146,7 @@ function canTryNextSharedNode(error: unknown): boolean {
     || message.startsWith('not_found:')
     || message.startsWith('not_directory:')
     || message.startsWith('not_file:')
+    || message.startsWith('binary_file:')
     || message.startsWith('io_error:')
   );
 }
@@ -156,4 +180,9 @@ function mapResourceSpaceError(error: unknown): ResourceSpaceServiceError {
     return new ResourceSpaceServiceError(400, message.slice(message.indexOf(':') + 1));
   }
   return new ResourceSpaceServiceError(500, message);
+}
+
+function formatNodeAttemptSummary(nodeId: string, error: unknown): string {
+  const mapped = mapResourceSpaceError(error);
+  return `${nodeId} -> ${mapped.message}`;
 }

@@ -1918,6 +1918,20 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     },
   );
 
+  app.delete<{ Params: { id: string } }>(
+    '/api/resource-spaces/:id',
+    async (req, reply) => {
+      if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
+      const existing = conversationManager.getResourceSpace(req.params.id);
+      if (!existing) {
+        reply.code(404);
+        return { error: 'Resource space not found' };
+      }
+      conversationManager.deleteResourceSpace(req.params.id);
+      return { ok: true };
+    },
+  );
+
   app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
     '/api/resource-spaces/:id/tree',
     async (req, reply) => {
@@ -1941,7 +1955,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     },
   );
 
-  app.get<{ Params: { id: string }; Querystring: { path?: string } }>(
+  app.get<{ Params: { id: string }; Querystring: { path?: string; format?: string } }>(
     '/api/resource-spaces/:id/file',
     async (req, reply) => {
       const resourceSpace = conversationManager.getResourceSpace(req.params.id);
@@ -1952,7 +1966,64 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       const user = requireResourceSpaceAccess(req, reply, req.params.id);
       if (!user) return { error: 'Access denied' };
       try {
-        return await resourceSpaceService.readFile(req.params.id, normalizeRequiredResourcePath(req.query.path));
+        const file = await resourceSpaceService.readFile(
+          req.params.id,
+          normalizeRequiredResourcePath(req.query.path),
+        );
+        if (req.query.format === 'raw') {
+          if (!file.mimeType.startsWith('image/')) {
+            reply.code(400);
+            return { error: 'Raw resource format only supports image previews.' };
+          }
+          const decoded = decodeBase64DataUrl(file.content, file.mimeType);
+          if (!decoded) {
+            reply.code(500);
+            return { error: 'Unable to decode image preview payload.' };
+          }
+
+          reply.header('Cache-Control', 'private, max-age=60');
+          reply.type(file.mimeType);
+          return reply.send(decoded);
+        }
+        return file;
+      } catch (error) {
+        if (error instanceof ResourceSpaceServiceError) {
+          reply.code(error.statusCode);
+          return { error: error.message };
+        }
+        reply.code(500);
+        return { error: String((error as Error)?.message ?? error) };
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { path?: string } }>(
+    '/api/resource-spaces/:id/file/raw',
+    async (req, reply) => {
+      const resourceSpace = conversationManager.getResourceSpace(req.params.id);
+      if (!resourceSpace) {
+        reply.code(404);
+        return { error: 'Resource space not found' };
+      }
+      const user = requireResourceSpaceAccess(req, reply, req.params.id);
+      if (!user) return { error: 'Access denied' };
+      try {
+        const file = await resourceSpaceService.readFile(
+          req.params.id,
+          normalizeRequiredResourcePath(req.body?.path),
+        );
+        if (!file.mimeType.startsWith('image/')) {
+          reply.code(400);
+          return { error: 'Raw resource format only supports image previews.' };
+        }
+        const decoded = decodeBase64DataUrl(file.content, file.mimeType);
+        if (!decoded) {
+          reply.code(500);
+          return { error: 'Unable to decode image preview payload.' };
+        }
+        reply.header('Cache-Control', 'private, max-age=60');
+        reply.type(file.mimeType);
+        return reply.send(decoded);
       } catch (error) {
         if (error instanceof ResourceSpaceServiceError) {
           reply.code(error.statusCode);
@@ -2002,6 +2073,11 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         }
         reply.code(500);
         return { error: String((error as Error)?.message ?? error) };
+      }
+
+      if (file.mimeType !== 'text/markdown' && file.mimeType !== 'text/plain') {
+        reply.code(400);
+        return { error: 'Only text files can be analyzed from Resources right now.' };
       }
 
       const conversation = conversationManager.openAgentThread(agentId, user.id);
@@ -3732,6 +3808,18 @@ function normalizeRequiredResourcePath(rawPath?: string): string {
   const trimmed = normalizeWorkspaceQueryPath(rawPath);
   if (!trimmed) throw new ResourceSpaceServiceError(400, 'path is required');
   return trimmed;
+}
+
+function decodeBase64DataUrl(content: string, expectedMimeType: string): Buffer | null {
+  const match = /^data:([^;,]+);base64,(.+)$/s.exec(content);
+  if (!match) return null;
+  const [, mimeType, base64Payload] = match;
+  if (mimeType !== expectedMimeType) return null;
+  try {
+    return Buffer.from(base64Payload, 'base64');
+  } catch {
+    return null;
+  }
 }
 
 function buildResourceAnalysisPrompt(params: {

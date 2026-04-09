@@ -6,11 +6,13 @@ import {
 } from '@agent-collab/runtime-acp';
 import type {
   AgentWorkspaceEntry,
+  WorkspacePreviewMimeType,
   WorkspaceErrorCode,
   WorkspaceWriteMode,
 } from '@agent-collab/protocol';
 
-const MAX_PREVIEW_BYTES = 256 * 1024;
+const MAX_TEXT_PREVIEW_BYTES = 256 * 1024;
+const MAX_IMAGE_PREVIEW_BYTES = 5 * 1024 * 1024;
 
 type WorkspaceListResult = {
   relativePath: string;
@@ -20,7 +22,7 @@ type WorkspaceListResult = {
 type WorkspaceReadResult = {
   relativePath: string;
   content: string;
-  mimeType: 'text/markdown' | 'text/plain';
+  mimeType: WorkspacePreviewMimeType;
   size: number;
   modifiedAt: number | null;
 };
@@ -80,11 +82,24 @@ export function readWorkspaceFile(
   const stat = fs.statSync(resolved, { throwIfNoEntry: false });
   if (!stat) throw new WorkspaceFsError('not_found', 'Path not found.');
   if (!stat.isFile()) throw new WorkspaceFsError('not_file', 'Path is not a file.');
-  if (stat.size > MAX_PREVIEW_BYTES) {
-    throw new WorkspaceFsError('file_too_large', `File exceeds preview limit (${MAX_PREVIEW_BYTES} bytes).`);
+  const mimeType = getPreviewMimeType(resolved);
+  const isImage = mimeType.startsWith('image/');
+  const maxPreviewBytes = isImage ? MAX_IMAGE_PREVIEW_BYTES : MAX_TEXT_PREVIEW_BYTES;
+  if (stat.size > maxPreviewBytes) {
+    throw new WorkspaceFsError('file_too_large', `File exceeds preview limit (${maxPreviewBytes} bytes).`);
   }
 
   const contentBuffer = fs.readFileSync(resolved);
+  if (isImage) {
+    return {
+      relativePath: normalizeRelativePath(relativePath),
+      content: `data:${mimeType};base64,${contentBuffer.toString('base64')}`,
+      mimeType,
+      size: stat.size,
+      modifiedAt: Math.floor(stat.mtimeMs),
+    };
+  }
+
   if (looksBinary(contentBuffer)) {
     throw new WorkspaceFsError('binary_file', 'Binary files are not supported for preview.');
   }
@@ -92,7 +107,7 @@ export function readWorkspaceFile(
   return {
     relativePath: normalizeRelativePath(relativePath),
     content: contentBuffer.toString('utf8'),
-    mimeType: resolved.toLowerCase().endsWith('.md') ? 'text/markdown' : 'text/plain',
+    mimeType,
     size: stat.size,
     modifiedAt: Math.floor(stat.mtimeMs),
   };
@@ -186,6 +201,17 @@ function normalizeRelativePath(relativePath: string): string {
 function toRelativeWorkspacePath(workspaceRoot: string, absolutePath: string): string {
   const relative = path.relative(path.resolve(workspaceRoot), path.resolve(absolutePath));
   return relative === '.' ? '' : relative.split(path.sep).join('/');
+}
+
+function getPreviewMimeType(filePath: string): WorkspacePreviewMimeType {
+  const normalized = filePath.toLowerCase();
+  if (normalized.endsWith('.md')) return 'text/markdown';
+  if (normalized.endsWith('.png')) return 'image/png';
+  if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) return 'image/jpeg';
+  if (normalized.endsWith('.webp')) return 'image/webp';
+  if (normalized.endsWith('.gif')) return 'image/gif';
+  if (normalized.endsWith('.svg')) return 'image/svg+xml';
+  return 'text/plain';
 }
 
 function looksBinary(content: Buffer): boolean {

@@ -8,6 +8,7 @@ import {
 } from './targetParticipants.js';
 import { getBoundTaskForThread } from './threadTaskBindings.js';
 import { findThreadRootMessageId } from './threadRoots.js';
+import { hasVisiblePromptHistoryContent } from './promptHistorySanitizer.js';
 
 export type ActivationContextMessage = {
   messageId: string;
@@ -258,7 +259,9 @@ export function buildTargetActivationContext(
        ORDER BY seq DESC
        LIMIT ?`,
     ).all(params.channelId, params.replyTarget, ...threadArgs, params.triggerSeq, recentLimit) as ActivationContextMessage[]
-  ).reverse();
+  )
+    .reverse()
+    .filter((message) => hasVisiblePromptHistoryContent(message.content, message.senderType));
 
   const checkpoint = getAgentMessageCheckpoint(db, params.agentId, params.channelId, normalizedThreadRootId);
   const oldestVisibleSeq = recentMessages.length > 0

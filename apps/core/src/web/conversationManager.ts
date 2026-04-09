@@ -1191,6 +1191,14 @@ export class ConversationManager {
     };
   }
 
+  deleteResourceSpace(resourceSpaceId: string): boolean {
+    const result = this.db.prepare(
+      `DELETE FROM resource_spaces
+       WHERE resource_space_id = ?`,
+    ).run(resourceSpaceId);
+    return result.changes > 0;
+  }
+
   listResourceSpaces(): ResourceSpaceInfo[] {
     return this.db.prepare(
       `SELECT resource_space_id as resourceSpaceId,

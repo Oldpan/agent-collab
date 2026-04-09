@@ -82,7 +82,7 @@ const StreamdownCode = ({ className, children, node, ...props }: StreamdownCodeP
     return (
       <code
         className={cn(
-          "rounded-sm border border-zinc-900 bg-[#ffe78a] px-1 py-0.5 font-mono text-[0.8em] font-medium text-zinc-950",
+          "rounded-sm border border-zinc-900 bg-[#fef08a] px-1 py-0.5 font-mono text-[0.8em] font-medium text-zinc-950",
           className,
         )}
         data-streamdown="inline-code"
@@ -105,7 +105,37 @@ const StreamdownCode = ({ className, children, node, ...props }: StreamdownCodeP
 
 const StreamdownPre = ({ children }: Record<string, unknown>) => children as ReactNode;
 
+const StreamdownTable = ({ className, children, ...props }: ComponentProps<"table">) => (
+  <table
+    className={cn("my-2 w-full border-collapse border-2 border-zinc-900 text-sm", className)}
+    {...props}
+  >
+    {children}
+  </table>
+);
+
+const StreamdownTh = ({ className, children, ...props }: ComponentProps<"th">) => (
+  <th
+    className={cn("border-2 border-zinc-900 bg-[#22d3ee] px-3 py-1.5 text-left font-bold text-zinc-950", className)}
+    {...props}
+  >
+    {children}
+  </th>
+);
+
+const StreamdownTd = ({ className, children, ...props }: ComponentProps<"td">) => (
+  <td
+    className={cn("border-2 border-zinc-900 bg-white px-3 py-1.5 text-zinc-900", className)}
+    {...props}
+  >
+    {children}
+  </td>
+);
+
 export const streamdownComponents: StreamdownProps["components"] = {
   code: StreamdownCode,
   pre: StreamdownPre as any,
+  table: StreamdownTable,
+  th: StreamdownTh,
+  td: StreamdownTd,
 };

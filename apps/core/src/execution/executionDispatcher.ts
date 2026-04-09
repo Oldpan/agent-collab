@@ -13,6 +13,7 @@ import { buildDirectActivationContextText } from '../web/directActivationPrompt.
 import { resolveConversationReplyTarget } from '../web/directReplyTargets.js';
 import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
 import { buildTargetActivationContext, type ActivationContextMessage } from '../web/activationContext.js';
+import { sanitizePromptHistoryContent } from '../web/promptHistorySanitizer.js';
 
 const TURN_REPLY_CONTRACT = [
   '[Reply contract]',
@@ -501,9 +502,9 @@ export class ExecutionDispatcher {
         ? visibleAgentMessages[visibleAgentMessages.length - 1]
         : undefined;
       if (finalMessage?.content?.trim()) {
-        assistantLine = finalMessage.content.trim();
+        assistantLine = sanitizePromptHistoryContent(finalMessage.content, 'agent');
       } else if (lastVisibleMessage?.content?.trim()) {
-        assistantLine = lastVisibleMessage.content.trim();
+        assistantLine = sanitizePromptHistoryContent(lastVisibleMessage.content, 'agent');
       }
 
       const events = this.db.prepare(
@@ -717,7 +718,7 @@ function trimReplayBlocksAgainstRecentMessages(
 }
 
 function formatReplayBlockForRecentMessage(message: ActivationContextMessage): string | null {
-  const content = message.content.trim();
+  const content = sanitizePromptHistoryContent(message.content, message.senderType);
   if (!content) return null;
   if (message.senderType === 'agent') {
     return `${message.senderName}: ${content}`;

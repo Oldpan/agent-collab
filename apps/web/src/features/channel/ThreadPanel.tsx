@@ -98,12 +98,12 @@ function ThreadMessage({
         )}
         <div
           className={cn(
-            "mt-0.5 w-fit min-w-[20px] rounded-md border-2 border-zinc-900 px-3 py-2 text-sm shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]",
+            "relative mt-0.5 w-fit min-w-[20px] rounded-md border-2 border-zinc-900 px-3 py-2 text-sm shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]",
             isUser ? "bg-[#d8efff] text-zinc-900" : "bg-[#d8f8c8] text-zinc-900",
           )}
         >
           {showFallbackBadge && (
-            <div className="mb-2 flex items-start justify-end">
+            <div className="absolute -top-2.5 right-1.5 z-10">
               <MessageSourceBadge messageSource={message.messageSource} />
             </div>
           )}

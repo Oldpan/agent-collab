@@ -769,7 +769,7 @@ function MessageRow({
   ) : (
     <MessageContent className={cn("relative w-fit min-w-[80px] rounded-md border-2 px-3 py-2.5", cardTone)}>
       {showFallbackBadge ? (
-        <div className="mb-2 flex items-start justify-end">
+        <div className="absolute -top-2.5 right-1.5 z-10">
           <MessageSourceBadge messageSource={message.messageSource} />
         </div>
       ) : null}

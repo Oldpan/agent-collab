@@ -248,6 +248,17 @@ export async function updateResourceSpace(
   return res.json();
 }
 
+export async function deleteResourceSpace(resourceSpaceId: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/resource-spaces/${encodeURIComponent(resourceSpaceId)}`, {
+    method: "DELETE",
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to delete resource space: ${res.statusText}`);
+  }
+}
+
 export async function listResourceTree(
   resourceSpaceId: string,
   resourcePath = "",
@@ -276,9 +287,42 @@ export async function readResourceFile(
   });
   if (!res.ok) {
     const body = await safeReadErrorBody(res);
-    throw new Error(body ?? `Failed to read resource file: ${res.statusText}`);
+    throw new Error(formatHttpError("Failed to read resource file", res, body));
   }
   return res.json();
+}
+
+export async function readResourceFileBlob(
+  resourceSpaceId: string,
+  resourcePath: string,
+): Promise<Blob> {
+  const res = await fetch(`${API_BASE}/resource-spaces/${encodeURIComponent(resourceSpaceId)}/file/raw`, {
+    method: "POST",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify({ path: resourcePath }),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(formatHttpError("Failed to read resource file", res, body));
+  }
+  return res.blob();
+}
+
+export async function readResourceFileRawViaGet(
+  resourceSpaceId: string,
+  resourcePath: string,
+): Promise<Blob> {
+  const params = new URLSearchParams();
+  params.set("path", resourcePath);
+  params.set("format", "raw");
+  const res = await fetch(`${API_BASE}/resource-spaces/${encodeURIComponent(resourceSpaceId)}/file?${params.toString()}`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(formatHttpError("Failed to read resource file", res, body));
+  }
+  return res.blob();
 }
 
 export async function analyzeResource(
@@ -1057,9 +1101,23 @@ export async function readAgentSkillFile(
 
 async function safeReadErrorBody(res: Response): Promise<string | null> {
   try {
-    const body = await res.json() as { error?: string };
-    return body.error ?? null;
+    const cloned = res.clone();
+    const body = await cloned.json() as { error?: string };
+    const message = typeof body.error === "string" ? body.error.trim() : "";
+    if (message) return message;
+  } catch {
+    // ignore json parse failures and try plain text
+  }
+
+  try {
+    const text = (await res.text()).trim();
+    return text || null;
   } catch {
     return null;
   }
+}
+
+function formatHttpError(prefix: string, res: Response, body: string | null): string {
+  const status = `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ""}`;
+  return body ? `${prefix} (${status}): ${body}` : `${prefix} (${status})`;
 }

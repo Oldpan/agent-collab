@@ -371,12 +371,21 @@ export type WorkspaceListResponseMsg = {
   errorCode?: WorkspaceErrorCode;
 };
 
+export type WorkspacePreviewMimeType =
+  | 'text/markdown'
+  | 'text/plain'
+  | 'image/png'
+  | 'image/jpeg'
+  | 'image/webp'
+  | 'image/gif'
+  | 'image/svg+xml';
+
 export type WorkspaceReadResponseMsg = {
   type: 'workspace.read.response';
   requestId: string;
   relativePath: string;
   content?: string;
-  mimeType?: 'text/markdown' | 'text/plain';
+  mimeType?: WorkspacePreviewMimeType;
   size?: number;
   modifiedAt?: number | null;
   error?: string;
@@ -691,7 +700,7 @@ export type AgentWorkspaceListResult = {
 export type AgentWorkspaceFileResult = {
   path: string;
   content: string;
-  mimeType: 'text/markdown' | 'text/plain';
+  mimeType: WorkspacePreviewMimeType;
   size: number;
   modifiedAt: number | null;
 };
@@ -710,7 +719,7 @@ export type ResourceTreeResult = {
 export type ResourceFileResult = {
   path: string;
   content: string;
-  mimeType: 'text/markdown' | 'text/plain';
+  mimeType: WorkspacePreviewMimeType;
   size: number;
   modifiedAt: number | null;
 };

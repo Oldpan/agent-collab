@@ -69,5 +69,6 @@ describe('directActivationPrompt', () => {
     expect(text).toContain('@oldpan [Trigger]: 请帮我检查一下当前系统显存占用。');
     expect(text).toContain('[Active DM task threads]');
     expect(text).toContain('#4 [in_progress] @Kimi -> dm:@oldpan:deadbead — 检查显存使用情况');
+    expect(text).not.toContain('msg: ');
   });
 });

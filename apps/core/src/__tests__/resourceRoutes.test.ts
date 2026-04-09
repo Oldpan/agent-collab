@@ -201,6 +201,22 @@ describe('resource space routes', () => {
       rootPath: '/srv/docs',
       channelId: channel.channelId,
     });
+
+    const created = createResponse.json() as { resourceSpaceId: string };
+    const deleteForbidden = await app.inject({
+      method: 'DELETE',
+      url: `/api/resource-spaces/${created.resourceSpaceId}`,
+      headers: authHeaders(userToken),
+    });
+    expect(deleteForbidden.statusCode).toBe(403);
+
+    const deleteResponse = await app.inject({
+      method: 'DELETE',
+      url: `/api/resource-spaces/${created.resourceSpaceId}`,
+      headers: authHeaders(adminToken),
+    });
+    expect(deleteResponse.statusCode).toBe(200);
+    expect(deleteResponse.json()).toEqual({ ok: true });
   });
 
   it('tree and file routes proxy workspace reads with scaffold disabled', async () => {
@@ -385,5 +401,191 @@ describe('resource space routes', () => {
     expect(queuedPrompt?.promptText).toContain('File path: README.md.');
     expect(queuedPrompt?.promptText).toContain('Summarize the main risks in this document.');
     expect(queuedPrompt?.promptText).toContain('# Summary');
+  });
+
+  it('image file route returns preview data and analyze rejects non-text resources', async () => {
+    const { userId, userToken } = await createTestUsers();
+    const channel = manager.createChannel({ name: 'image-room' });
+    registerNode('node-1');
+
+    const agent = manager.createAgent({
+      name: 'Image Analyst',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/image-resource-space',
+    });
+    manager.joinChannel(agent.agentId, channel.channelId);
+    setUserAccess(db, userId, [agent.agentId], [channel.channelId]);
+
+    const resourceSpace = manager.createResourceSpace({
+      name: 'image-docs',
+      resourceType: 'mixed',
+      backendType: 'node_path',
+      nodeId: 'node-1',
+      rootPath: '/shared/mixed',
+      channelId: channel.channelId,
+    });
+
+    const filePromise = app.inject({
+      method: 'GET',
+      url: `/api/resource-spaces/${resourceSpace.resourceSpaceId}/file?path=plot.png`,
+      headers: authHeaders(userToken),
+    });
+    const fileRequest = await waitForSentRequest<{
+      requestId: string;
+      type: string;
+      relativePath: string;
+      scaffold?: boolean;
+    }>('node-1', 0);
+
+    expect(fileRequest.type).toBe('workspace.read.request');
+    workspaceBroker.handleWorkspaceReadResponse({
+      type: 'workspace.read.response',
+      requestId: fileRequest.requestId,
+      relativePath: 'plot.png',
+      content: 'data:image/png;base64,AAAA',
+      mimeType: 'image/png',
+      size: 4,
+      modifiedAt: 111,
+    });
+
+    const fileResponse = await filePromise;
+    expect(fileResponse.statusCode).toBe(200);
+    expect(fileResponse.json()).toEqual({
+      path: 'plot.png',
+      content: 'data:image/png;base64,AAAA',
+      mimeType: 'image/png',
+      size: 4,
+      modifiedAt: 111,
+    });
+
+    const analyzePromise = app.inject({
+      method: 'POST',
+      url: `/api/resource-spaces/${resourceSpace.resourceSpaceId}/analyze`,
+      headers: {
+        ...authHeaders(userToken),
+        'content-type': 'application/json',
+      },
+      payload: {
+        agentId: agent.agentId,
+        question: 'Describe this image.',
+        path: 'plot.png',
+      },
+    });
+
+    const analyzeReadRequest = await waitForSentRequest<{
+      requestId: string;
+      type: string;
+      relativePath: string;
+    }>('node-1', 1);
+
+    workspaceBroker.handleWorkspaceReadResponse({
+      type: 'workspace.read.response',
+      requestId: analyzeReadRequest.requestId,
+      relativePath: 'plot.png',
+      content: 'data:image/png;base64,AAAA',
+      mimeType: 'image/png',
+      size: 4,
+      modifiedAt: 222,
+    });
+
+    const analyzeResponse = await analyzePromise;
+    expect(analyzeResponse.statusCode).toBe(400);
+    expect(analyzeResponse.json()).toEqual({
+      error: 'Only text files can be analyzed from Resources right now.',
+    });
+  });
+
+  it('resource file route can stream decoded image bytes for raw previews', async () => {
+    const { userId, userToken } = await createTestUsers();
+    const channel = manager.createChannel({ name: 'image-raw-room' });
+    setUserAccess(db, userId, [], [channel.channelId]);
+    registerNode('node-1');
+
+    const resourceSpace = manager.createResourceSpace({
+      name: 'image-raw-docs',
+      resourceType: 'mixed',
+      backendType: 'node_path',
+      nodeId: 'node-1',
+      rootPath: '/shared/mixed',
+      channelId: channel.channelId,
+    });
+
+    const rawPromise = app.inject({
+      method: 'GET',
+      url: `/api/resource-spaces/${resourceSpace.resourceSpaceId}/file?path=plot.png&format=raw`,
+      headers: authHeaders(userToken),
+    });
+    const rawRequest = await waitForSentRequest<{
+      requestId: string;
+      type: string;
+      relativePath: string;
+      scaffold?: boolean;
+    }>('node-1', 0);
+
+    expect(rawRequest.type).toBe('workspace.read.request');
+    workspaceBroker.handleWorkspaceReadResponse({
+      type: 'workspace.read.response',
+      requestId: rawRequest.requestId,
+      relativePath: 'plot.png',
+      content: 'data:image/png;base64,AQID',
+      mimeType: 'image/png',
+      size: 3,
+      modifiedAt: 333,
+    });
+
+    const rawResponse = await rawPromise;
+    expect(rawResponse.statusCode).toBe(200);
+    expect(rawResponse.headers['content-type']).toContain('image/png');
+    expect(rawResponse.rawPayload).toEqual(Buffer.from([1, 2, 3]));
+  });
+
+  it('raw image preview can also be requested via POST body to avoid long query paths', async () => {
+    const { userId, userToken } = await createTestUsers();
+    const channel = manager.createChannel({ name: 'image-raw-post-room' });
+    setUserAccess(db, userId, [], [channel.channelId]);
+    registerNode('node-1');
+
+    const resourceSpace = manager.createResourceSpace({
+      name: 'image-raw-post-docs',
+      resourceType: 'mixed',
+      backendType: 'node_path',
+      nodeId: 'node-1',
+      rootPath: '/shared/mixed',
+      channelId: channel.channelId,
+    });
+
+    const rawPromise = app.inject({
+      method: 'POST',
+      url: `/api/resource-spaces/${resourceSpace.resourceSpaceId}/file/raw`,
+      headers: {
+        ...authHeaders(userToken),
+        'content-type': 'application/json',
+      },
+      payload: { path: 'nested/path/plot.png' },
+    });
+    const rawRequest = await waitForSentRequest<{
+      requestId: string;
+      type: string;
+      relativePath: string;
+      scaffold?: boolean;
+    }>('node-1', 0);
+
+    expect(rawRequest.type).toBe('workspace.read.request');
+    expect(rawRequest.relativePath).toBe('nested/path/plot.png');
+    workspaceBroker.handleWorkspaceReadResponse({
+      type: 'workspace.read.response',
+      requestId: rawRequest.requestId,
+      relativePath: 'nested/path/plot.png',
+      content: 'data:image/png;base64,AQID',
+      mimeType: 'image/png',
+      size: 3,
+      modifiedAt: 444,
+    });
+
+    const rawResponse = await rawPromise;
+    expect(rawResponse.statusCode).toBe(200);
+    expect(rawResponse.headers['content-type']).toContain('image/png');
+    expect(rawResponse.rawPayload).toEqual(Buffer.from([1, 2, 3]));
   });
 });

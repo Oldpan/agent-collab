@@ -33,6 +33,7 @@ describe('buildChannelActivationContextText', () => {
     expect(text).toContain('[History cursor]\noldest_visible_seq: 4');
     expect(text).toContain('[Unread summary]\n3 older unread messages on this exact target were not included above. Use read_history(channel="#default", before=4) if you need them.');
     expect(text).toContain('\n\n---\n\n');
+    expect(text).not.toContain('msg: ');
   });
 
   it('应在 bound task 上下注入任务 brief', () => {

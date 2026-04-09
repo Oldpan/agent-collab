@@ -152,4 +152,129 @@ describe("ResourceSpaceService", () => {
       modifiedAt: 456,
     });
   });
+
+  it("shared_mount 图片预览遇到旧 node 的 binary_file 时应继续回退", async () => {
+    const registry = new NodeRegistry();
+    const sentByNode = new Map<string, string[]>();
+
+    const registerNode = (nodeId: string, lastSeen: number) => {
+      sentByNode.set(nodeId, []);
+      registry.register({
+        nodeId,
+        hostname: nodeId,
+        agentTypes: ["codex_acp"],
+        version: "0.1.0",
+        ws: {
+          readyState: 1,
+          send(payload: string) {
+            sentByNode.get(nodeId)?.push(payload);
+          },
+        } as unknown as NodeEntry["ws"],
+        lastSeen,
+      });
+    };
+
+    registerNode("node-newer", Date.now());
+    registerNode("node-older", Date.now() - 1_000);
+
+    const broker = new AgentWorkspaceBroker({ nodeRegistry: registry, timeoutMs: 500 });
+    const service = new ResourceSpaceService({
+      getResourceSpaceById: () => ({
+        resourceSpaceId: "shared-images",
+        backendType: "shared_mount",
+        rootPath: "/mnt/shared/images",
+      }),
+      broker,
+      nodeRegistry: registry,
+    });
+
+    const promise = service.readFile("shared-images", "plot.png");
+
+    const firstRequest = await waitForSentRequest(sentByNode, "node-newer");
+    broker.handleWorkspaceReadResponse({
+      type: "workspace.read.response",
+      requestId: firstRequest.requestId,
+      relativePath: "plot.png",
+      error: "Binary files are not supported for preview.",
+      errorCode: "binary_file",
+    });
+
+    const secondRequest = await waitForSentRequest(sentByNode, "node-older");
+    broker.handleWorkspaceReadResponse({
+      type: "workspace.read.response",
+      requestId: secondRequest.requestId,
+      relativePath: "plot.png",
+      content: "data:image/png;base64,AAAA",
+      mimeType: "image/png",
+      size: 4,
+      modifiedAt: 789,
+    });
+
+    await expect(promise).resolves.toEqual({
+      path: "plot.png",
+      content: "data:image/png;base64,AAAA",
+      mimeType: "image/png",
+      size: 4,
+      modifiedAt: 789,
+    });
+  });
+
+  it("shared_mount 全部失败时应返回包含节点尝试详情的错误", async () => {
+    const registry = new NodeRegistry();
+    const sentByNode = new Map<string, string[]>();
+
+    const registerNode = (nodeId: string, lastSeen: number) => {
+      sentByNode.set(nodeId, []);
+      registry.register({
+        nodeId,
+        hostname: nodeId,
+        agentTypes: ["codex_acp"],
+        version: "0.1.0",
+        ws: {
+          readyState: 1,
+          send(payload: string) {
+            sentByNode.get(nodeId)?.push(payload);
+          },
+        } as unknown as NodeEntry["ws"],
+        lastSeen,
+      });
+    };
+
+    registerNode("node-a", Date.now());
+    registerNode("node-b", Date.now() - 1_000);
+
+    const broker = new AgentWorkspaceBroker({ nodeRegistry: registry, timeoutMs: 500 });
+    const service = new ResourceSpaceService({
+      getResourceSpaceById: () => ({
+        resourceSpaceId: "shared-failure",
+        backendType: "shared_mount",
+        rootPath: "/mnt/shared/images",
+      }),
+      broker,
+      nodeRegistry: registry,
+    });
+
+    const promise = service.readFile("shared-failure", "plot.png");
+
+    const firstRequest = await waitForSentRequest(sentByNode, "node-a");
+    broker.handleWorkspaceReadResponse({
+      type: "workspace.read.response",
+      requestId: firstRequest.requestId,
+      relativePath: "plot.png",
+      error: "Binary files are not supported for preview.",
+      errorCode: "binary_file",
+    });
+
+    const secondRequest = await waitForSentRequest(sentByNode, "node-b");
+    broker.handleWorkspaceReadResponse({
+      type: "workspace.read.response",
+      requestId: secondRequest.requestId,
+      relativePath: "plot.png",
+      error: "Workspace request timed out.",
+    });
+
+    await expect(promise).rejects.toThrow(
+      'Unable to read shared resource space. Attempts: node-a -> Binary files are not supported for preview. | node-b -> Workspace request timed out.',
+    );
+  });
 });

@@ -10,7 +10,7 @@ export function MessageSourceBadge({ messageSource, className }: MessageSourceBa
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded-sm border border-amber-300 bg-[#fff2b8] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.14em] text-amber-700",
+        "pointer-events-none inline-flex items-center rounded-full border border-amber-300/90 bg-[#fff7dc] px-1.5 py-[2px] text-[7px] font-bold uppercase leading-none tracking-[0.04em] text-amber-700 shadow-[1px_1px_0_0_rgba(180,120,0,0.1)]",
         className,
       )}
     >

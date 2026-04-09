@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ArrowLeftIcon,
   BotIcon,
@@ -13,6 +13,7 @@ import {
   PlusIcon,
   RefreshCwIcon,
   SendIcon,
+  Trash2Icon,
 } from "lucide-react";
 import type {
   AgentInfo,
@@ -27,9 +28,15 @@ import type {
 import { MessageResponse } from "@/components/ai-elements/message";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
+import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CreateDialog } from "@/components/ui/create-dialog";
+import {
+  ResizableHandle,
+  ResizablePanel,
+  ResizablePanelGroup,
+} from "@/components/ui/resizable";
 import { cn } from "@/lib/utils";
-import { analyzeResource, listResourceTree, readResourceFile } from "@/lib/api";
+import { analyzeResource, listResourceTree, readResourceFile, readResourceFileBlob } from "@/lib/api";
 
 type ResourcesPanelProps = {
   resourceSpaces: ResourceSpaceInfo[];
@@ -41,6 +48,7 @@ type ResourcesPanelProps = {
   sidebarCollapsed?: boolean;
   onExitResources: () => void;
   onCreateResourceSpace: (req: CreateResourceSpaceRequest) => Promise<ResourceSpaceInfo>;
+  onDeleteResourceSpace: (resourceSpaceId: string) => Promise<void>;
   onOpenConversation: (conversation: ConversationInfo) => void;
 };
 
@@ -55,6 +63,66 @@ const KEY_RESOURCE_FILE_NAMES = [
   "notes.md",
 ];
 
+const IMAGE_RESOURCE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"]);
+
+function isImageResourcePath(resourcePath: string): boolean {
+  const lowerPath = resourcePath.toLowerCase();
+  return [...IMAGE_RESOURCE_EXTENSIONS].some((extension) => lowerPath.endsWith(extension));
+}
+
+function inferImageMimeType(resourcePath: string): ResourceFileResult["mimeType"] {
+  const lowerPath = resourcePath.toLowerCase();
+  if (lowerPath.endsWith(".png")) return "image/png";
+  if (lowerPath.endsWith(".jpg") || lowerPath.endsWith(".jpeg")) return "image/jpeg";
+  if (lowerPath.endsWith(".webp")) return "image/webp";
+  if (lowerPath.endsWith(".gif")) return "image/gif";
+  return "image/svg+xml";
+}
+
+function findTreeEntryByPath(directories: DirectoryMap, resourcePath: string): ResourceTreeEntry | null {
+  for (const entries of Object.values(directories)) {
+    const match = entries.find((entry) => entry.path === resourcePath);
+    if (match) return match;
+  }
+  return null;
+}
+
+function filterVisibleResourceEntries(resourcePath: string, entries: ResourceTreeEntry[]): ResourceTreeEntry[] {
+  return entries.filter((entry) => {
+    if (resourcePath !== "") return true;
+    if (entry.kind === "file" && entry.name === "MEMORY.md") return false;
+    if (entry.kind === "directory" && entry.name === "notes") return false;
+    return true;
+  });
+}
+
+function buildDisplayedResourcePath(resourceSpace: ResourceSpaceInfo | null, selectedFilePath: string | null): string {
+  if (!resourceSpace) return "Preview";
+  if (!selectedFilePath) return resourceSpace.rootPath;
+  return `${resourceSpace.rootPath.replace(/\/+$/, "")}/${selectedFilePath.replace(/^\/+/, "")}`;
+}
+
+function pickDefaultPreviewEntry(
+  resourceSpace: ResourceSpaceInfo,
+  entries: ResourceTreeEntry[],
+): ResourceTreeEntry | null {
+  const preferred = KEY_RESOURCE_FILE_NAMES
+    .map((name) => entries.find((entry) => entry.kind === "file" && entry.name === name))
+    .find(Boolean);
+  if (preferred) return preferred;
+
+  if (resourceSpace.resourceType === "docs") {
+    return entries.find(
+      (entry) =>
+        entry.kind === "file"
+        && entry.name.toLowerCase().endsWith(".md")
+        && entry.name !== "MEMORY.md",
+    ) ?? null;
+  }
+
+  return null;
+}
+
 export function ResourcesPanel({
   resourceSpaces,
   channels,
@@ -65,6 +133,7 @@ export function ResourcesPanel({
   sidebarCollapsed,
   onExitResources,
   onCreateResourceSpace,
+  onDeleteResourceSpace,
   onOpenConversation,
 }: ResourcesPanelProps) {
   const [selectedResourceSpaceId, setSelectedResourceSpaceId] = useState<string | null>(null);
@@ -79,6 +148,9 @@ export function ResourcesPanel({
   const [question, setQuestion] = useState("");
   const [askingAgent, setAskingAgent] = useState(false);
   const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false);
+  const [deletingResourceSpace, setDeletingResourceSpace] = useState(false);
+  const currentObjectUrlRef = useRef<string | null>(null);
 
   const selectedResourceSpace = useMemo(
     () => resourceSpaces.find((item) => item.resourceSpaceId === selectedResourceSpaceId) ?? null,
@@ -93,6 +165,9 @@ export function ResourcesPanel({
     [machines],
   );
   const rootEntries = directories[""] ?? [];
+  const selectedFileSupportsAnalysis = selectedFile
+    ? selectedFile.mimeType === "text/markdown" || selectedFile.mimeType === "text/plain"
+    : false;
 
   useEffect(() => {
     if (resourceSpaces.length === 0) {
@@ -116,6 +191,10 @@ export function ResourcesPanel({
   }, [agents]);
 
   useEffect(() => {
+    if (currentObjectUrlRef.current) {
+      URL.revokeObjectURL(currentObjectUrlRef.current);
+      currentObjectUrlRef.current = null;
+    }
     setDirectories({});
     setExpanded(new Set());
     setSelectedFilePath(null);
@@ -126,6 +205,15 @@ export function ResourcesPanel({
     setQuestion("");
   }, [selectedResourceSpaceId]);
 
+  useEffect(() => {
+    return () => {
+      if (currentObjectUrlRef.current) {
+        URL.revokeObjectURL(currentObjectUrlRef.current);
+        currentObjectUrlRef.current = null;
+      }
+    };
+  }, []);
+
   const loadDirectory = useCallback(async (resourceSpaceId: string, resourcePath: string, options?: { force?: boolean }) => {
     if (!options?.force && directories[resourcePath]) return directories[resourcePath];
 
@@ -133,8 +221,9 @@ export function ResourcesPanel({
     setLoadingDirectories((prev) => new Set(prev).add(resourcePath));
     try {
       const result = await listResourceTree(resourceSpaceId, resourcePath);
-      setDirectories((prev) => ({ ...prev, [resourcePath]: result.entries }));
-      return result.entries;
+      const visibleEntries = filterVisibleResourceEntries(resourcePath, result.entries);
+      setDirectories((prev) => ({ ...prev, [resourcePath]: visibleEntries }));
+      return visibleEntries;
     } catch (error) {
       setSpaceError(String((error as Error)?.message ?? error));
       return null;
@@ -151,16 +240,34 @@ export function ResourcesPanel({
     setSpaceError(null);
     setSelectedFilePath(resourcePath);
     setLoadingFilePath(resourcePath);
+    if (currentObjectUrlRef.current) {
+      URL.revokeObjectURL(currentObjectUrlRef.current);
+      currentObjectUrlRef.current = null;
+    }
     try {
-      const result = await readResourceFile(resourceSpaceId, resourcePath);
-      setSelectedFile(result);
+      if (isImageResourcePath(resourcePath)) {
+        const blob = await readResourceFileBlob(resourceSpaceId, resourcePath);
+        const objectUrl = URL.createObjectURL(blob);
+        currentObjectUrlRef.current = objectUrl;
+        const entry = findTreeEntryByPath(directories, resourcePath);
+        setSelectedFile({
+          path: resourcePath,
+          content: objectUrl,
+          mimeType: (blob.type || inferImageMimeType(resourcePath)) as ResourceFileResult["mimeType"],
+          size: blob.size,
+          modifiedAt: entry?.modifiedAt ?? null,
+        });
+      } else {
+        const result = await readResourceFile(resourceSpaceId, resourcePath);
+        setSelectedFile(result);
+      }
     } catch (error) {
       setSelectedFile(null);
       setSpaceError(String((error as Error)?.message ?? error));
     } finally {
       setLoadingFilePath((current) => (current === resourcePath ? null : current));
     }
-  }, []);
+  }, [directories]);
 
   useEffect(() => {
     if (!selectedResourceSpace) return;
@@ -168,11 +275,7 @@ export function ResourcesPanel({
 
     void loadDirectory(selectedResourceSpace.resourceSpaceId, "").then((entries) => {
       if (!entries || selectedFilePath) return;
-      const preferred = KEY_RESOURCE_FILE_NAMES
-        .map((name) => entries.find((entry) => entry.kind === "file" && entry.name === name))
-        .find(Boolean);
-      const firstMarkdown = entries.find((entry) => entry.kind === "file" && entry.name.toLowerCase().endsWith(".md"));
-      const nextFile = preferred ?? firstMarkdown ?? entries.find((entry) => entry.kind === "file");
+      const nextFile = pickDefaultPreviewEntry(selectedResourceSpace, entries);
       if (nextFile) {
         void loadFile(selectedResourceSpace.resourceSpaceId, nextFile.path);
       }
@@ -197,6 +300,10 @@ export function ResourcesPanel({
 
   const handleRefresh = useCallback(async () => {
     if (!selectedResourceSpace) return;
+    if (currentObjectUrlRef.current) {
+      URL.revokeObjectURL(currentObjectUrlRef.current);
+      currentObjectUrlRef.current = null;
+    }
     setDirectories({});
     setExpanded(new Set());
     setSelectedFile(null);
@@ -206,9 +313,7 @@ export function ResourcesPanel({
       await loadFile(selectedResourceSpace.resourceSpaceId, selectedFilePath);
       return;
     }
-    const nextFile = entries?.find((entry) => entry.kind === "file" && KEY_RESOURCE_FILE_NAMES.includes(entry.name))
-      ?? entries?.find((entry) => entry.kind === "file" && entry.name.toLowerCase().endsWith(".md"))
-      ?? entries?.find((entry) => entry.kind === "file");
+    const nextFile = entries ? pickDefaultPreviewEntry(selectedResourceSpace, entries) : null;
     if (nextFile) {
       await loadFile(selectedResourceSpace.resourceSpaceId, nextFile.path);
     }
@@ -237,6 +342,20 @@ export function ResourcesPanel({
       setAskingAgent(false);
     }
   }, [askingAgent, onOpenConversation, question, selectedAgentId, selectedFilePath, selectedResourceSpace]);
+
+  const handleDeleteResourceSpace = useCallback(async () => {
+    if (!selectedResourceSpace || deletingResourceSpace) return;
+    setDeletingResourceSpace(true);
+    setSpaceError(null);
+    try {
+      await onDeleteResourceSpace(selectedResourceSpace.resourceSpaceId);
+      setShowDeleteDialog(false);
+    } catch (error) {
+      setSpaceError(String((error as Error)?.message ?? error));
+    } finally {
+      setDeletingResourceSpace(false);
+    }
+  }, [deletingResourceSpace, onDeleteResourceSpace, selectedResourceSpace]);
 
   return (
     <div className="flex h-full flex-col bg-[#fff9d0]">
@@ -276,14 +395,27 @@ export function ResourcesPanel({
             Exit Resources
           </Button>
           {isAdmin ? (
-            <Button
-              size="sm"
-              className="h-8 rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
-              onClick={() => setShowCreateDialog(true)}
-            >
-              <PlusIcon className="mr-1.5 size-3" />
-              New Space
-            </Button>
+            <div className="flex items-center gap-2">
+              {selectedResourceSpace ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8 rounded-sm border-2 border-red-700 bg-[#fff2ea] text-red-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#ffe0d1]"
+                  onClick={() => setShowDeleteDialog(true)}
+                >
+                  <Trash2Icon className="mr-1.5 size-3" />
+                  Delete Space
+                </Button>
+              ) : null}
+              <Button
+                size="sm"
+                className="h-8 rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
+                onClick={() => setShowCreateDialog(true)}
+              >
+                <PlusIcon className="mr-1.5 size-3" />
+                New Space
+              </Button>
+            </div>
           ) : null}
         </div>
       </div>
@@ -294,216 +426,265 @@ export function ResourcesPanel({
         </div>
       ) : null}
 
-      <div className="grid min-h-0 flex-1 grid-cols-[260px_minmax(0,1fr)_320px]">
-        <div className="flex min-h-0 flex-col border-r-2 border-black bg-[#fff5c2]">
-          <div className="border-b border-zinc-300 px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
-            Resource Spaces
-          </div>
-          <ScrollArea className="border-b border-zinc-300">
-            <div className="p-2">
-              {resourceSpaces.length === 0 ? (
-                <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fffdf4] px-3 py-4 text-center text-xs text-zinc-500">
-                  No resource spaces yet.
-                </div>
-              ) : (
-                <div className="space-y-2">
-                  {resourceSpaces.map((resourceSpace) => (
-                    <button
-                      key={resourceSpace.resourceSpaceId}
-                      type="button"
-                      onClick={() => setSelectedResourceSpaceId(resourceSpace.resourceSpaceId)}
-                      className={cn(
-                        "w-full rounded-md border-2 border-zinc-900 px-3 py-2 text-left shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] transition-colors",
-                        selectedResourceSpaceId === resourceSpace.resourceSpaceId
-                          ? "bg-[#ffd54a]"
-                          : "bg-[#fffdf4] hover:bg-[#fff1a9]",
-                      )}
-                    >
-                      <div className="truncate text-xs font-semibold text-zinc-900">{resourceSpace.name}</div>
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        <span className="rounded border border-zinc-400 bg-white/80 px-1.5 py-0.5 text-[10px] text-zinc-600">
-                          {resourceSpace.resourceType}
-                        </span>
-                        <span className="rounded border border-zinc-400 bg-white/80 px-1.5 py-0.5 text-[10px] text-zinc-600">
-                          {resourceSpace.backendType}
-                        </span>
-                      </div>
-                      {resourceSpace.channelId ? (
-                        <div className="mt-1 text-[10px] text-zinc-500">
-                          Related channel: #{channelNameById.get(resourceSpace.channelId) ?? resourceSpace.channelId}
-                        </div>
-                      ) : null}
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </ScrollArea>
-
-          <div className="border-b border-zinc-300 px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
-            Files
-          </div>
-          <div className="flex items-center gap-2 border-b border-zinc-300 px-3 py-2 text-xs text-zinc-600">
-            <div className="min-w-0 flex-1 truncate">
-              {selectedResourceSpace ? selectedResourceSpace.rootPath : "Select a resource space"}
-            </div>
-            <Button
-              size="icon-xs"
-              variant="outline"
-              className="rounded-sm border-2 border-zinc-900 bg-[#fffdf4] hover:bg-[#fff1a9]"
-              onClick={() => void handleRefresh()}
-              disabled={!selectedResourceSpace}
-              title="Refresh"
+      <ResizablePanelGroup
+        direction="horizontal"
+        autoSaveId="resources-layout"
+        className="min-h-0 flex-1"
+      >
+        <ResizablePanel defaultSize={24} minSize={18} maxSize={34}>
+          <div className="flex h-full min-h-0 flex-col bg-[#fff5c2]">
+            <ResizablePanelGroup
+              direction="vertical"
+              autoSaveId="resources-left-stack"
+              className="min-h-0 flex-1"
             >
-              <RefreshCwIcon className="size-3" />
-            </Button>
-          </div>
-          <ScrollArea className="flex-1">
-            <div className="p-2">
-              {!selectedResourceSpace ? (
-                <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fffdf4] px-3 py-4 text-center text-xs text-zinc-500">
-                  Choose a resource space first.
+              <ResizablePanel defaultSize={36} minSize={18} maxSize={72}>
+                <div className="flex h-full min-h-0 flex-col">
+                  <div className="border-b border-zinc-300 px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+                    Resource Spaces
+                  </div>
+                  <ScrollArea className="min-h-0 flex-1">
+                    <div className="p-2">
+                      {resourceSpaces.length === 0 ? (
+                        <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fffdf4] px-3 py-4 text-center text-xs text-zinc-500">
+                          No resource spaces yet.
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {resourceSpaces.map((resourceSpace) => (
+                            <button
+                              key={resourceSpace.resourceSpaceId}
+                              type="button"
+                              onClick={() => {
+                                setSelectedFilePath(null);
+                                setSelectedFile(null);
+                                setSpaceError(null);
+                                setSelectedResourceSpaceId(resourceSpace.resourceSpaceId);
+                              }}
+                              className={cn(
+                                "w-full rounded-md border-2 border-zinc-900 px-3 py-2 text-left shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] transition-colors",
+                                selectedResourceSpaceId === resourceSpace.resourceSpaceId
+                                  ? "bg-[#ffd54a]"
+                                  : "bg-[#fffdf4] hover:bg-[#fff1a9]",
+                              )}
+                            >
+                              <div className="truncate text-xs font-semibold text-zinc-900">{resourceSpace.name}</div>
+                              <div className="mt-1 flex flex-wrap gap-1">
+                                <span className="rounded border border-zinc-400 bg-white/80 px-1.5 py-0.5 text-[10px] text-zinc-600">
+                                  {resourceSpace.resourceType}
+                                </span>
+                                <span className="rounded border border-zinc-400 bg-white/80 px-1.5 py-0.5 text-[10px] text-zinc-600">
+                                  {resourceSpace.backendType}
+                                </span>
+                              </div>
+                              {resourceSpace.channelId ? (
+                                <div className="mt-1 text-[10px] text-zinc-500">
+                                  Related channel: #{channelNameById.get(resourceSpace.channelId) ?? resourceSpace.channelId}
+                                </div>
+                              ) : null}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </ScrollArea>
                 </div>
-              ) : loadingDirectories.has("") && rootEntries.length === 0 ? (
-                <div className="px-2 py-3 text-sm text-muted-foreground">Loading files...</div>
-              ) : rootEntries.length === 0 ? (
-                <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fffdf4] px-3 py-4 text-center text-xs text-zinc-500">
-                  This resource space is empty.
-                </div>
-              ) : (
-                <ResourceTree
-                  parentPath=""
-                  directories={directories}
-                  expanded={expanded}
-                  selectedFilePath={selectedFilePath}
-                  loadingDirectories={loadingDirectories}
-                  onToggleDirectory={handleToggleDirectory}
-                  onSelectFile={(resourcePath) => {
-                    if (!selectedResourceSpace) return;
-                    void loadFile(selectedResourceSpace.resourceSpaceId, resourcePath);
-                  }}
-                />
-              )}
-            </div>
-          </ScrollArea>
-        </div>
+              </ResizablePanel>
 
-        <div className="flex min-h-0 flex-col border-r-2 border-black bg-[#fffdf4]">
-          <div className="border-b border-zinc-300 px-4 py-3">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="truncate text-sm font-semibold text-zinc-900">
-                  {selectedFilePath ?? "Preview"}
+              <ResizableHandle withHandle showHandleOnHover />
+
+              <ResizablePanel defaultSize={64} minSize={28}>
+                <div className="flex h-full min-h-0 flex-col">
+                  <div className="border-b border-zinc-300 px-3 py-2 text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+                    Files
+                  </div>
+                  <div className="flex items-center gap-2 border-b border-zinc-300 px-3 py-2 text-xs text-zinc-600">
+                    <div className="min-w-0 flex-1 truncate">
+                      {selectedResourceSpace ? selectedResourceSpace.rootPath : "Select a resource space"}
+                    </div>
+                    <Button
+                      size="icon-xs"
+                      variant="outline"
+                      className="rounded-sm border-2 border-zinc-900 bg-[#fffdf4] hover:bg-[#fff1a9]"
+                      onClick={() => void handleRefresh()}
+                      disabled={!selectedResourceSpace}
+                      title="Refresh"
+                    >
+                      <RefreshCwIcon className="size-3" />
+                    </Button>
+                  </div>
+                  <ScrollArea className="min-h-0 flex-1">
+                    <div className="p-2">
+                      {!selectedResourceSpace ? (
+                        <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fffdf4] px-3 py-4 text-center text-xs text-zinc-500">
+                          Choose a resource space first.
+                        </div>
+                      ) : loadingDirectories.has("") && rootEntries.length === 0 ? (
+                        <div className="px-2 py-3 text-sm text-muted-foreground">Loading files...</div>
+                      ) : rootEntries.length === 0 ? (
+                        <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fffdf4] px-3 py-4 text-center text-xs text-zinc-500">
+                          This resource space is empty.
+                        </div>
+                      ) : (
+                        <ResourceTree
+                          parentPath=""
+                          directories={directories}
+                          expanded={expanded}
+                          selectedFilePath={selectedFilePath}
+                          loadingDirectories={loadingDirectories}
+                          onToggleDirectory={handleToggleDirectory}
+                          onSelectFile={(resourcePath) => {
+                            if (!selectedResourceSpace) return;
+                            void loadFile(selectedResourceSpace.resourceSpaceId, resourcePath);
+                          }}
+                        />
+                      )}
+                    </div>
+                  </ScrollArea>
                 </div>
-                {selectedResourceSpace ? (
-                  <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-zinc-500">
-                    <span>{selectedResourceSpace.resourceType}</span>
-                    <span>{selectedResourceSpace.backendType}</span>
-                    {selectedResourceSpace.nodeId ? (
-                      <span>Node: {machineNameById.get(selectedResourceSpace.nodeId) ?? selectedResourceSpace.nodeId}</span>
-                    ) : null}
+              </ResizablePanel>
+            </ResizablePanelGroup>
+          </div>
+        </ResizablePanel>
+
+        <ResizableHandle withHandle showHandleOnHover />
+
+        <ResizablePanel defaultSize={51} minSize={32}>
+          <div className="flex h-full min-h-0 flex-col bg-[#fffdf4]">
+            <div className="border-b border-zinc-300 px-4 py-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-sm font-semibold text-zinc-900">
+                    {buildDisplayedResourcePath(selectedResourceSpace, selectedFilePath)}
+                  </div>
+                  {selectedResourceSpace ? (
+                    <div className="mt-1 flex flex-wrap gap-2 text-[11px] text-zinc-500">
+                      <span>{selectedResourceSpace.resourceType}</span>
+                      <span>{selectedResourceSpace.backendType}</span>
+                      {selectedResourceSpace.nodeId ? (
+                        <span>Node: {machineNameById.get(selectedResourceSpace.nodeId) ?? selectedResourceSpace.nodeId}</span>
+                      ) : null}
+                    </div>
+                  ) : null}
+                </div>
+                {suggestedEntries.length > 0 && selectedResourceSpace ? (
+                  <div className="hidden max-w-[50%] flex-wrap justify-end gap-1 md:flex">
+                    {suggestedEntries.map((entry) => (
+                      <Button
+                        key={entry.path}
+                        size="sm"
+                        variant="outline"
+                        className="h-7 rounded-sm border-2 border-zinc-900 bg-[#fff9d8] px-2 text-[10px] text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#fff1a9]"
+                        onClick={() => void loadFile(selectedResourceSpace.resourceSpaceId, entry.path)}
+                      >
+                        {entry.name}
+                      </Button>
+                    ))}
                   </div>
                 ) : null}
               </div>
-              {suggestedEntries.length > 0 && selectedResourceSpace ? (
-                <div className="hidden max-w-[50%] flex-wrap justify-end gap-1 md:flex">
-                  {suggestedEntries.map((entry) => (
-                    <Button
-                      key={entry.path}
-                      size="sm"
-                      variant="outline"
-                      className="h-7 rounded-sm border-2 border-zinc-900 bg-[#fff9d8] px-2 text-[10px] text-zinc-700 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#fff1a9]"
-                      onClick={() => void loadFile(selectedResourceSpace.resourceSpaceId, entry.path)}
-                    >
-                      {entry.name}
-                    </Button>
-                  ))}
-                </div>
-              ) : null}
             </div>
-          </div>
-          <ScrollArea className="flex-1">
-            <div className="px-4 py-4">
-              {loadingFilePath ? (
-                <div className="text-sm text-zinc-500">Loading file...</div>
-              ) : selectedFile ? (
-                selectedFile.mimeType === "text/markdown" ? (
-                  <MessageResponse>{selectedFile.content}</MessageResponse>
+            <ScrollArea className="flex-1">
+              <div className="px-4 py-4">
+                {loadingFilePath ? (
+                  <div className="text-sm text-zinc-500">Loading file...</div>
+                ) : selectedFile ? (
+                  selectedFile.mimeType === "text/markdown" ? (
+                    <MessageResponse>{selectedFile.content}</MessageResponse>
+                  ) : selectedFile.mimeType.startsWith("image/") ? (
+                    <div className="flex justify-center rounded-md border border-zinc-300 bg-white p-3">
+                      <img
+                        src={selectedFile.content}
+                        alt={selectedFilePath ?? "resource image"}
+                        className="max-h-[70vh] max-w-full rounded object-contain"
+                      />
+                    </div>
+                  ) : (
+                    <pre className="overflow-x-auto rounded-md border border-zinc-300 bg-white p-4 font-mono text-xs leading-6 text-zinc-800">
+                      {selectedFile.content}
+                    </pre>
+                  )
                 ) : (
-                  <pre className="overflow-x-auto rounded-md border border-zinc-300 bg-white p-4 font-mono text-xs leading-6 text-zinc-800">
-                    {selectedFile.content}
-                  </pre>
-                )
-              ) : (
-                <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fff8d8] px-4 py-6 text-center text-sm text-zinc-500">
-                  Select a markdown, metrics, config, or log file to preview it here.
-                </div>
-              )}
-            </div>
-          </ScrollArea>
-        </div>
-
-        <div className="flex min-h-0 flex-col bg-[#fff5c2]">
-          <div className="border-b border-zinc-300 px-4 py-3">
-            <div className="flex items-center gap-2">
-              <BotIcon className="size-4 text-zinc-700" />
-              <div className="text-sm font-semibold text-zinc-900">Ask Agent</div>
-            </div>
-            <div className="mt-1 text-[11px] text-zinc-500">
-              Start a private analysis thread based on the current file.
-            </div>
+                  <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fff8d8] px-4 py-6 text-center text-sm text-zinc-500">
+                    Select a markdown, metrics, config, or log file to preview it here.
+                  </div>
+                )}
+              </div>
+            </ScrollArea>
           </div>
+        </ResizablePanel>
 
-          <div className="space-y-3 px-4 py-4">
-            <div className="space-y-1">
-              <label className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
-                Agent
-              </label>
-              <select
-                className="w-full rounded-sm border-2 border-zinc-900 bg-white px-2 py-2 text-sm text-zinc-900"
-                value={selectedAgentId}
-                onChange={(event) => setSelectedAgentId(event.target.value)}
-              >
-                {agents.map((agent) => (
-                  <option key={agent.agentId} value={agent.agentId}>
-                    {agent.name}
-                  </option>
-                ))}
-              </select>
-            </div>
+        <ResizableHandle withHandle showHandleOnHover />
 
-            <div className="space-y-1">
-              <label className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
-                Current file
-              </label>
-              <div className="rounded-sm border-2 border-zinc-900 bg-white px-2 py-2 text-xs text-zinc-600">
-                {selectedFilePath ?? "Select a file first"}
+        <ResizablePanel defaultSize={25} minSize={20} maxSize={36}>
+          <div className="flex h-full min-h-0 flex-col bg-[#fff5c2]">
+            <div className="border-b border-zinc-300 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <BotIcon className="size-4 text-zinc-700" />
+                <div className="text-sm font-semibold text-zinc-900">Ask Agent</div>
+              </div>
+              <div className="mt-1 text-[11px] text-zinc-500">
+                Start a private analysis thread based on the current file.
               </div>
             </div>
+            <ScrollArea className="min-h-0 flex-1">
+              <div className="space-y-3 px-4 py-4">
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+                    Agent
+                  </label>
+                  <select
+                    className="w-full rounded-sm border-2 border-zinc-900 bg-white px-2 py-2 text-sm text-zinc-900"
+                    value={selectedAgentId}
+                    onChange={(event) => setSelectedAgentId(event.target.value)}
+                  >
+                    {agents.map((agent) => (
+                      <option key={agent.agentId} value={agent.agentId}>
+                        {agent.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-            <div className="space-y-1">
-              <label className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
-                Question
-              </label>
-              <textarea
-                value={question}
-                onChange={(event) => setQuestion(event.target.value)}
-                className="min-h-[160px] w-full resize-none rounded-sm border-2 border-zinc-900 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400"
-                placeholder="Ask the agent to summarize, review, compare results, diagnose an experiment, or propose next steps."
-              />
-            </div>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+                    Current file
+                  </label>
+                <div className="rounded-sm border-2 border-zinc-900 bg-white px-2 py-2 text-xs text-zinc-600">
+                  {selectedFilePath ?? "Select a file first"}
+                </div>
+                {selectedFile && !selectedFileSupportsAnalysis ? (
+                  <div className="text-[11px] text-zinc-500">
+                    Image files can be previewed here, but `Analyze` currently only supports text files.
+                  </div>
+                ) : null}
+              </div>
 
-            <Button
-              className="w-full rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
-              onClick={() => void handleAnalyze()}
-              disabled={!selectedResourceSpace || !selectedFilePath || !selectedAgentId || !question.trim() || askingAgent}
-            >
-              <SendIcon className="mr-1.5 size-4" />
-              {askingAgent ? "Sending..." : "Analyze In Private Thread"}
-            </Button>
+                <div className="space-y-1">
+                  <label className="text-[10px] font-semibold uppercase tracking-widest text-zinc-500">
+                    Question
+                  </label>
+                  <textarea
+                    value={question}
+                    onChange={(event) => setQuestion(event.target.value)}
+                    className="min-h-[160px] w-full resize-none rounded-sm border-2 border-zinc-900 bg-white px-3 py-2 text-sm text-zinc-900 placeholder:text-zinc-400"
+                    placeholder="Ask the agent to summarize, review, compare results, diagnose an experiment, or propose next steps."
+                  />
+                </div>
+
+                <Button
+                  className="w-full rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
+                  onClick={() => void handleAnalyze()}
+                  disabled={!selectedResourceSpace || !selectedFilePath || !selectedAgentId || !question.trim() || askingAgent || !selectedFileSupportsAnalysis}
+                >
+                  <SendIcon className="mr-1.5 size-4" />
+                  {askingAgent ? "Sending..." : "Analyze In Private Thread"}
+                </Button>
+              </div>
+            </ScrollArea>
           </div>
-        </div>
-      </div>
+        </ResizablePanel>
+      </ResizablePanelGroup>
 
       <CreateDialog
         isOpen={showCreateDialog}
@@ -522,6 +703,23 @@ export function ResourcesPanel({
           }}
         />
       </CreateDialog>
+
+      <ConfirmDialog
+        isOpen={showDeleteDialog}
+        title="Delete Resource Space"
+        message={selectedResourceSpace
+          ? `Delete resource space "${selectedResourceSpace.name}"?\n\nThis only removes the resource-space entry from the platform. Files under ${selectedResourceSpace.rootPath} will stay on disk.`
+          : "Delete this resource space?"}
+        confirmText={deletingResourceSpace ? "Deleting..." : "Delete Space"}
+        cancelText="Cancel"
+        variant="danger"
+        onCancel={() => {
+          if (!deletingResourceSpace) {
+            setShowDeleteDialog(false);
+          }
+        }}
+        onConfirm={() => void handleDeleteResourceSpace()}
+      />
     </div>
   );
 }
@@ -584,7 +782,7 @@ function ResourceTree({
               <span className="min-w-0 flex-1 truncate">{entry.name}</span>
             </button>
             {isDirectory && isExpanded ? (
-              <div className="ml-4 border-l border-zinc-300 pl-2">
+              <div className="ml-2.5 border-l border-zinc-300 pl-1.5">
                 {loadingDirectories.has(entry.path) && !(directories[entry.path]?.length) ? (
                   <div className="px-2 py-1 text-[11px] text-zinc-500">Loading...</div>
                 ) : (

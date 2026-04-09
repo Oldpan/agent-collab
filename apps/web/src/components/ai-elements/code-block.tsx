@@ -44,7 +44,7 @@ const isBundledLanguage = (
 ): language is BundledLanguage =>
   Object.prototype.hasOwnProperty.call(languages, language);
 
-type HighlightCacheEntry = { light: string; dark: string };
+type HighlightCacheEntry = { html: string };
 const highlightCache = new Map<string, HighlightCacheEntry>();
 
 function makeLineNumberTransformer(): ShikiTransformer {
@@ -55,7 +55,7 @@ function makeLineNumberTransformer(): ShikiTransformer {
         type: "element",
         tagName: "span",
         properties: {
-          className: ["inline-block", "min-w-10", "mr-4", "text-right", "select-none", "text-muted-foreground"],
+          className: ["inline-block", "min-w-10", "mr-4", "text-right", "select-none", "text-zinc-500"],
         },
         children: [{ type: "text", value: String(line) }],
       });
@@ -73,12 +73,8 @@ async function highlightCode(
 
   const transformers: ShikiTransformer[] = showLineNumbers ? [makeLineNumberTransformer()] : [];
 
-  const [light, dark] = await Promise.all([
-    codeToHtml(code, { lang: language, theme: "one-light", transformers }),
-    codeToHtml(code, { lang: language, theme: "one-dark-pro", transformers }),
-  ]);
-
-  return { light, dark };
+  const html = await codeToHtml(code, { lang: language, theme: "github-light", transformers });
+  return { html };
 }
 
 const COLLAPSE_THRESHOLD = 300;
@@ -91,7 +87,6 @@ export const CodeBlock = ({
   ...props
 }: CodeBlockProps) => {
   const [html, setHtml] = useState("");
-  const [darkHtml, setDarkHtml] = useState("");
   const [isTall, setIsTall] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -103,7 +98,7 @@ export const CodeBlock = ({
 
   useLayoutEffect(() => {
     checkOverflow();
-  }, [checkOverflow, html, darkHtml]);
+  }, [checkOverflow, html]);
 
   useEffect(() => {
     const el = scrollContainerRef.current;
@@ -123,36 +118,36 @@ export const CodeBlock = ({
   useEffect(() => {
     let cancelled = false;
     setHtml("");
-    setDarkHtml("");
     if (!language || !cacheKey) return () => { cancelled = true; };
 
     const cached = highlightCache.get(cacheKey);
     if (cached) {
-      setHtml(cached.light);
-      setDarkHtml(cached.dark);
+      setHtml(cached.html);
       return () => { cancelled = true; };
     }
 
     highlightCode(code, language, showLineNumbers).then((result) => {
       if (cancelled || !result) return;
       highlightCache.set(cacheKey, result);
-      setHtml(result.light);
-      setDarkHtml(result.dark);
+      setHtml(result.html);
     });
 
     return () => { cancelled = true; };
   }, [cacheKey, code, language, showLineNumbers]);
 
   const contentClassName = [
-    "[&>pre]:m-0", "[&>pre]:whitespace-pre", "[&>pre]:bg-card!",
-    "[&>pre]:p-3", "[&>pre]:text-foreground!", "[&>pre]:text-xs",
+    "[&>pre]:m-0", "[&>pre]:whitespace-pre",
+    "[&>pre]:p-3", "[&>pre]:text-xs",
     "[&_code]:font-mono", "[&_code]:text-xs",
   ].join(" ");
 
   return (
     <CodeBlockContext.Provider value={{ code: copyText }}>
       <div
-        className={cn("group relative w-full rounded border border-border bg-card text-foreground", className)}
+        className={cn(
+          "group relative w-full overflow-hidden rounded-md border-2 border-zinc-900 bg-[#f6f8fa] shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]",
+          className,
+        )}
         {...props}
       >
         {/* Action buttons */}
@@ -178,16 +173,9 @@ export const CodeBlock = ({
           >
             <div className="relative">
               {html ? (
-                <div className={cn("dark:hidden", contentClassName)} dangerouslySetInnerHTML={{ __html: html }} />
+                <div className={contentClassName} dangerouslySetInnerHTML={{ __html: html }} />
               ) : (
-                <div className={cn("dark:hidden", contentClassName)}>
-                  <pre><code>{copyText}</code></pre>
-                </div>
-              )}
-              {darkHtml ? (
-                <div className={cn("hidden dark:block", contentClassName)} dangerouslySetInnerHTML={{ __html: darkHtml }} />
-              ) : (
-                <div className={cn("hidden dark:block", contentClassName)}>
+                <div className={contentClassName}>
                   <pre><code>{copyText}</code></pre>
                 </div>
               )}
@@ -195,7 +183,7 @@ export const CodeBlock = ({
           </div>
           {/* Gradient fade */}
           {isTall && !isExpanded && (
-            <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-card to-transparent pointer-events-none" />
+            <div className="absolute bottom-0 left-0 right-0 h-12 bg-gradient-to-t from-[#f6f8fa] to-transparent pointer-events-none" />
           )}
         </div>
 
@@ -203,7 +191,7 @@ export const CodeBlock = ({
         {isTall && (
           <button
             type="button"
-            className="flex w-full items-center justify-center gap-1 border-t border-border py-1 text-xs text-muted-foreground cursor-pointer hover:text-foreground hover:bg-muted/30 transition-colors"
+            className="flex w-full items-center justify-center gap-1 border-t border-zinc-900 bg-[#fffdf4] py-1 text-xs text-zinc-600 cursor-pointer hover:text-zinc-900 hover:bg-[#fff1a9] transition-colors"
             onClick={() => setIsExpanded(!isExpanded)}
           >
             <ChevronDownIcon className={cn("size-3 transition-transform", isExpanded && "rotate-180")} />

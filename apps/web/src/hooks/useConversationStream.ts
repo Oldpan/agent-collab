@@ -130,6 +130,23 @@ function isLegacyPlanOrTaskDelta(text: string): boolean {
   return normalized.startsWith("[plan] ") || normalized.startsWith("[task] ");
 }
 
+function isIgnorableFallbackDisplayText(text: string): boolean {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) return true;
+  if (normalized.includes(`empty response: {'content':`)) return true;
+  return normalized === 'plan updated'
+    || normalized === 'task updated'
+    || normalized === '[plan] plan updated'
+    || normalized === '[task] task updated';
+}
+
+function shouldHideChannelMessage(params: {
+  text: string;
+  messageSource?: string;
+}): boolean {
+  return params.messageSource === "delta_fallback" && isIgnorableFallbackDisplayText(params.text);
+}
+
 function getRunTerminalStatus(params: {
   stopReason?: string;
   error?: string;
@@ -298,7 +315,15 @@ export function useConversationStream(
       if (latestSeq > 0 && canMarkSeen()) {
         onSeenSeqRef.current?.(latestSeq);
       }
-      setMessages((prev) => mergeMessagesById(prev, data.messages.map(toLiveChannelMessage)));
+      setMessages((prev) => mergeMessagesById(
+        prev,
+        data.messages
+          .filter((message) => !shouldHideChannelMessage({
+            text: message.content,
+            messageSource: message.messageSource ?? undefined,
+          }))
+          .map(toLiveChannelMessage),
+      ));
     } catch {
       // Ignore background sync failures; realtime WS remains primary.
     } finally {
@@ -484,6 +509,9 @@ export function useConversationStream(
           // Do NOT finalize the run here — the agent may continue with tool calls
           // (e.g. memory writes) after send_message. Let turn.end handle finalization.
           const { id, senderType, content, createdAt, messageSource } = event.message;
+          if (shouldHideChannelMessage({ text: content, messageSource: messageSource ?? undefined })) {
+            break;
+          }
           const role = senderType === "user" ? "user" : senderType === "system" ? "system" : "assistant";
           const liveMessage = {
             id,

@@ -436,4 +436,43 @@ describe('activationContext', () => {
 
     db.close();
   });
+
+  it('activation context 应过滤纯 [plan]/[task] updated 噪音消息', () => {
+    const db = createTestDb();
+    const now = Date.now();
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES
+       ('dm-noise-user', 'dm:agent-kimi', 'user-1', 'oldpan', 'user', 'dm:@oldpan', '先看下当前服务状态', 1, ?),
+       ('dm-noise-plan', 'dm:agent-kimi', 'agent-kimi', 'kimi', 'agent', 'dm:@oldpan', '[plan] Plan updated', 2, ?),
+       ('dm-noise-task', 'dm:agent-kimi', 'agent-kimi', 'kimi', 'agent', 'dm:@oldpan', '[task] Task updated', 3, ?),
+       ('dm-keep-agent', 'dm:agent-kimi', 'agent-kimi', 'kimi', 'agent', 'dm:@oldpan', '我先检查服务进程和健康状态。', 4, ?)`,
+    ).run(now, now + 1, now + 2, now + 3);
+
+    const context = buildTargetActivationContext(db, {
+      agentId: 'agent-kimi',
+      channelId: 'dm:agent-kimi',
+      replyTarget: 'dm:@oldpan',
+      triggerSeq: 5,
+      threadRootId: null,
+    });
+    const text = buildChannelActivationContextText({
+      target: 'dm:@oldpan',
+      recentMessages: context.recentMessages,
+      unreadCount: context.unreadCount,
+      oldestVisibleSeq: context.oldestVisibleSeq,
+    });
+
+    expect(context.recentMessages.map((message) => message.messageId)).toEqual([
+      'dm-noise-user',
+      'dm-keep-agent',
+    ]);
+    expect(text).toContain('先看下当前服务状态');
+    expect(text).toContain('我先检查服务进程和健康状态。');
+    expect(text).not.toContain('Plan updated');
+    expect(text).not.toContain('Task updated');
+
+    db.close();
+  });
 });

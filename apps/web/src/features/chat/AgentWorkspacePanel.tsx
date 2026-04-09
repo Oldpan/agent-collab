@@ -235,6 +235,14 @@ export function AgentWorkspacePanel({ agent }: AgentWorkspacePanelProps) {
               ) : selectedFile ? (
                 selectedFile.mimeType === "text/markdown" ? (
                   <MessageResponse>{selectedFile.content}</MessageResponse>
+                ) : selectedFile.mimeType.startsWith("image/") ? (
+                  <div className="flex justify-center rounded-md border border-border bg-background p-3">
+                    <img
+                      src={selectedFile.content}
+                      alt={selectedFilePath ?? "workspace image"}
+                      className="max-h-[70vh] max-w-full rounded object-contain"
+                    />
+                  </div>
                 ) : (
                   <pre className="overflow-x-auto rounded-md bg-muted/40 p-4 font-mono text-xs leading-6">
                     {selectedFile.content}
