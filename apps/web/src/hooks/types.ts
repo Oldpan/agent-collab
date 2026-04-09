@@ -56,6 +56,13 @@ export type LiveMessage = {
   taskAssigneeName?: string | null;
 };
 
+export type PendingLocalPrompt = {
+  id: string;
+  text: string;
+  createdAt: number;
+  attachmentIds?: string[];
+};
+
 /** A tool call within an assistant message */
 export type LiveToolCall = {
   id: string;

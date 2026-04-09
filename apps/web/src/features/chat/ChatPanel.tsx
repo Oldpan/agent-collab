@@ -226,6 +226,7 @@ export function ChatPanel({
   const userIdentity = useMemo(() => readStoredUserIdentity(), []);
   const {
     messages,
+    pendingMessages,
     runs,
     status,
     connectionReady,
@@ -527,7 +528,7 @@ export function ChatPanel({
                         {threadError}
                       </div>
                     ) : null}
-                    {messages.length === 0 ? (
+                    {messages.length === 0 && pendingMessages.length === 0 ? (
                       <ConversationEmptyState
                         title="Start the conversation"
                         description="Send a message to begin"
@@ -565,10 +566,22 @@ export function ChatPanel({
                             ? "Waiting for the current conversation to finish..."
                             : status === "recovering"
                               ? "Recovering session..."
-                              : "Waiting for approval..."}
+                            : "Waiting for approval..."}
                         </span>
                       </div>
                     )}
+
+                    {pendingMessages.map((msg) => (
+                      <PendingMessageRow
+                        key={msg.id}
+                        text={msg.text}
+                        createdAt={msg.createdAt}
+                        attachmentIds={msg.attachmentIds}
+                        userName={userIdentity.name}
+                        userIdentity={userIdentity}
+                        agent={agent}
+                      />
+                    ))}
                   </ConversationContent>
                   <ConversationScrollButton />
                 </Conversation>
@@ -612,7 +625,7 @@ export function ChatPanel({
                       {threadError}
                     </div>
                   ) : null}
-                  {messages.length === 0 ? (
+                  {messages.length === 0 && pendingMessages.length === 0 ? (
                     <ConversationEmptyState
                       title="Start the conversation"
                       description="Send a message to begin"
@@ -650,10 +663,22 @@ export function ChatPanel({
                           ? "Waiting for the current conversation to finish..."
                           : status === "recovering"
                             ? "Recovering session..."
-                            : "Waiting for approval..."}
+                          : "Waiting for approval..."}
                       </span>
                     </div>
                   )}
+
+                  {pendingMessages.map((msg) => (
+                    <PendingMessageRow
+                      key={msg.id}
+                      text={msg.text}
+                      createdAt={msg.createdAt}
+                      attachmentIds={msg.attachmentIds}
+                      userName={userIdentity.name}
+                      userIdentity={userIdentity}
+                      agent={agent}
+                    />
+                  ))}
                 </ConversationContent>
                 <ConversationScrollButton />
               </Conversation>
@@ -853,6 +878,51 @@ function MessageRow({
         {isUser && (
           <ChatAvatar role={message.role} agent={agent} user={userIdentity} size={38} className="mt-0.5" />
         )}
+      </div>
+    </Message>
+  );
+}
+
+function PendingMessageRow({
+  text,
+  createdAt,
+  attachmentIds,
+  userName,
+  userIdentity,
+  agent,
+}: {
+  text: string;
+  createdAt: number;
+  attachmentIds?: string[];
+  userName: string;
+  userIdentity: { name: string; avatarUrl: string | null };
+  agent: AgentInfo | null;
+}) {
+  return (
+    <Message from="user" className="bg-transparent px-1 py-2.5">
+      <div className="flex items-start justify-end gap-2.5">
+        <div className="flex min-w-0 max-w-[min(760px,82%)] flex-col items-end text-left">
+          <div className="mb-1.5 flex w-full items-start justify-end gap-3">
+            <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
+              <span className="text-[15px] font-semibold tracking-tight text-zinc-950">{userName}</span>
+              <span className="rounded-sm border border-zinc-900 bg-[#fffce8]/80 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-zinc-500">
+                Owner
+              </span>
+              <span className="rounded-sm border border-zinc-900 border-dashed bg-[#fff8d8] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
+                Pending
+              </span>
+              <span className="text-[11px] font-medium text-zinc-500">
+                {messageTimeFormatter.format(createdAt)}
+              </span>
+            </div>
+          </div>
+
+          <UserMessageContent className="w-fit min-w-[20px] max-w-full self-end rounded-md border-2 border-dashed border-zinc-900 bg-[#eef7ff] px-3 py-2.5 text-zinc-950 opacity-85 shadow-[4px_4px_0_0_rgba(47,116,193,0.1)]">
+            {text}
+            {attachmentIds?.map((id) => <AttachmentImage key={id} attachmentId={id} />)}
+          </UserMessageContent>
+        </div>
+        <ChatAvatar role="user" agent={agent} user={userIdentity} size={38} className="mt-0.5" />
       </div>
     </Message>
   );

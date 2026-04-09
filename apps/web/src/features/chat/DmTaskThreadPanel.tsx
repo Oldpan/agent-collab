@@ -60,6 +60,7 @@ export function DmTaskThreadPanel({
   const userIdentity = useMemo(() => readStoredUserIdentity(), []);
   const {
     messages,
+    pendingMessages,
     status,
     connectionReady,
     contextSnapshot,
@@ -245,7 +246,7 @@ export function DmTaskThreadPanel({
 
       <Conversation className="min-h-0 flex-1 bg-[#fff7cc]">
         <ConversationContent className="px-3 py-4">
-          {threadMessages.length === 0 ? (
+          {threadMessages.length === 0 && pendingMessages.length === 0 ? (
             <div className="rounded-md border-2 border-dashed border-zinc-900/30 bg-[#fff8d8] px-4 py-6 text-center text-sm text-zinc-500">
               No thread replies yet.
             </div>
@@ -277,9 +278,28 @@ export function DmTaskThreadPanel({
                     )}
                   </div>
                 </div>
-              );
-            })
+                );
+              })
           )}
+
+          {pendingMessages.map((message) => (
+            <div key={message.id} className="flex flex-row-reverse gap-2.5 px-1 py-2.5">
+              <ChatAvatar role="user" agent={agent} user={userIdentity} size={34} className="mt-0.5 shrink-0" />
+              <div className="flex min-w-0 max-w-[92%] flex-col items-end text-left">
+                <div className="mb-1 flex flex-wrap items-center justify-end gap-2">
+                  <span className="text-[13px] font-semibold tracking-tight text-zinc-950">{userIdentity.name}</span>
+                  <span className="rounded-sm border border-zinc-900 border-dashed bg-[#fff8d8] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-zinc-600">
+                    Pending
+                  </span>
+                  <span className="text-[11px] text-zinc-500">{messageTimeFormatter.format(message.createdAt)}</span>
+                </div>
+                <UserMessageContent className="w-fit min-w-[20px] max-w-full rounded-md border-2 border-dashed border-zinc-900 bg-[#eef7ff] px-3 py-2.5 text-zinc-950 opacity-85 shadow-[3px_3px_0_0_rgba(47,116,193,0.1)]">
+                  {message.text}
+                  {message.attachmentIds?.map((id) => <AttachmentImage key={id} attachmentId={id} />)}
+                </UserMessageContent>
+              </div>
+            </div>
+          ))}
         </ConversationContent>
         <ConversationScrollButton />
       </Conversation>

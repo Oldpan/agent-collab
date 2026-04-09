@@ -7,6 +7,7 @@ import type {
   LiveToolCall,
   PendingApproval,
   ChatStatus,
+  PendingLocalPrompt,
 } from "./types";
 import * as api from "@/lib/api";
 import { useConversationsStore } from "./useConversations";
@@ -14,6 +15,20 @@ import { useConversationsStore } from "./useConversations";
 let nextId = 1;
 const createId = () => `msg-${nextId++}`;
 const ACTIVE_CONVERSATION_SYNC_INTERVAL_MS = 1500;
+const PENDING_STORAGE_PREFIX = "conversation-pending-prompts";
+
+type PendingPromptState = {
+  items: PendingLocalPrompt[];
+  awaitingIdle: boolean;
+};
+
+type ServerConversationStatus =
+  | "idle"
+  | "queued"
+  | "active"
+  | "recovering"
+  | "awaiting_approval"
+  | "failed";
 
 function createClientMessageId(): string {
   if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
@@ -32,6 +47,72 @@ function isDispatchFailureError(error?: string): boolean {
 
 function canMarkSeen(): boolean {
   return typeof document === "undefined" || document.visibilityState === "visible";
+}
+
+function getPendingStorageKey(conversationId: string): string {
+  return `${PENDING_STORAGE_PREFIX}:${conversationId}`;
+}
+
+function readPendingPromptState(conversationId: string): PendingPromptState {
+  if (typeof window === "undefined") return { items: [], awaitingIdle: false };
+  try {
+    const raw = window.sessionStorage.getItem(getPendingStorageKey(conversationId));
+    if (!raw) return { items: [], awaitingIdle: false };
+    const parsed = JSON.parse(raw) as Partial<PendingPromptState>;
+    const items = Array.isArray(parsed.items)
+      ? parsed.items.filter((value): value is PendingLocalPrompt => {
+          if (!value || typeof value !== "object") return false;
+          return typeof value.id === "string"
+            && typeof value.text === "string"
+            && typeof value.createdAt === "number"
+            && (value.attachmentIds == null || Array.isArray(value.attachmentIds));
+        })
+      : [];
+    return {
+      items,
+      awaitingIdle: parsed.awaitingIdle === true,
+    };
+  } catch {
+    return { items: [], awaitingIdle: false };
+  }
+}
+
+function writePendingPromptState(
+  conversationId: string | null,
+  state: PendingPromptState,
+): void {
+  if (typeof window === "undefined" || !conversationId) return;
+  const key = getPendingStorageKey(conversationId);
+  if (state.items.length === 0) {
+    window.sessionStorage.removeItem(key);
+    return;
+  }
+  window.sessionStorage.setItem(key, JSON.stringify(state));
+}
+
+function buildPromptTextWithAttachments(text: string, attachmentIds?: string[]): string {
+  const attachmentNote = attachmentIds?.length
+    ? `\n\n[Attached image${attachmentIds.length > 1 ? "s" : ""}]\n`
+      + attachmentIds
+        .map((aid) => `ID: ${aid}\nUse view_file(attachment_id="${aid}") to view it.`)
+        .join("\n")
+    : "";
+  return text + attachmentNote;
+}
+
+function mergePendingPrompts(
+  items: PendingLocalPrompt[],
+): { displayText: string; promptText: string; attachmentIds: string[] } {
+  const displayParts = items
+    .map((item) => item.text.trim())
+    .filter((text) => text.length > 0);
+  const displayText = displayParts.join("\n\n");
+  const attachmentIds = items.flatMap((item) => item.attachmentIds ?? []);
+  return {
+    displayText,
+    promptText: buildPromptTextWithAttachments(displayText, attachmentIds),
+    attachmentIds,
+  };
 }
 
 /** Split agent-facing prompt text into display text + attachment IDs */
@@ -137,10 +218,12 @@ type ConversationContextSnapshot = Awaited<ReturnType<typeof api.getConversation
 
 type UseConversationStreamReturn = {
   messages: LiveMessage[];
+  pendingMessages: PendingLocalPrompt[];
   runs: LiveRun[];
   status: ChatStatus;
   connectionReady: boolean;
   hasActiveRun: boolean;
+  isFlushingPending: boolean;
   pendingApproval: PendingApproval | null;
   contextSnapshot: ConversationContextSnapshot | null;
   sendPrompt: (text: string, attachmentIds?: string[]) => boolean;
@@ -161,11 +244,14 @@ export function useConversationStream(
   const isChannelMode = Boolean(conversationAgentId);
 
   const [messages, setMessages] = useState<LiveMessage[]>([]);
+  const [pendingState, setPendingState] = useState<PendingPromptState>({ items: [], awaitingIdle: false });
   const [runs, setRuns] = useState<LiveRun[]>([]);
   const [status, setStatus] = useState<ChatStatus>("idle");
   const [connectionReady, setConnectionReady] = useState(false);
   const [pendingApproval, setPendingApproval] = useState<PendingApproval | null>(null);
   const [contextSnapshot, setContextSnapshot] = useState<ConversationContextSnapshot | null>(null);
+  const [historyReady, setHistoryReady] = useState(false);
+  const [isFlushingPending, setIsFlushingPending] = useState(false);
   const hasActiveRun = runs.some((run) => run.isActive);
 
   // Refs for streaming accumulators
@@ -180,10 +266,23 @@ export function useConversationStream(
   const connectionReadyRef = useRef(false);
   const terminalWsErrorRef = useRef<string | null>(null);
   const syncInFlightRef = useRef(false);
+  const pendingStateRef = useRef<PendingPromptState>(pendingState);
+  const historyReadyRef = useRef(false);
+  const initialServerStatusRef = useRef<ServerConversationStatus | null>(null);
+  const pendingStorageConversationIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     onSeenSeqRef.current = onSeenSeq;
   }, [onSeenSeq]);
+
+  useEffect(() => {
+    pendingStateRef.current = pendingState;
+  }, [pendingState]);
+
+  useEffect(() => {
+    if (conversationId !== pendingStorageConversationIdRef.current) return;
+    writePendingPromptState(conversationId, pendingState);
+  }, [conversationId, pendingState]);
 
   const syncChannelMessages = useCallback(async () => {
     if (!conversationId || !isChannelMode || syncInFlightRef.current) return;
@@ -206,6 +305,95 @@ export function useConversationStream(
       syncInFlightRef.current = false;
     }
   }, [conversationId, isChannelMode]);
+
+  const appendOptimisticUserMessage = useCallback((params: {
+    id: string;
+    text: string;
+    attachmentIds?: string[];
+  }) => {
+    setMessages((prev) => mergeMessagesById(prev, [
+      {
+        id: params.id,
+        role: "user",
+        text: params.text,
+        createdAt: Date.now(),
+        isStreaming: false,
+        ...(params.attachmentIds?.length ? { attachmentIds: params.attachmentIds } : {}),
+      },
+    ]));
+  }, []);
+
+  const removeOptimisticUserMessage = useCallback((messageId: string) => {
+    setMessages((prev) => prev.filter((message) => message.id !== messageId));
+  }, []);
+
+  const releasePendingBarrier = useCallback(() => {
+    setPendingState((current) => (
+      current.awaitingIdle
+        ? { ...current, awaitingIdle: false }
+        : current
+    ));
+  }, []);
+
+  const enqueuePendingPrompt = useCallback((text: string, attachmentIds?: string[]) => {
+    const pendingPrompt: PendingLocalPrompt = {
+      id: createClientMessageId(),
+      text,
+      createdAt: Date.now(),
+      ...(attachmentIds?.length ? { attachmentIds } : {}),
+    };
+    setPendingState((current) => ({
+      items: [...current.items, pendingPrompt],
+      awaitingIdle: true,
+    }));
+  }, []);
+
+  const flushPendingQueue = useCallback(async () => {
+    if (!conversationId) return;
+    const currentPending = pendingStateRef.current;
+    if (currentPending.items.length === 0 || currentPending.awaitingIdle || isFlushingPending) return;
+
+    const batch = currentPending.items;
+    const flushMessageId = createClientMessageId();
+    const { displayText, promptText, attachmentIds } = mergePendingPrompts(batch);
+    setIsFlushingPending(true);
+    setPendingState({ items: [], awaitingIdle: false });
+    appendOptimisticUserMessage({
+      id: flushMessageId,
+      text: displayText,
+      attachmentIds,
+    });
+    setStatus("submitted");
+
+    try {
+      const result = await api.sendConversationPrompt(conversationId, promptText, flushMessageId);
+      setStatus(result.queued ? "queued" : "submitted");
+    } catch (error) {
+      removeOptimisticUserMessage(flushMessageId);
+      setPendingState((current) => ({
+        items: [...batch, ...current.items],
+        awaitingIdle: true,
+      }));
+      setStatus("error");
+      setMessages((prev) => [
+        ...prev,
+        {
+          id: createId(),
+          role: "system",
+          text: String((error as Error)?.message ?? error),
+          createdAt: Date.now(),
+          isStreaming: false,
+        },
+      ]);
+    } finally {
+      setIsFlushingPending(false);
+    }
+  }, [
+    appendOptimisticUserMessage,
+    conversationId,
+    isFlushingPending,
+    removeOptimisticUserMessage,
+  ]);
 
   // Helper: update the latest assistant message in-place
   const updateCurrentMessage = useCallback(() => {
@@ -614,11 +802,17 @@ export function useConversationStream(
           }
           currentRunIdRef.current = null;
           currentMsgIdRef.current = null;
+          if (!event.turnId.startsWith("replay-")) {
+            releasePendingBarrier();
+          }
           setStatus("idle");
           break;
         }
 
         case "conversation.status": {
+          if (!historyReadyRef.current && initialServerStatusRef.current == null) {
+            initialServerStatusRef.current = event.status as ServerConversationStatus;
+          }
           // 同步 status 到全局 conversation store，确保 Session Manager 等面板实时准确
           if (conversationId) {
             useConversationsStore.getState().patchConversationStatus(conversationId, event.status);
@@ -654,6 +848,13 @@ export function useConversationStream(
           } else if (event.status === "failed") {
             setStatus("error");
           }
+          if (
+            historyReadyRef.current
+            && pendingStateRef.current.awaitingIdle
+            && (event.status === "idle" || event.status === "failed")
+          ) {
+            releasePendingBarrier();
+          }
           break;
         }
 
@@ -677,6 +878,8 @@ export function useConversationStream(
         }
 
         case "history.complete": {
+          historyReadyRef.current = true;
+          setHistoryReady(true);
           // History replay done, ready for interaction
           const replayRunActive =
             currentRunIdRef.current?.startsWith("replay-") ?? false;
@@ -692,7 +895,17 @@ export function useConversationStream(
             }
             currentRunIdRef.current = null;
             currentMsgIdRef.current = null;
-            setStatus("idle");
+            const initialStatus = initialServerStatusRef.current;
+            const shouldRemainBusy = initialStatus != null && initialStatus !== "idle" && initialStatus !== "failed";
+            if (!shouldRemainBusy) {
+              setStatus("idle");
+            }
+          }
+          if (
+            pendingStateRef.current.awaitingIdle
+            && (initialServerStatusRef.current === "idle" || initialServerStatusRef.current === "failed")
+          ) {
+            releasePendingBarrier();
           }
           break;
         }
@@ -713,7 +926,7 @@ export function useConversationStream(
         }
       }
     },
-    [finalizeCurrentToolCalls, updateCurrentMessage],
+    [conversationId, finalizeCurrentToolCalls, releasePendingBarrier, updateCurrentMessage],
   );
 
   // Connect / disconnect WebSocket on conversationId change
@@ -722,11 +935,14 @@ export function useConversationStream(
 
     // Reset state
     setMessages([]);
+    setPendingState({ items: [], awaitingIdle: false });
     setRuns([]);
     setStatus("idle");
     setConnectionReady(false);
     setPendingApproval(null);
     setContextSnapshot(null);
+    setHistoryReady(false);
+    setIsFlushingPending(false);
     textRef.current = "";
     thinkingRef.current = "";
     currentToolCallsRef.current = [];
@@ -735,11 +951,17 @@ export function useConversationStream(
     pendingClientEventsRef.current = [];
     connectionReadyRef.current = false;
     terminalWsErrorRef.current = null;
+    historyReadyRef.current = false;
+    initialServerStatusRef.current = null;
 
     if (!conversationId) {
+      pendingStorageConversationIdRef.current = null;
       wsRef.current = null;
       return;
     }
+
+    pendingStorageConversationIdRef.current = conversationId;
+    setPendingState(readPendingPromptState(conversationId));
 
     api
       .getHistory(conversationId)
@@ -905,6 +1127,30 @@ export function useConversationStream(
     return () => window.clearInterval(intervalId);
   }, [conversationId, isChannelMode, syncChannelMessages]);
 
+  useEffect(() => {
+    if (!conversationId || !connectionReady || !historyReady || isFlushingPending) return;
+    if (
+      status === "queued"
+      || status === "submitted"
+      || status === "streaming"
+      || status === "recovering"
+      || status === "awaiting_approval"
+    ) {
+      return;
+    }
+    if (pendingState.items.length === 0 || pendingState.awaitingIdle) return;
+    void flushPendingQueue();
+  }, [
+    connectionReady,
+    conversationId,
+    flushPendingQueue,
+    historyReady,
+    isFlushingPending,
+    pendingState.awaitingIdle,
+    pendingState.items.length,
+    status,
+  ]);
+
   // Send helpers
   const sendEvent = useCallback((event: ClientEvent) => {
     const ws = wsRef.current;
@@ -921,26 +1167,33 @@ export function useConversationStream(
 
   const sendPrompt = useCallback(
     (text: string, attachmentIds?: string[]) => {
-      const id = createClientMessageId();
-      // Append attachment references to prompt so the agent can use view_file
-      const attachmentNote = attachmentIds?.length
-        ? `\n\n[Attached image${attachmentIds.length > 1 ? 's' : ''}]\n` +
-          attachmentIds.map((aid) => `ID: ${aid}\nUse view_file(attachment_id="${aid}") to view it.`).join('\n')
-        : '';
-      const promptText = text + attachmentNote;
-      setMessages((prev) => [
-        ...prev,
-        { id, role: "user", text, createdAt: Date.now(), isStreaming: false,
-          ...(attachmentIds?.length ? { attachmentIds } : {}) },
-      ]);
-      const rollback = () =>
-        setMessages((prev) => prev.filter((message) => message.id !== id));
-
       if (!conversationId) {
-        rollback();
         setStatus("error");
         return false;
       }
+
+      const isBusy =
+        status === "queued"
+        || status === "submitted"
+        || status === "streaming"
+        || status === "recovering"
+        || status === "awaiting_approval";
+      if (pendingStateRef.current.items.length > 0 && !isFlushingPending) {
+        enqueuePendingPrompt(text, attachmentIds);
+        if (!isBusy) {
+          releasePendingBarrier();
+        }
+        return true;
+      }
+      if (isBusy) {
+        enqueuePendingPrompt(text, attachmentIds);
+        return true;
+      }
+
+      const id = createClientMessageId();
+      const promptText = buildPromptTextWithAttachments(text, attachmentIds);
+      appendOptimisticUserMessage({ id, text, attachmentIds });
+      const rollback = () => removeOptimisticUserMessage(id);
 
       setStatus("submitted");
       void api
@@ -965,7 +1218,7 @@ export function useConversationStream(
 
       return true;
     },
-    [conversationId],
+    [appendOptimisticUserMessage, conversationId, enqueuePendingPrompt, isFlushingPending, releasePendingBarrier, removeOptimisticUserMessage, status],
   );
 
   const respondApproval = useCallback(
@@ -1008,10 +1261,12 @@ export function useConversationStream(
 
   return {
     messages,
+    pendingMessages: pendingState.items,
     runs,
     status,
     connectionReady,
     hasActiveRun,
+    isFlushingPending,
     pendingApproval,
     contextSnapshot,
     sendPrompt,
