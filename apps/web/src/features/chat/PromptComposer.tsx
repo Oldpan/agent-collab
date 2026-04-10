@@ -25,6 +25,7 @@ export function PromptComposer({
 }: PromptComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const shiftPressedRef = useRef(false);
   const [pendingFiles, setPendingFiles] = useState<Array<{ id: string; name: string }>>([]);
   const [uploading, setUploading] = useState(false);
 
@@ -62,13 +63,27 @@ export function PromptComposer({
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && e.shiftKey) {
+      if (e.key === "Shift") {
+        shiftPressedRef.current = true;
+        return;
+      }
+      if (e.key === "Enter" && shiftPressedRef.current) {
         e.preventDefault();
         handleSubmit();
       }
     },
     [handleSubmit],
   );
+
+  const handleKeyUp = useCallback((e: KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Shift") {
+      shiftPressedRef.current = false;
+    }
+  }, []);
+
+  const handleBlur = useCallback(() => {
+    shiftPressedRef.current = false;
+  }, []);
 
   const handleInput = useCallback(() => {
     const textarea = textareaRef.current;
@@ -113,7 +128,7 @@ export function PromptComposer({
         </div>
       )}
 
-      <div className="flex items-end gap-2 rounded-sm border-2 border-black bg-[#fffdf4] p-2 shadow-[4px_4px_0_0_rgba(0,0,0,0.2)]">
+      <div className="flex items-end gap-2 rounded-sm border-2 border-black bg-[#fffdf4] p-1.5 shadow-[4px_4px_0_0_rgba(0,0,0,0.2)]">
         {/* Hidden file input */}
         <input
           ref={fileInputRef}
@@ -127,7 +142,7 @@ export function PromptComposer({
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={shouldDisableInput || uploading}
-          className="shrink-0 rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40"
+          className="shrink-0 self-center rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40"
           title="Attach image"
         >
           <PaperclipIcon className="size-4" />
@@ -135,7 +150,7 @@ export function PromptComposer({
         <textarea
           ref={textareaRef}
           className={cn(
-            "min-h-[40px] max-h-[200px] flex-1 resize-none rounded-sm border border-transparent bg-transparent px-3 py-2 text-sm text-zinc-900",
+            "min-h-[36px] max-h-[200px] flex-1 resize-none rounded-sm border border-transparent bg-transparent px-3 py-1.5 text-sm text-zinc-900",
             "placeholder:text-zinc-400",
             "focus:outline-none",
             "disabled:cursor-not-allowed disabled:opacity-50",
@@ -147,11 +162,13 @@ export function PromptComposer({
           }
           disabled={shouldDisableInput}
           onKeyDown={handleKeyDown}
+          onKeyUp={handleKeyUp}
+          onBlur={handleBlur}
           onInput={handleInput}
           rows={1}
         />
 
-        <div className="flex shrink-0 items-center gap-2">
+        <div className="flex shrink-0 self-center items-center gap-2">
           {shouldShowCancel && (
             <Button
               size="icon"

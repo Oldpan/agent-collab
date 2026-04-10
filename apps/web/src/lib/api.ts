@@ -292,39 +292,6 @@ export async function readResourceFile(
   return res.json();
 }
 
-export async function readResourceFileBlob(
-  resourceSpaceId: string,
-  resourcePath: string,
-): Promise<Blob> {
-  const res = await fetch(`${API_BASE}/resource-spaces/${encodeURIComponent(resourceSpaceId)}/file/raw`, {
-    method: "POST",
-    headers: withAuthHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ path: resourcePath }),
-  });
-  if (!res.ok) {
-    const body = await safeReadErrorBody(res);
-    throw new Error(formatHttpError("Failed to read resource file", res, body));
-  }
-  return res.blob();
-}
-
-export async function readResourceFileRawViaGet(
-  resourceSpaceId: string,
-  resourcePath: string,
-): Promise<Blob> {
-  const params = new URLSearchParams();
-  params.set("path", resourcePath);
-  params.set("format", "raw");
-  const res = await fetch(`${API_BASE}/resource-spaces/${encodeURIComponent(resourceSpaceId)}/file?${params.toString()}`, {
-    headers: withAuthHeaders(),
-  });
-  if (!res.ok) {
-    const body = await safeReadErrorBody(res);
-    throw new Error(formatHttpError("Failed to read resource file", res, body));
-  }
-  return res.blob();
-}
-
 export async function analyzeResource(
   resourceSpaceId: string,
   req: { agentId: string; question: string; path: string; selection?: string },

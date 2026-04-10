@@ -224,6 +224,7 @@ function ThreadComposer({
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const shiftPressedRef = useRef(false);
 
   const mentionCandidates = useMemo(() => {
     if (mentionQuery === null) return [];
@@ -273,6 +274,10 @@ function ThreadComposer({
   }, [text, onSend, sending]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Shift") {
+      shiftPressedRef.current = true;
+      return;
+    }
     if (mentionQuery !== null && mentionCandidates.length > 0) {
       if (e.key === "ArrowDown") { e.preventDefault(); setMentionIndex(i => Math.min(i + 1, mentionCandidates.length - 1)); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); setMentionIndex(i => Math.max(i - 1, 0)); return; }
@@ -284,8 +289,18 @@ function ThreadComposer({
       }
       if (e.key === "Escape") { e.preventDefault(); setMentionQuery(null); return; }
     }
-    if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); void handleSubmit(); }
+    if (e.key === "Enter" && shiftPressedRef.current) { e.preventDefault(); void handleSubmit(); }
   }, [mentionQuery, mentionCandidates, mentionIndex, selectMention, handleSubmit]);
+
+  const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Shift") {
+      shiftPressedRef.current = false;
+    }
+  }, []);
+
+  const handleBlur = useCallback(() => {
+    shiftPressedRef.current = false;
+  }, []);
 
   return (
     <div className="relative border-t-2 border-black bg-[#fff5c2] px-3 py-2.5 shadow-[0_-2px_0_0_rgba(0,0,0,0.08)]">
@@ -313,6 +328,8 @@ function ThreadComposer({
           value={text}
           onChange={handleChange}
           onKeyDown={handleKeyDown}
+          onKeyUp={handleKeyUp}
+          onBlur={handleBlur}
           className={cn(
             "min-h-[36px] max-h-[160px] flex-1 resize-none rounded-sm border border-transparent bg-transparent px-2 py-1.5 text-sm text-zinc-900",
             "placeholder:text-zinc-400 focus:outline-none disabled:opacity-50",

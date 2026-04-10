@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   ArrowLeftIcon,
   BotIcon,
@@ -36,7 +36,7 @@ import {
   ResizablePanelGroup,
 } from "@/components/ui/resizable";
 import { cn } from "@/lib/utils";
-import { analyzeResource, listResourceTree, readResourceFile, readResourceFileBlob } from "@/lib/api";
+import { analyzeResource, listResourceTree, readResourceFile } from "@/lib/api";
 
 type ResourcesPanelProps = {
   resourceSpaces: ResourceSpaceInfo[];
@@ -62,30 +62,6 @@ const KEY_RESOURCE_FILE_NAMES = [
   "results.json",
   "notes.md",
 ];
-
-const IMAGE_RESOURCE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"]);
-
-function isImageResourcePath(resourcePath: string): boolean {
-  const lowerPath = resourcePath.toLowerCase();
-  return [...IMAGE_RESOURCE_EXTENSIONS].some((extension) => lowerPath.endsWith(extension));
-}
-
-function inferImageMimeType(resourcePath: string): ResourceFileResult["mimeType"] {
-  const lowerPath = resourcePath.toLowerCase();
-  if (lowerPath.endsWith(".png")) return "image/png";
-  if (lowerPath.endsWith(".jpg") || lowerPath.endsWith(".jpeg")) return "image/jpeg";
-  if (lowerPath.endsWith(".webp")) return "image/webp";
-  if (lowerPath.endsWith(".gif")) return "image/gif";
-  return "image/svg+xml";
-}
-
-function findTreeEntryByPath(directories: DirectoryMap, resourcePath: string): ResourceTreeEntry | null {
-  for (const entries of Object.values(directories)) {
-    const match = entries.find((entry) => entry.path === resourcePath);
-    if (match) return match;
-  }
-  return null;
-}
 
 function filterVisibleResourceEntries(resourcePath: string, entries: ResourceTreeEntry[]): ResourceTreeEntry[] {
   return entries.filter((entry) => {
@@ -150,7 +126,6 @@ export function ResourcesPanel({
   const [showCreateDialog, setShowCreateDialog] = useState(false);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deletingResourceSpace, setDeletingResourceSpace] = useState(false);
-  const currentObjectUrlRef = useRef<string | null>(null);
 
   const selectedResourceSpace = useMemo(
     () => resourceSpaces.find((item) => item.resourceSpaceId === selectedResourceSpaceId) ?? null,
@@ -191,10 +166,6 @@ export function ResourcesPanel({
   }, [agents]);
 
   useEffect(() => {
-    if (currentObjectUrlRef.current) {
-      URL.revokeObjectURL(currentObjectUrlRef.current);
-      currentObjectUrlRef.current = null;
-    }
     setDirectories({});
     setExpanded(new Set());
     setSelectedFilePath(null);
@@ -204,15 +175,6 @@ export function ResourcesPanel({
     setSpaceError(null);
     setQuestion("");
   }, [selectedResourceSpaceId]);
-
-  useEffect(() => {
-    return () => {
-      if (currentObjectUrlRef.current) {
-        URL.revokeObjectURL(currentObjectUrlRef.current);
-        currentObjectUrlRef.current = null;
-      }
-    };
-  }, []);
 
   const loadDirectory = useCallback(async (resourceSpaceId: string, resourcePath: string, options?: { force?: boolean }) => {
     if (!options?.force && directories[resourcePath]) return directories[resourcePath];
@@ -240,34 +202,16 @@ export function ResourcesPanel({
     setSpaceError(null);
     setSelectedFilePath(resourcePath);
     setLoadingFilePath(resourcePath);
-    if (currentObjectUrlRef.current) {
-      URL.revokeObjectURL(currentObjectUrlRef.current);
-      currentObjectUrlRef.current = null;
-    }
     try {
-      if (isImageResourcePath(resourcePath)) {
-        const blob = await readResourceFileBlob(resourceSpaceId, resourcePath);
-        const objectUrl = URL.createObjectURL(blob);
-        currentObjectUrlRef.current = objectUrl;
-        const entry = findTreeEntryByPath(directories, resourcePath);
-        setSelectedFile({
-          path: resourcePath,
-          content: objectUrl,
-          mimeType: (blob.type || inferImageMimeType(resourcePath)) as ResourceFileResult["mimeType"],
-          size: blob.size,
-          modifiedAt: entry?.modifiedAt ?? null,
-        });
-      } else {
-        const result = await readResourceFile(resourceSpaceId, resourcePath);
-        setSelectedFile(result);
-      }
+      const result = await readResourceFile(resourceSpaceId, resourcePath);
+      setSelectedFile(result);
     } catch (error) {
       setSelectedFile(null);
       setSpaceError(String((error as Error)?.message ?? error));
     } finally {
       setLoadingFilePath((current) => (current === resourcePath ? null : current));
     }
-  }, [directories]);
+  }, []);
 
   useEffect(() => {
     if (!selectedResourceSpace) return;
@@ -300,10 +244,6 @@ export function ResourcesPanel({
 
   const handleRefresh = useCallback(async () => {
     if (!selectedResourceSpace) return;
-    if (currentObjectUrlRef.current) {
-      URL.revokeObjectURL(currentObjectUrlRef.current);
-      currentObjectUrlRef.current = null;
-    }
     setDirectories({});
     setExpanded(new Set());
     setSelectedFile(null);

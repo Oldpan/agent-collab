@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-04-10 (resource preview cleanup)
+
+- Resources 面板的图片预览不再走独立的 `POST /file/raw` + blob URL 双编码链路：node 端本来就把图片以 `data:image/...;base64,...` 形式返回，前端直接把这串 data URL 喂给 `<img src>` 即可。删除 `apps/core/src/web/server.ts` 里的 `/file/raw` 路由、`?format=raw` 分支和 `decodeBase64DataUrl`；删除 `apps/web/src/lib/api.ts` 里的 `readResourceFileBlob` / `readResourceFileRawViaGet`；`ResourcesPanel` 的 `loadFile` 简化为统一走 `readResourceFile`，去掉 `currentObjectUrlRef` / `isImageResourcePath` / `inferImageMimeType` 等扩展名分流，行为与 `AgentWorkspacePanel` 一致。
+- `ResourceSpaceService.canTryNextSharedNode` 现在只对传输/可用性级别错误（`Agent node is offline.` / `Workspace request timed out.` / `io_error:`）回退到下一台 node。`not_found` / `not_directory` / `not_file` / `binary_file` 这些对共享挂载来说是确定性结果，之前会在每台在线 node 上轮询一遍，浪费 N 次 round-trip 并把多 node 的失败拼成一条噪音 attempt 日志返回；现在直接返回首次结果。
+- `mapResourceSpaceError` 增加 `io_error:` 前缀剥离，attempt summary 不再泄露内部错误码。
+
 ## 2026-04-08 (task-thread execution protocol tightening)
 
 - DM task-thread 和 channel task-thread 的 activation / handoff prompt 现在都明确要求：任务已存在且已认领时不要重复 `claim`，只发送一次 substantive final result，随后通常先更新到 `in_review`，不要再补第二条“任务完成”式总结。

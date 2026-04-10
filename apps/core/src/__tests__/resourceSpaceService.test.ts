@@ -86,7 +86,7 @@ describe("ResourceSpaceService", () => {
     });
   });
 
-  it("shared_mount 读取失败时应回退到下一台在线 node", async () => {
+  it("shared_mount 读取遇到 node 不可用时应回退到下一台在线 node", async () => {
     const registry = new NodeRegistry();
     const sentByNode = new Map<string, string[]>();
 
@@ -128,8 +128,8 @@ describe("ResourceSpaceService", () => {
       type: "workspace.read.response",
       requestId: firstRequest.requestId,
       relativePath: "summary.md",
-      error: "Path not found.",
-      errorCode: "not_found",
+      error: "I/O error reading workspace file.",
+      errorCode: "io_error",
     });
 
     const secondRequest = await waitForSentRequest(sentByNode, "node-a");
@@ -153,7 +153,7 @@ describe("ResourceSpaceService", () => {
     });
   });
 
-  it("shared_mount 图片预览遇到旧 node 的 binary_file 时应继续回退", async () => {
+  it("shared_mount 遇到确定性错误（not_found / binary_file）时不再轮询其他 node", async () => {
     const registry = new NodeRegistry();
     const sentByNode = new Map<string, string[]>();
 
@@ -195,28 +195,13 @@ describe("ResourceSpaceService", () => {
       type: "workspace.read.response",
       requestId: firstRequest.requestId,
       relativePath: "plot.png",
-      error: "Binary files are not supported for preview.",
-      errorCode: "binary_file",
+      error: "Path not found.",
+      errorCode: "not_found",
     });
 
-    const secondRequest = await waitForSentRequest(sentByNode, "node-older");
-    broker.handleWorkspaceReadResponse({
-      type: "workspace.read.response",
-      requestId: secondRequest.requestId,
-      relativePath: "plot.png",
-      content: "data:image/png;base64,AAAA",
-      mimeType: "image/png",
-      size: 4,
-      modifiedAt: 789,
-    });
-
-    await expect(promise).resolves.toEqual({
-      path: "plot.png",
-      content: "data:image/png;base64,AAAA",
-      mimeType: "image/png",
-      size: 4,
-      modifiedAt: 789,
-    });
+    await expect(promise).rejects.toThrow("Path not found.");
+    // node-older 不应被尝试
+    expect(sentByNode.get("node-older") ?? []).toHaveLength(0);
   });
 
   it("shared_mount 全部失败时应返回包含节点尝试详情的错误", async () => {
@@ -261,8 +246,8 @@ describe("ResourceSpaceService", () => {
       type: "workspace.read.response",
       requestId: firstRequest.requestId,
       relativePath: "plot.png",
-      error: "Binary files are not supported for preview.",
-      errorCode: "binary_file",
+      error: "I/O error reading workspace file.",
+      errorCode: "io_error",
     });
 
     const secondRequest = await waitForSentRequest(sentByNode, "node-b");
@@ -274,7 +259,7 @@ describe("ResourceSpaceService", () => {
     });
 
     await expect(promise).rejects.toThrow(
-      'Unable to read shared resource space. Attempts: node-a -> Binary files are not supported for preview. | node-b -> Workspace request timed out.',
+      'Unable to read shared resource space. Attempts: node-a -> I/O error reading workspace file. | node-b -> Workspace request timed out.',
     );
   });
 });

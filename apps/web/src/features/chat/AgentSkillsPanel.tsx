@@ -166,7 +166,8 @@ export function AgentSkillsPanel({ agent, isAdmin = false, onUpdate }: AgentSkil
         <div className="space-y-1">
           <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Skill Roots</div>
           <textarea
-            className="min-h-[92px] w-full resize-y rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
+            rows={1}
+            className="h-9 min-h-9 w-full resize-y rounded-md border border-border bg-background px-3 py-2 font-mono text-xs"
             placeholder="/code/.claude/skills"
             value={skillRootsText}
             onChange={(event) => setSkillRootsText(event.target.value)}

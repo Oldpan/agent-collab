@@ -139,14 +139,14 @@ export class ResourceSpaceService {
 }
 
 function canTryNextSharedNode(error: unknown): boolean {
+  // Only retry on transport-/availability-level errors. Deterministic results
+  // (not_found, not_file, binary_file, file_too_large …) point at the file
+  // itself, so retrying on every other node just slows the request down and
+  // produces noisy multi-node attempt logs.
   const message = String((error as Error)?.message ?? error);
   return (
     message === 'Agent node is offline.'
     || message === 'Workspace request timed out.'
-    || message.startsWith('not_found:')
-    || message.startsWith('not_directory:')
-    || message.startsWith('not_file:')
-    || message.startsWith('binary_file:')
     || message.startsWith('io_error:')
   );
 }
@@ -178,6 +178,9 @@ function mapResourceSpaceError(error: unknown): ResourceSpaceServiceError {
   }
   if (message.startsWith('not_directory:') || message.startsWith('not_file:')) {
     return new ResourceSpaceServiceError(400, message.slice(message.indexOf(':') + 1));
+  }
+  if (message.startsWith('io_error:')) {
+    return new ResourceSpaceServiceError(500, message.slice('io_error:'.length));
   }
   return new ResourceSpaceServiceError(500, message);
 }

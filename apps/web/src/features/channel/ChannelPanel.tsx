@@ -349,6 +349,7 @@ function ChannelComposer({
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const shiftPressedRef = useRef(false);
 
   const mentionCandidates = useMemo(() => {
     if (mentionQuery === null) return [];
@@ -435,6 +436,10 @@ function ChannelComposer({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+      if (e.key === "Shift") {
+        shiftPressedRef.current = true;
+        return;
+      }
       if (mentionQuery !== null && mentionCandidates.length > 0) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -458,13 +463,23 @@ function ChannelComposer({
           return;
         }
       }
-      if (e.key === "Enter" && e.shiftKey) {
+      if (e.key === "Enter" && shiftPressedRef.current) {
         e.preventDefault();
         void handleSubmit();
       }
     },
     [mentionQuery, mentionCandidates, mentionIndex, selectMention, handleSubmit],
   );
+
+  const handleKeyUp = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === "Shift") {
+      shiftPressedRef.current = false;
+    }
+  }, []);
+
+  const handleBlur = useCallback(() => {
+    shiftPressedRef.current = false;
+  }, []);
 
   return (
     <div className="relative border-t-2 border-black bg-[#fff5c2] px-4 py-3 shadow-[0_-2px_0_0_rgba(0,0,0,0.08)]">
@@ -518,7 +533,7 @@ function ChannelComposer({
         </div>
       )}
 
-      <div className="flex items-end gap-2 rounded-sm border-2 border-black bg-[#fffdf4] p-2 shadow-[4px_4px_0_0_rgba(0,0,0,0.2)]">
+      <div className="flex items-end gap-2 rounded-sm border-2 border-black bg-[#fffdf4] p-1.5 shadow-[4px_4px_0_0_rgba(0,0,0,0.2)]">
         {/* Hidden file input */}
         <input
           ref={fileInputRef}
@@ -532,7 +547,7 @@ function ChannelComposer({
           type="button"
           onClick={() => fileInputRef.current?.click()}
           disabled={sending || uploading}
-          className="shrink-0 rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40"
+          className="shrink-0 self-center rounded p-1.5 text-zinc-500 hover:bg-zinc-100 hover:text-zinc-900 disabled:opacity-40"
           title="Attach image"
         >
           <PaperclipIcon className="size-4" />
@@ -542,18 +557,20 @@ function ChannelComposer({
           value={text}
           onChange={handleChange}
           className={cn(
-            "min-h-[40px] max-h-[200px] flex-1 resize-none rounded-sm border border-transparent bg-transparent px-3 py-2 text-sm text-zinc-900",
+            "min-h-[36px] max-h-[200px] flex-1 resize-none rounded-sm border border-transparent bg-transparent px-3 py-1.5 text-sm text-zinc-900",
             "placeholder:text-zinc-400 focus:outline-none disabled:cursor-not-allowed disabled:opacity-50",
           )}
           placeholder="Send a message... (@ to mention, Enter for newline, Shift+Enter to send)"
           disabled={sending}
           onKeyDown={handleKeyDown}
+          onKeyUp={handleKeyUp}
+          onBlur={handleBlur}
           rows={1}
         />
         <Button
           size="icon"
           onClick={() => void handleSubmit()}
-          className="shrink-0 rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
+          className="shrink-0 self-center rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e]"
           title="Send"
           disabled={sending || uploading}
         >
