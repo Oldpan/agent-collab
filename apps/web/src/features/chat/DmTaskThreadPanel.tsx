@@ -8,9 +8,10 @@ import type { LiveMessage } from "@/hooks/types";
 import type { AgentInfo, ConversationInfo } from "@agent-collab/protocol";
 import { ChevronDownIcon, ChevronRightIcon, XIcon } from "lucide-react";
 import { PromptComposer } from "./PromptComposer";
-import { ChatAvatar, readStoredUserIdentity } from "./ChatAvatar";
+import { ChatAvatar } from "./ChatAvatar";
 import { cn } from "@/lib/utils";
 import { CodexDebugPanel } from "./CodexDebugPanel";
+import { useStoredUserIdentity } from "@/lib/userIdentity";
 
 const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
   month: "2-digit",
@@ -57,7 +58,7 @@ export function DmTaskThreadPanel({
 }: DmTaskThreadPanelProps) {
   const [activeTab, setActiveTab] = useState<"chat" | "debug">("chat");
   const [contextExpanded, setContextExpanded] = useState(false);
-  const userIdentity = useMemo(() => readStoredUserIdentity(), []);
+  const userIdentity = useStoredUserIdentity();
   const {
     messages,
     pendingMessages,

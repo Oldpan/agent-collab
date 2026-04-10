@@ -57,13 +57,14 @@ import { AgentActivityPanel } from "./AgentActivityPanel";
 import { AgentTasksPanel } from "./AgentTasksPanel";
 import { CodexDebugPanel } from "./CodexDebugPanel";
 import { DmTaskThreadPanel } from "./DmTaskThreadPanel";
-import { ChatAvatar, readStoredUserIdentity } from "./ChatAvatar";
+import { ChatAvatar } from "./ChatAvatar";
 import { AgentSettingsPanel } from "./AgentSettingsPanel";
 import type { AgentInfo, ConversationInfo, UpdateAgentRequest } from "@agent-collab/protocol";
 import { openConversationThread, type AgentTask } from "@/lib/api";
 import type { LiveMessage, LiveToolCall } from "@/hooks/types";
 import { cn } from "@/lib/utils";
 import { MessageSourceBadge } from "@/components/MessageSourceBadge";
+import { useStoredUserIdentity } from "@/lib/userIdentity";
 
 type ChatPanelProps = {
   conversation: ConversationInfo;
@@ -223,7 +224,7 @@ export function ChatPanel({
   const [dmThreadRootMessage, setDmThreadRootMessage] = useState<LiveMessage | null>(null);
   const [threadError, setThreadError] = useState<string | null>(null);
   const [openingThreadMessageId, setOpeningThreadMessageId] = useState<string | null>(null);
-  const userIdentity = useMemo(() => readStoredUserIdentity(), []);
+  const userIdentity = useStoredUserIdentity();
   const {
     messages,
     pendingMessages,

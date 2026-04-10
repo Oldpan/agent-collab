@@ -1,29 +1,8 @@
 import { cn } from "@/lib/utils";
+import type { UserIdentity } from "@/lib/userIdentity";
 import type { AgentInfo } from "@agent-collab/protocol";
 import { UserIcon } from "lucide-react";
 import { useMemo } from "react";
-
-const USER_AVATAR_URL_KEY = "agent-collab.user-avatar-url";
-const USER_DISPLAY_NAME_KEY = "agent-collab.user-display-name";
-
-type UserIdentity = {
-  name: string;
-  avatarUrl: string | null;
-};
-
-export function readStoredUserIdentity(): UserIdentity {
-  if (typeof window === "undefined") {
-    return { name: "You", avatarUrl: null };
-  }
-
-  const rawName = window.localStorage.getItem(USER_DISPLAY_NAME_KEY);
-  const rawAvatarUrl = window.localStorage.getItem(USER_AVATAR_URL_KEY);
-
-  return {
-    name: rawName?.trim() || "You",
-    avatarUrl: rawAvatarUrl?.trim() || null,
-  };
-}
 
 type ChatAvatarProps = {
   role: "user" | "assistant";

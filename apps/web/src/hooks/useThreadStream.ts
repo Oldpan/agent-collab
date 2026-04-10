@@ -1,14 +1,14 @@
 import { useState, useCallback, useRef, useLayoutEffect, useEffect } from "react";
 import type { ChannelMessage, ThreadCollaborationSummary } from "@/lib/api";
 import * as api from "@/lib/api";
+import { readStoredUserIdentity } from "@/lib/userIdentity";
+import { useAuthStore } from "./useAuth";
 
 function readUserName(): string {
-  try {
-    const stored = JSON.parse(localStorage.getItem("agent-collab:user-identity") ?? "{}") as { name?: string };
-    return stored.name ?? "User";
-  } catch {
-    return "User";
-  }
+  const currentUser = useAuthStore.getState().user;
+  if (currentUser?.username?.trim()) return currentUser.username.trim();
+  const storedName = readStoredUserIdentity().name.trim();
+  return storedName && storedName !== "You" ? storedName : "User";
 }
 
 /**

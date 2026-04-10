@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildThreadShortId, type ChannelInfo, type AgentInfo, type ConversationInfo, type ChannelMemberStatus } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
 import { addAgentToChannel, clearChannelChat, removeAgentFromChannel, claimMessageAsTask, getChannelMemberStatuses, uploadAttachment } from "@/lib/api";
+import { useAuth } from "@/hooks/useAuth";
 import { useChannelStream, type ChannelNotice } from "@/hooks/useChannelStream";
 import { ThreadPanel } from "./ThreadPanel";
 import { BranchInspectorPanel } from "./BranchInspectorPanel";
@@ -21,6 +22,7 @@ import { ChatAvatar } from "@/features/chat/ChatAvatar";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { MessageSourceBadge } from "@/components/MessageSourceBadge";
 import { TaskEditorDialog, type TaskEditorValues } from "./TaskEditorDialog";
+import { useStoredUserIdentity } from "@/lib/userIdentity";
 
 type ChannelPanelInfo = ChannelInfo & {
   members?: Array<{
@@ -126,12 +128,16 @@ function MessageRow({
   onReply,
   onMakeTask,
   agents,
+  currentUsername,
+  userIdentity,
   highlighted = false,
 }: {
   message: ChannelMessage;
   onReply: (message: ChannelMessage) => void;
   onMakeTask?: (message: ChannelMessage) => void;
   agents: AgentInfo[];
+  currentUsername: string | null;
+  userIdentity: { name: string; avatarUrl: string | null };
   highlighted?: boolean;
 }) {
   const isSystem = message.senderType === "system";
@@ -203,6 +209,7 @@ function MessageRow({
   }
 
   const agent = agents.find((a) => a.name === message.senderName);
+  const showCurrentUserAvatar = isUser && currentUsername != null && message.senderName === currentUsername;
 
   return (
     <div
@@ -215,12 +222,16 @@ function MessageRow({
     >
       {/* Avatar - use ChatAvatar for agents, initials for user */}
       {isUser ? (
-        <div
-          className="flex size-8 shrink-0 items-center justify-center rounded-sm border-2 border-zinc-900 bg-[#d8efff] text-[10px] font-bold text-blue-800 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]"
-          title={message.senderName}
-        >
-          {message.senderName.slice(0, 2).toUpperCase()}
-        </div>
+        showCurrentUserAvatar ? (
+          <ChatAvatar role="user" user={userIdentity} size={32} className="shrink-0" />
+        ) : (
+          <div
+            className="flex size-8 shrink-0 items-center justify-center rounded-sm border-2 border-zinc-900 bg-[#d8efff] text-[10px] font-bold text-blue-800 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]"
+            title={message.senderName}
+          >
+            {message.senderName.slice(0, 2).toUpperCase()}
+          </div>
+        )
       ) : (
         <ChatAvatar
           role="assistant"
@@ -923,6 +934,8 @@ export function ChannelPanel({
   currentTaskAgentId,
   currentTaskAgentName,
 }: ChannelPanelProps) {
+  const { user } = useAuth();
+  const userIdentity = useStoredUserIdentity();
   const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "members" | "settings">("chat");
   const channelFocusAnchor = initialThreadRootId ?? focusMessageId ?? null;
   const { messages, notices, sendMessage, loadMore, hasMore, resetVersion, taskVersion, resetHistory } = useChannelStream({
@@ -1270,6 +1283,8 @@ export function ChannelPanel({
                         onReply={setOpenThread}
                         onMakeTask={handleMakeTask}
                         agents={channelMembers}
+                        currentUsername={user?.username?.trim() || null}
+                        userIdentity={userIdentity}
                         highlighted={highlightedMessageId === merged.id}
                       />
                     );

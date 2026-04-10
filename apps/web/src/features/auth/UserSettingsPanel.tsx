@@ -1,8 +1,10 @@
-import { useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { XIcon, UserIcon, ShieldIcon, CalendarIcon } from 'lucide-react';
+import { XIcon, UserIcon, ShieldIcon, CalendarIcon, UploadIcon, RotateCcwIcon } from 'lucide-react';
 import type { User } from '@/lib/auth-api';
+import { ChatAvatar } from '../chat/ChatAvatar';
+import { clearStoredUserAvatar, createStoredAvatarDataUrl, useStoredUserIdentity, writeStoredUserIdentity } from '@/lib/userIdentity';
 
 interface UserSettingsPanelProps {
   user: User;
@@ -60,12 +62,43 @@ export function UserSettingsPanel({ user, onClose }: UserSettingsPanelProps) {
 }
 
 function ProfileTab({ user }: { user: User }) {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const userIdentity = useStoredUserIdentity();
+  const [avatarError, setAvatarError] = useState<string | null>(null);
+  const [uploadingAvatar, setUploadingAvatar] = useState(false);
+
+  const handleAvatarUpload = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    setUploadingAvatar(true);
+    setAvatarError(null);
+    try {
+      const avatarUrl = await createStoredAvatarDataUrl(file);
+      writeStoredUserIdentity({ avatarUrl });
+    } catch (err) {
+      setAvatarError(err instanceof Error ? err.message : 'Failed to update avatar');
+    } finally {
+      setUploadingAvatar(false);
+    }
+  }, []);
+
+  const handleAvatarReset = useCallback(() => {
+    setAvatarError(null);
+    clearStoredUserAvatar();
+  }, []);
+
   return (
     <div className="space-y-4">
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/png,image/jpeg,image/webp,image/gif"
+        className="hidden"
+        onChange={(e) => void handleAvatarUpload(e)}
+      />
       <div className="flex items-center gap-3 rounded-sm border-2 border-zinc-200 bg-zinc-50 p-4">
-        <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-900">
-          <UserIcon className="size-5" />
-        </div>
+        <ChatAvatar role="user" user={userIdentity} size={40} className="shrink-0" />
         <div>
           <div className="text-sm font-bold text-zinc-900">{user.username}</div>
           {user.isAdmin && (
@@ -75,6 +108,39 @@ function ProfileTab({ user }: { user: User }) {
             </div>
           )}
         </div>
+      </div>
+
+      <div className="space-y-2 rounded-sm border-2 border-zinc-200 bg-zinc-50 p-4">
+        <div className="text-xs font-semibold uppercase tracking-wide text-zinc-500">Avatar</div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={uploadingAvatar}
+            className="rounded-sm border-2 border-zinc-900 bg-[#ffd54a] px-3 py-2 text-xs font-semibold text-zinc-900 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)] hover:bg-[#f7ca2e] disabled:opacity-50"
+          >
+            <UploadIcon className="mr-2 size-3.5" />
+            {uploadingAvatar ? 'Uploading...' : 'Upload avatar'}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={handleAvatarReset}
+            disabled={uploadingAvatar || !userIdentity.avatarUrl}
+            className="rounded-sm border-2 border-zinc-900 bg-white px-3 py-2 text-xs font-semibold text-zinc-900 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-zinc-50 disabled:opacity-50"
+          >
+            <RotateCcwIcon className="mr-2 size-3.5" />
+            Use default avatar
+          </Button>
+        </div>
+        <div className="text-[11px] text-zinc-500">
+          Custom avatars are stored in this browser and appear in DM, channel, and thread messages. If cleared, the default avatar stays unchanged.
+        </div>
+        {avatarError && (
+          <div className="rounded-sm border border-red-300 bg-red-50 px-3 py-2 text-xs text-red-600">
+            {avatarError}
+          </div>
+        )}
       </div>
 
       <div className="space-y-2 text-xs text-zinc-600">

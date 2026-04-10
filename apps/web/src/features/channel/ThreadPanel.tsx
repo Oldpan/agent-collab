@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { useAuth } from "@/hooks/useAuth";
 import { cn } from "@/lib/utils";
 import { XIcon, SendIcon, MessageSquareIcon, ChevronDownIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -17,6 +18,8 @@ import {
   streamdownRootClass,
   escapeHtmlOutsideCodeBlocks,
 } from "@/components/ai-elements/streamdown";
+import { ChatAvatar } from "@/features/chat/ChatAvatar";
+import { useStoredUserIdentity } from "@/lib/userIdentity";
 import { MessageSourceBadge } from "@/components/MessageSourceBadge";
 import { TaskEditorDialog, type TaskEditorValues } from "./TaskEditorDialog";
 
@@ -49,6 +52,8 @@ function ThreadMessage({
   agent,
   channelId,
   threadRootId,
+  currentUsername,
+  userIdentity,
   highlighted = false,
   onOpenAgentSession,
 }: {
@@ -56,11 +61,14 @@ function ThreadMessage({
   agent?: AgentInfo;
   channelId: string;
   threadRootId: string;
+  currentUsername: string | null;
+  userIdentity: { name: string; avatarUrl: string | null };
   highlighted?: boolean;
   onOpenAgentSession?: (agentId: string, channelId: string, threadRootId?: string | null) => Promise<void> | void;
 }) {
   const isUser = message.senderType === "user";
   const showFallbackBadge = message.messageSource === "delta_fallback" && !isUser;
+  const showCurrentUserAvatar = isUser && currentUsername != null && message.senderName === currentUsername;
   return (
     <div
       data-message-id={message.id}
@@ -70,15 +78,19 @@ function ThreadMessage({
         highlighted && "bg-[#fff1a9]",
       )}
     >
-      <div
-        className={cn(
-          "flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-zinc-900 text-[10px] font-bold shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
-          isUser ? "bg-[#d8efff] text-blue-800" : "bg-[#d8f8c8] text-green-800",
-        )}
-        title={message.senderName}
-      >
-        {message.senderName.slice(0, 2).toUpperCase()}
-      </div>
+      {showCurrentUserAvatar ? (
+        <ChatAvatar role="user" user={userIdentity} size={28} className="shrink-0" />
+      ) : (
+        <div
+          className={cn(
+            "flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-zinc-900 text-[10px] font-bold shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+            isUser ? "bg-[#d8efff] text-blue-800" : "bg-[#d8f8c8] text-green-800",
+          )}
+          title={message.senderName}
+        >
+          {message.senderName.slice(0, 2).toUpperCase()}
+        </div>
+      )}
       <div className={cn("min-w-0 flex flex-col", isUser ? "items-end text-left" : "items-start text-left")}>
         <div className="flex items-baseline gap-1.5">
           <span className="text-[11px] font-semibold text-zinc-700">{message.senderName}</span>
@@ -376,6 +388,8 @@ export function ThreadPanel({
   onClose,
   className,
 }: ThreadPanelProps) {
+  const { user } = useAuth();
+  const userIdentity = useStoredUserIdentity();
   const threadRootId = buildThreadShortId(rootMessage.id);
   const { messages, summary, sendMessage, loadMore, hasMore } = useThreadStream(
     channelId,
@@ -390,6 +404,8 @@ export function ThreadPanel({
     () => channelMembers.find((agent) => agent.name === rootMessage.senderName),
     [channelMembers, rootMessage.senderName],
   );
+  const currentUsername = user?.username?.trim() || null;
+  const showCurrentUserRootAvatar = isRootUser && currentUsername != null && rootMessage.senderName === currentUsername;
   const [showSummary, setShowSummary] = useState(false);
   const [summaryState, setSummaryState] = useState<ThreadCollaborationSummary | null>(null);
   const [isEditingTask, setIsEditingTask] = useState(false);
@@ -488,14 +504,18 @@ export function ThreadPanel({
       {/* Root message */}
       <div className="shrink-0 border-b-2 border-dashed border-zinc-300 bg-[#fffdf5]">
         <div className={cn("flex gap-2.5 px-4 py-3", isRootUser ? "flex-row-reverse" : "flex-row")}>
-          <div
-            className={cn(
-              "flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-zinc-900 text-[10px] font-bold shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
-              isRootUser ? "bg-[#d8efff] text-blue-800" : "bg-[#d8f8c8] text-green-800",
-            )}
-          >
-            {rootMessage.senderName.slice(0, 2).toUpperCase()}
-          </div>
+          {showCurrentUserRootAvatar ? (
+            <ChatAvatar role="user" user={userIdentity} size={28} className="shrink-0" />
+          ) : (
+            <div
+              className={cn(
+                "flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-zinc-900 text-[10px] font-bold shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+                isRootUser ? "bg-[#d8efff] text-blue-800" : "bg-[#d8f8c8] text-green-800",
+              )}
+            >
+              {rootMessage.senderName.slice(0, 2).toUpperCase()}
+            </div>
+          )}
           <div className={cn("min-w-0 flex flex-col", isRootUser ? "items-end text-left" : "items-start text-left")}>
             <div className="flex items-baseline gap-1.5">
               <span className="text-[11px] font-semibold text-zinc-700">{rootMessage.senderName}</span>
@@ -579,6 +599,8 @@ export function ThreadPanel({
                 agent={channelMembers.find((agent) => agent.name === msg.senderName)}
                 channelId={channelId}
                 threadRootId={threadRootId}
+                currentUsername={currentUsername}
+                userIdentity={userIdentity}
                 highlighted={highlightedMessageId === msg.id}
                 onOpenAgentSession={onOpenAgentSession}
               />
