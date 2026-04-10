@@ -144,17 +144,19 @@ export class AcpClient {
     this.rpc.onStderr((line) => this.events.onAgentStderr?.(line));
     this.rpc.onExit?.((info) => {
       this.rejectAllPending(
-        this.makeTransportError(
-          'ACP agent exited (code=' +
+        this.makeTransportError(info.error
+          ? `ACP agent exited: ${info.error}`
+          : 'ACP agent exited (code=' +
             String(info.code) +
             ', signal=' +
             String(info.signal) +
-            ')',
-        ),
+            ')'),
       );
       this.rejectAllLocalPermissions(
         this.makeTransportError(
-          'ACP agent exited while waiting for permission response',
+          info.error
+            ? `ACP agent exited while waiting for permission response: ${info.error}`
+            : 'ACP agent exited while waiting for permission response',
         ),
       );
     });
