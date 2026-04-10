@@ -1004,6 +1004,173 @@ describe('internalAgentRouter', () => {
     );
   });
 
+  it('带有 multi-mention suppress metadata 的根频道 run 在 progress 后再次 @ 已在场 peer 时不应二次唤醒', async () => {
+    const alpha = manager.createAgent({
+      name: 'SuppressAlpha',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/suppress-alpha-router',
+      channelId: 'default',
+    });
+    const bob = manager.createAgent({
+      name: 'SuppressBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/suppress-bob-router',
+      channelId: 'default',
+    });
+    manager.joinChannel(alpha.agentId, 'default');
+    manager.joinChannel(bob.agentId, 'default');
+
+    const conv = manager.openAgentChannelThread(alpha.agentId, 'default', null);
+    if (!conv) throw new Error('missing suppress root conversation');
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-suppress-progress-window',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'first-wave root multi-mention reply',
+    });
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO run_debug_inputs(
+         run_id, conversation_id, session_key, dispatch_mode, reply_target,
+         prompt_text, dispatched_prompt_text, activation_metadata_json, created_at, updated_at
+       )
+       VALUES(?, ?, ?, 'resume', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'run-router-suppress-progress-window',
+      conv.id,
+      sessionRow.sessionKey,
+      '#default',
+      'first-wave root multi-mention reply',
+      'first-wave root multi-mention reply',
+      JSON.stringify({
+        mentionSuppression: {
+          mode: 'root_user_multi_mention',
+          triggerSeq: 401,
+          peerMentionedAgentIds: [bob.agentId],
+        },
+      }),
+      now,
+      now,
+    );
+
+    const progressRes = await fetch(`${baseUrl}/api/internal/agent/${alpha.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target: '#default',
+        content: '先说明一下背景，我先看下上下文。',
+        kind: 'progress',
+        conversationId: conv.id,
+      }),
+    });
+    expect(progressRes.status).toBe(200);
+    await settleDispatches();
+    dispatches.length = 0;
+
+    const mentionRes = await fetch(`${baseUrl}/api/internal/agent/${alpha.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target: '#default',
+        content: '收到，@SuppressBob 我这边先同步一下当前情况。',
+        kind: 'final',
+        conversationId: conv.id,
+      }),
+    });
+    expect(mentionRes.status).toBe(200);
+    await settleDispatches();
+    expect(dispatches.filter((msg) => msg.type === 'run.dispatch')).toHaveLength(0);
+
+    const cooldownRows = db.prepare(
+      `SELECT COUNT(*) as count
+       FROM agent_mention_cooldowns
+       WHERE channel_id = ? AND thread_root_id = '' AND from_agent_id = ? AND to_agent_id = ?`,
+    ).get('default', alpha.agentId, bob.agentId) as { count: number };
+    expect(cooldownRows.count).toBe(0);
+  });
+
+  it('multi-mention suppress metadata 不应误伤 thread 中的真实 agent mention', async () => {
+    const alpha = manager.createAgent({
+      name: 'SuppressThreadAlpha',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/suppress-thread-alpha-router',
+      channelId: 'default',
+    });
+    const bob = manager.createAgent({
+      name: 'SuppressThreadBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/suppress-thread-bob-router',
+      channelId: 'default',
+    });
+    manager.joinChannel(alpha.agentId, 'default');
+    manager.joinChannel(bob.agentId, 'default');
+
+    const threadRootId = 'suppress-thread-1';
+    const conv = manager.openAgentChannelThread(alpha.agentId, 'default', threadRootId);
+    const bobConv = manager.openAgentChannelThread(bob.agentId, 'default', threadRootId);
+    if (!conv || !bobConv) throw new Error('missing suppress thread conversations');
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-router-suppress-thread-safe',
+      sessionKey: sessionRow.sessionKey,
+      promptText: 'thread collaboration reply',
+    });
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES('suppress-thread-root-msg', 'default', 'user', 'User', 'user', ?, 'thread root', 501, ?, ?)`,
+    ).run(`#default:${threadRootId}`, now, threadRootId);
+    db.prepare(
+      `INSERT INTO run_debug_inputs(
+         run_id, conversation_id, session_key, dispatch_mode, reply_target,
+         prompt_text, dispatched_prompt_text, activation_metadata_json, created_at, updated_at
+       )
+       VALUES(?, ?, ?, 'resume', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'run-router-suppress-thread-safe',
+      conv.id,
+      sessionRow.sessionKey,
+      `#default:${threadRootId}`,
+      'thread collaboration reply',
+      'thread collaboration reply',
+      JSON.stringify({
+        mentionSuppression: {
+          mode: 'root_user_multi_mention',
+          triggerSeq: 502,
+          peerMentionedAgentIds: [bob.agentId],
+        },
+      }),
+      now,
+      now,
+    );
+
+    dispatches.length = 0;
+    const res = await fetch(`${baseUrl}/api/internal/agent/${alpha.agentId}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        target: `#default:${threadRootId}`,
+        content: '需要你一起看这个线程，@SuppressThreadBob。',
+        kind: 'progress',
+        conversationId: conv.id,
+      }),
+    });
+    expect(res.status).toBe(200);
+    await expectDispatchCount(1);
+
+    const taskDispatch = dispatches
+      .filter((msg): msg is Extract<CoreToNode, { type: 'run.dispatch' }> => msg.type === 'run.dispatch')
+      .find((msg) => msg.conversationId === bobConv.id);
+    expect(taskDispatch?.prompt).toContain('Another agent (@SuppressThreadAlpha) explicitly asked for your help in #default.');
+  });
+
   it('agent 在主频道 @ 多个 agent 且其中一个已 active 时，应让 active 目标先排队、其余目标正常派发，并保持 participants 一致', async () => {
     const tab = manager.createAgent({
       name: 'RootQueueTab',

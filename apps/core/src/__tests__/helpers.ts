@@ -32,6 +32,7 @@ export function createTestDb(): Db {
       record_as_user_message INTEGER NOT NULL DEFAULT 1,
       activation_context_text TEXT,
       replay_overlap_recent_messages_json TEXT,
+      activation_metadata_json TEXT,
       client_message_id TEXT,
       created_at       INTEGER NOT NULL,
       updated_at       INTEGER NOT NULL
@@ -47,8 +48,15 @@ export function createTestDb(): Db {
   if (!queueCols.some((col) => col.name === 'replay_overlap_recent_messages_json')) {
     db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN replay_overlap_recent_messages_json TEXT;`);
   }
+  if (!queueCols.some((col) => col.name === 'activation_metadata_json')) {
+    db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN activation_metadata_json TEXT;`);
+  }
   if (!queueCols.some((col) => col.name === 'client_message_id')) {
     db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN client_message_id TEXT;`);
+  }
+  const runDebugCols = db.prepare("PRAGMA table_info('run_debug_inputs')").all() as Array<{ name: string }>;
+  if (!runDebugCols.some((col) => col.name === 'activation_metadata_json')) {
+    db.exec(`ALTER TABLE run_debug_inputs ADD COLUMN activation_metadata_json TEXT;`);
   }
   const channelCols = db.prepare("PRAGMA table_info('channels')").all() as Array<{ name: string }>;
   if (!channelCols.some((col) => col.name === 'collaboration_mode')) {

@@ -11,7 +11,6 @@ import { buildChannelActivationPrompt, buildChannelActivationContextText } from 
 import { buildTargetActivationContext, ensureDmThreadContextSnapshot } from '../web/activationContext.js';
 import { resolveDirectThreadRootMessage } from '../web/directThreadResolver.js';
 import { bumpAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
-import { listChannelSubscriptions } from '../web/channelSubscriptions.js';
 import {
   listRecentTargetParticipants,
   TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
@@ -283,7 +282,6 @@ beforeAll(async () => {
         name: body.name,
         workspacePath: body.workspacePath,
         description: body.description,
-        collaborationMode: body.collaborationMode,
       });
       for (const agentId of body.agentIds ?? []) {
         if (manager.getAgent(agentId)) manager.joinChannel(agentId, channel.channelId);
@@ -409,6 +407,17 @@ beforeAll(async () => {
             triggerSeq: seq,
             threadRootId: threadRootId ?? null,
           });
+          const activationMetadata = !threadRootId && reason === 'mention' && mentionedAgents.length > 1
+            ? {
+                mentionSuppression: {
+                  mode: 'root_user_multi_mention' as const,
+                  triggerSeq: seq,
+                  peerMentionedAgentIds: mentionedAgents
+                    .map((mentionedAgent) => mentionedAgent.agentId)
+                    .filter((mentionedAgentId) => mentionedAgentId !== agentId),
+                },
+              }
+            : undefined;
           bumpAgentMessageCheckpoint(db, agentId, req.params.id, seq, threadRootId ?? null);
           void manager.submitPrompt(
             conv.id,
@@ -433,6 +442,7 @@ beforeAll(async () => {
                 openTasks: activationContext.openTasks,
               }) || undefined,
               replayOverlapRecentMessages: activationContext.recentMessages,
+              activationMetadata,
             },
           ).catch(() => {});
         }
@@ -471,25 +481,14 @@ beforeAll(async () => {
         queueAgentNotification(agent.agentId, 'mention', threadRootId ? 'participant' : 'owner');
       }
 
-      if (!threadRootId && mentionedAgents.length === 0 && channel.collaborationMode === 'subscribed_agents') {
+      if (!threadRootId) {
         const rootParticipants = listRecentTargetParticipants(db, {
           channelId: req.params.id,
           threadRootId: null,
           activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
         });
-        const subscribedAgents = listChannelSubscriptions(db, req.params.id);
-        const agentsToWake = rootParticipants.length > 0
-          ? rootParticipants.map((participant) => ({
-              agentId: participant.agentId,
-              role: participant.role,
-            }))
-          : subscribedAgents.map((agent) => ({
-              agentId: agent.agentId,
-              role: 'participant' as const,
-            }));
-
-        for (const agent of agentsToWake) {
-          queueAgentNotification(agent.agentId, 'channel_activity', agent.role);
+        for (const participant of rootParticipants) {
+          queueAgentNotification(participant.agentId, 'channel_activity', participant.role);
         }
       }
 
@@ -1672,190 +1671,184 @@ describe('REST API', () => {
     expect(branch?.id).not.toBe(dmThread.id);
   });
 
-  it('POST /api/channels/:id/messages 在 subscribed_agents 模式下，无 root participants 时应唤醒订阅者', async () => {
-    const channel = manager.createChannel({
-      name: 'subscribed-broadcast',
-      collaborationMode: 'subscribed_agents',
-    });
-    const alice = manager.createAgent({
-      name: 'SubscribedAlice',
+  it('POST /api/channels/:id/messages 在主频道没有 recent participants 且没有显式 @ 时，不应唤醒任何 agent', async () => {
+    const channel = manager.createChannel({ name: 'plain-root-no-wake' });
+    const alpha = manager.createAgent({
+      name: 'PlainRootAlpha',
       agentType: 'claude_acp',
       nodeId: 'missing-node',
-      workspacePath: '/tmp/subscribed-alice',
+      workspacePath: '/tmp/plain-root-alpha',
     });
-    const bob = manager.createAgent({
-      name: 'SubscribedBob',
+    const beta = manager.createAgent({
+      name: 'PlainRootBeta',
       agentType: 'claude_acp',
       nodeId: 'missing-node',
-      workspacePath: '/tmp/subscribed-bob',
+      workspacePath: '/tmp/plain-root-beta',
     });
-    manager.joinChannel(alice.agentId, channel.channelId);
-    manager.joinChannel(bob.agentId, channel.channelId);
+    manager.joinChannel(alpha.agentId, channel.channelId);
+    manager.joinChannel(beta.agentId, channel.channelId);
 
     const response = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: '大家看下这个新问题', senderName: 'User' }),
+      body: JSON.stringify({ content: '这是一条普通主频道消息，没有显式点名任何 agent。', senderName: 'User' }),
     });
 
     expect(response.status).toBe(201);
 
-    const aliceConv = manager.openAgentChannelThread(alice.agentId, channel.channelId, null);
-    const bobConv = manager.openAgentChannelThread(bob.agentId, channel.channelId, null);
-    expect(aliceConv).not.toBeNull();
-    expect(bobConv).not.toBeNull();
-
-    const alicePrompt = db.prepare(
-      `SELECT r.prompt_text as promptText
-       FROM runs r
-       JOIN conversations c ON c.session_key = r.session_key
-       WHERE c.id = ?
-       ORDER BY r.started_at DESC
-       LIMIT 1`,
-    ).get(aliceConv?.id) as { promptText: string } | undefined;
-    const bobPrompt = db.prepare(
-      `SELECT r.prompt_text as promptText
-       FROM runs r
-       JOIN conversations c ON c.session_key = r.session_key
-       WHERE c.id = ?
-       ORDER BY r.started_at DESC
-       LIMIT 1`,
-    ).get(bobConv?.id) as { promptText: string } | undefined;
-
-    expect(alicePrompt?.promptText).toContain('There is new channel activity');
-    expect(bobPrompt?.promptText).toContain('There is new channel activity');
+    for (const agentId of [alpha.agentId, beta.agentId]) {
+      const runCount = db.prepare(
+        `SELECT COUNT(*) as count
+         FROM runs r
+         JOIN conversations c ON c.session_key = r.session_key
+         WHERE c.agent_id = ? AND c.channel_id = ? AND c.thread_root_id IS NULL`,
+      ).get(agentId, channel.channelId) as { count: number };
+      expect(runCount.count).toBe(0);
+    }
   });
 
-  it('POST /api/channels/:id/messages 在 subscribed_agents 模式下，同批订阅者应看到一致的 active participants', async () => {
-    const channel = manager.createChannel({
-      name: 'subscribed-participants',
-      collaborationMode: 'subscribed_agents',
-    });
-    const kimi = manager.createAgent({
-      name: 'kimi',
+  it('POST /api/channels/:id/messages 用户先 @ 某个 agent 后，后续无 @ 的主频道消息也应继续唤醒该 recent participant', async () => {
+    const channel = manager.createChannel({ name: 'recent-followup-room' });
+    const alpha = manager.createAgent({
+      name: 'RecentAlpha',
       agentType: 'claude_acp',
       nodeId: 'missing-node',
-      workspacePath: '/tmp/subscribed-kimi',
+      workspacePath: '/tmp/recent-alpha',
     });
-    const bob = manager.createAgent({
-      name: 'Bob',
+    const beta = manager.createAgent({
+      name: 'RecentBeta',
       agentType: 'claude_acp',
       nodeId: 'missing-node',
-      workspacePath: '/tmp/subscribed-bob-participants',
+      workspacePath: '/tmp/recent-beta',
     });
-    manager.joinChannel(kimi.agentId, channel.channelId);
-    manager.joinChannel(bob.agentId, channel.channelId);
+    manager.joinChannel(alpha.agentId, channel.channelId);
+    manager.joinChannel(beta.agentId, channel.channelId);
 
-    const response = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
+    const firstResponse = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: '你们好啊', senderName: 'User' }),
+      body: JSON.stringify({ content: '@RecentAlpha 先看下这个问题', senderName: 'User' }),
     });
+    expect(firstResponse.status).toBe(201);
 
-    expect(response.status).toBe(201);
-
-    const kimiConv = manager.openAgentChannelThread(kimi.agentId, channel.channelId, null);
-    const bobConv = manager.openAgentChannelThread(bob.agentId, channel.channelId, null);
-    expect(kimiConv).not.toBeNull();
-    expect(bobConv).not.toBeNull();
-
-    const triggerSeq = response.body.seq as number;
-    const kimiContext = buildTargetActivationContext(db, {
-      agentId: kimi.agentId,
-      channelId: channel.channelId,
-      replyTarget: kimiConv?.replyTarget ?? `#${channel.name}`,
-      triggerSeq,
-      threadRootId: null,
-    });
-    const bobContext = buildTargetActivationContext(db, {
-      agentId: bob.agentId,
-      channelId: channel.channelId,
-      replyTarget: bobConv?.replyTarget ?? `#${channel.name}`,
-      triggerSeq,
-      threadRootId: null,
-    });
-
-    const kimiParticipants = kimiContext.participants.map((participant) => participant.name);
-    const bobParticipants = bobContext.participants.map((participant) => participant.name);
-    expect(kimiParticipants).toEqual(bobParticipants);
-    expect(new Set(kimiParticipants)).toEqual(new Set(['kimi', 'Bob']));
-  });
-
-  it('POST /api/channels/:id/messages 在 subscribed_agents 模式下，有 root participants 时应优先唤醒参与者', async () => {
-    const channel = manager.createChannel({
-      name: 'subscribed-priority',
-      collaborationMode: 'subscribed_agents',
-    });
-    const owner = manager.createAgent({
-      name: 'RootOwner',
-      agentType: 'claude_acp',
-      nodeId: 'missing-node',
-      workspacePath: '/tmp/root-owner',
-    });
-    const watcher = manager.createAgent({
-      name: 'PassiveWatcher',
-      agentType: 'claude_acp',
-      nodeId: 'missing-node',
-      workspacePath: '/tmp/passive-watcher',
-    });
-    manager.joinChannel(owner.agentId, channel.channelId);
-    manager.joinChannel(watcher.agentId, channel.channelId);
-    upsertTargetParticipant(db, {
-      agentId: owner.agentId,
-      channelId: channel.channelId,
-      threadRootId: null,
-      role: 'owner',
-      lastActiveAt: Date.now(),
-    });
-
-    const response = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
+    const secondResponse = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: '这里有个后续更新', senderName: 'User' }),
+      body: JSON.stringify({ content: '我再补充一点背景，这条消息不再 @ 任何人。', senderName: 'User' }),
     });
+    expect(secondResponse.status).toBe(201);
 
-    expect(response.status).toBe(201);
+    const alphaConv = manager.openAgentChannelThread(alpha.agentId, channel.channelId, null);
+    const betaConv = manager.openAgentChannelThread(beta.agentId, channel.channelId, null);
+    expect(alphaConv).not.toBeNull();
+    expect(betaConv).not.toBeNull();
 
-    const ownerConv = manager.openAgentChannelThread(owner.agentId, channel.channelId, null);
-    expect(ownerConv).not.toBeNull();
-    const ownerPrompt = db.prepare(
-      `SELECT r.prompt_text as promptText
-       FROM runs r
-       JOIN conversations c ON c.session_key = r.session_key
-       WHERE c.id = ?
-       ORDER BY r.started_at DESC
-       LIMIT 1`,
-    ).get(ownerConv?.id) as { promptText: string } | undefined;
-    expect(ownerPrompt?.promptText).toContain('There is new channel activity');
-
-    const watcherRunCount = db.prepare(
+    const alphaRunCount = db.prepare(
       `SELECT COUNT(*) as count
        FROM runs r
        JOIN conversations c ON c.session_key = r.session_key
-       WHERE c.agent_id = ? AND c.channel_id = ?`,
-    ).get(watcher.agentId, channel.channelId) as { count: number };
-    expect(watcherRunCount.count).toBe(0);
+       WHERE c.id = ?`,
+    ).get(alphaConv?.id) as { count: number };
+    const betaRunCount = db.prepare(
+      `SELECT COUNT(*) as count
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.id = ?`,
+    ).get(betaConv?.id) as { count: number };
+    expect(alphaRunCount.count).toBe(2);
+    expect(betaRunCount.count).toBe(0);
+
+    const alphaDebug = db.prepare(
+      `SELECT prompt_text as promptText, context_text as contextText
+       FROM run_debug_inputs
+       WHERE conversation_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(alphaConv?.id) as { promptText: string; contextText: string | null } | undefined;
+    expect(alphaDebug?.promptText).toContain('There is new channel activity');
+    expect(alphaDebug?.contextText).toContain('@RecentAlpha (owner)');
   });
 
-  it('POST /api/channels/:id/messages 在 subscribed_agents 模式下，过期 root participants 不应继续拦截订阅兜底', async () => {
-    const channel = manager.createChannel({
-      name: 'subscribed-stale-root',
-      collaborationMode: 'subscribed_agents',
+  it('POST /api/channels/:id/messages 后续再 @ 新 agent 时，已有 recent participant 与新 mention 应看到同一份 participants', async () => {
+    const channel = manager.createChannel({ name: 'recent-and-mention-room' });
+    const alpha = manager.createAgent({
+      name: 'CarryAlpha',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/carry-alpha',
     });
+    const beta = manager.createAgent({
+      name: 'CarryBeta',
+      agentType: 'claude_acp',
+      nodeId: 'missing-node',
+      workspacePath: '/tmp/carry-beta',
+    });
+    manager.joinChannel(alpha.agentId, channel.channelId);
+    manager.joinChannel(beta.agentId, channel.channelId);
+
+    const warmupResponse = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '@CarryAlpha 你先看一下', senderName: 'User' }),
+    });
+    expect(warmupResponse.status).toBe(201);
+
+    const response = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ content: '@CarryBeta 你也加入一下，我们继续对齐。', senderName: 'User' }),
+    });
+    expect(response.status).toBe(201);
+
+    const alphaConv = manager.openAgentChannelThread(alpha.agentId, channel.channelId, null);
+    const betaConv = manager.openAgentChannelThread(beta.agentId, channel.channelId, null);
+    expect(alphaConv).not.toBeNull();
+    expect(betaConv).not.toBeNull();
+
+    const alphaDebug = db.prepare(
+      `SELECT prompt_text as promptText, context_text as contextText
+       FROM run_debug_inputs
+       WHERE conversation_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(alphaConv?.id) as { promptText: string; contextText: string | null } | undefined;
+    const betaDebug = db.prepare(
+      `SELECT prompt_text as promptText, context_text as contextText
+       FROM run_debug_inputs
+       WHERE conversation_id = ?
+       ORDER BY created_at DESC
+       LIMIT 1`,
+    ).get(betaConv?.id) as { promptText: string; contextText: string | null } | undefined;
+
+    expect(alphaDebug?.promptText).toContain('There is new channel activity');
+    expect(betaDebug?.promptText).toContain('[System: You were @mentioned in #recent-and-mention-room by User.]');
+
+    const participantsBlock = (text?: string | null) => (
+      /\[Active participants on this target\]\n([\s\S]*?)(?:\n\n\[|$)/.exec(text ?? '')?.[1]?.trim() ?? ''
+    );
+    const alphaParticipants = participantsBlock(alphaDebug?.contextText);
+    const betaParticipants = participantsBlock(betaDebug?.contextText);
+    expect(alphaParticipants).toBe(betaParticipants);
+    expect(alphaParticipants).toContain('@CarryAlpha (owner)');
+    expect(alphaParticipants).toContain('@CarryBeta (owner)');
+  });
+
+  it('POST /api/channels/:id/messages 过期 root participants 不应继续收到普通主频道消息', async () => {
+    const channel = manager.createChannel({ name: 'stale-root-room' });
     const staleOwner = manager.createAgent({
       name: 'StaleOwner',
       agentType: 'claude_acp',
       nodeId: 'missing-node',
       workspacePath: '/tmp/stale-owner',
     });
-    const freshSubscriber = manager.createAgent({
-      name: 'FreshSubscriber',
+    const freshWatcher = manager.createAgent({
+      name: 'FreshWatcher',
       agentType: 'claude_acp',
       nodeId: 'missing-node',
-      workspacePath: '/tmp/fresh-subscriber',
+      workspacePath: '/tmp/fresh-watcher',
     });
     manager.joinChannel(staleOwner.agentId, channel.channelId);
-    manager.joinChannel(freshSubscriber.agentId, channel.channelId);
+    manager.joinChannel(freshWatcher.agentId, channel.channelId);
     upsertTargetParticipant(db, {
       agentId: staleOwner.agentId,
       channelId: channel.channelId,
@@ -1869,128 +1862,17 @@ describe('REST API', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ content: '这是一个新的频道更新', senderName: 'User' }),
     });
-
     expect(response.status).toBe(201);
 
-    const freshRunCount = db.prepare(
-      `SELECT COUNT(*) as count
-       FROM runs r
-       JOIN conversations c ON c.session_key = r.session_key
-       WHERE c.agent_id = ? AND c.channel_id = ?`,
-    ).get(freshSubscriber.agentId, channel.channelId) as { count: number };
-
-    expect(freshRunCount.count).toBe(1);
-  });
-
-  it('POST /api/channels/:id/messages 在 subscribed_agents 模式下，多轮 root activity 应先唤醒订阅者，再优先最近参与者', async () => {
-    const channel = manager.createChannel({
-      name: 'subscribed-multi-round',
-      collaborationMode: 'subscribed_agents',
-    });
-    const alpha = manager.createAgent({
-      name: 'RoundAlpha',
-      agentType: 'claude_acp',
-      nodeId: 'missing-node',
-      workspacePath: '/tmp/round-alpha',
-    });
-    const beta = manager.createAgent({
-      name: 'RoundBeta',
-      agentType: 'claude_acp',
-      nodeId: 'missing-node',
-      workspacePath: '/tmp/round-beta',
-    });
-    const gamma = manager.createAgent({
-      name: 'RoundGamma',
-      agentType: 'claude_acp',
-      nodeId: 'missing-node',
-      workspacePath: '/tmp/round-gamma',
-    });
-    manager.joinChannel(alpha.agentId, channel.channelId);
-    manager.joinChannel(beta.agentId, channel.channelId);
-    manager.joinChannel(gamma.agentId, channel.channelId);
-
-    const firstResponse = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: '第一轮：请大家看一下这个新频道消息', senderName: 'User' }),
-    });
-    expect(firstResponse.status).toBe(201);
-
-    const alphaConv = manager.openAgentChannelThread(alpha.agentId, channel.channelId, null);
-    const betaConv = manager.openAgentChannelThread(beta.agentId, channel.channelId, null);
-    const gammaConv = manager.openAgentChannelThread(gamma.agentId, channel.channelId, null);
-    expect(alphaConv).not.toBeNull();
-    expect(betaConv).not.toBeNull();
-    expect(gammaConv).not.toBeNull();
-
-    const firstRunCounts = [alphaConv, betaConv, gammaConv].map((conv) => {
-      const row = db.prepare(
+    for (const agentId of [staleOwner.agentId, freshWatcher.agentId]) {
+      const runCount = db.prepare(
         `SELECT COUNT(*) as count
          FROM runs r
          JOIN conversations c ON c.session_key = r.session_key
-         WHERE c.id = ?`,
-      ).get(conv?.id) as { count: number };
-      return row.count;
-    });
-    expect(firstRunCounts).toEqual([1, 1, 1]);
-
-    const firstDebugRows = [alphaConv, betaConv, gammaConv].map((conv) => db.prepare(
-      `SELECT prompt_text as promptText, context_text as contextText
-       FROM run_debug_inputs
-       WHERE conversation_id = ?
-       ORDER BY created_at DESC
-       LIMIT 1`,
-    ).get(conv?.id) as { promptText: string; contextText: string | null } | undefined);
-    for (const debugRow of firstDebugRows) {
-      expect(debugRow?.promptText).toContain('There is new channel activity');
+         WHERE c.agent_id = ? AND c.channel_id = ?`,
+      ).get(agentId, channel.channelId) as { count: number };
+      expect(runCount.count).toBe(0);
     }
-
-    db.prepare(
-      `UPDATE target_participants
-       SET last_active_at = ?
-       WHERE channel_id = ? AND thread_root_id = '' AND agent_id IN (?, ?)`,
-    ).run(
-      Date.now() - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS - 1_000,
-      channel.channelId,
-      beta.agentId,
-      gamma.agentId,
-    );
-    db.prepare(
-      `UPDATE target_participants
-       SET last_active_at = ?
-       WHERE channel_id = ? AND thread_root_id = '' AND agent_id = ?`,
-    ).run(Date.now(), channel.channelId, alpha.agentId);
-
-    const secondResponse = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: '第二轮：请优先找最近还在看的 agent', senderName: 'User' }),
-    });
-    expect(secondResponse.status).toBe(201);
-
-    const secondRunCounts = [alphaConv, betaConv, gammaConv].map((conv) => {
-      const row = db.prepare(
-        `SELECT COUNT(*) as count
-         FROM runs r
-         JOIN conversations c ON c.session_key = r.session_key
-         WHERE c.id = ?`,
-      ).get(conv?.id) as { count: number };
-      return row.count;
-    });
-    expect(secondRunCounts).toEqual([2, 1, 1]);
-
-    const alphaDebug = db.prepare(
-      `SELECT prompt_text as promptText, context_text as contextText
-       FROM run_debug_inputs
-       WHERE conversation_id = ?
-       ORDER BY created_at DESC
-       LIMIT 1`,
-    ).get(alphaConv?.id) as { promptText: string; contextText: string | null } | undefined;
-    expect(alphaDebug?.promptText).toContain('There is new channel activity');
-    expect(alphaDebug?.contextText).toContain('[Active participants on this target]');
-    expect(alphaDebug?.contextText).toContain('@RoundAlpha (participant)');
-    expect(alphaDebug?.contextText).not.toContain('@RoundBeta (participant)');
-    expect(alphaDebug?.contextText).not.toContain('@RoundGamma (participant)');
   });
 
   it('POST /api/channels/:id/messages 在主频道一次 @ 多个 agent 且其中一人已 active 时，active agent 应进入 queue，而其他 agent 应正常 dispatch', async () => {
@@ -2067,59 +1949,6 @@ describe('REST API', () => {
     expect(participantsBlock(bobQueueRows[0]?.activationContextText)).toBe(participantsBlock(carolDebug?.contextText));
   });
 
-  it('POST /api/channels/:id/messages 在 mention_only 主频道普通消息中，不应无故唤醒未被 @ 的 agent', async () => {
-    const channel = manager.createChannel({ name: 'plain-root-no-wake', collaborationMode: 'mention_only' });
-    const alpha = manager.createAgent({
-      name: 'PlainRootAlpha',
-      agentType: 'claude_acp',
-      nodeId: 'missing-node',
-      workspacePath: '/tmp/plain-root-alpha',
-    });
-    const beta = manager.createAgent({
-      name: 'PlainRootBeta',
-      agentType: 'claude_acp',
-      nodeId: 'missing-node',
-      workspacePath: '/tmp/plain-root-beta',
-    });
-    const gamma = manager.createAgent({
-      name: 'PlainRootGamma',
-      agentType: 'claude_acp',
-      nodeId: 'missing-node',
-      workspacePath: '/tmp/plain-root-gamma',
-    });
-    manager.joinChannel(alpha.agentId, channel.channelId);
-    manager.joinChannel(beta.agentId, channel.channelId);
-    manager.joinChannel(gamma.agentId, channel.channelId);
-
-    const response = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        content: '这是一条普通主频道消息，没有显式点名任何 agent。',
-        senderName: 'User',
-      }),
-    });
-
-    expect(response.status).toBe(201);
-
-    for (const agentId of [alpha.agentId, beta.agentId, gamma.agentId]) {
-      const runCount = db.prepare(
-        `SELECT COUNT(*) as count
-         FROM runs r
-         JOIN conversations c ON c.session_key = r.session_key
-         WHERE c.agent_id = ? AND c.channel_id = ? AND c.thread_root_id IS NULL`,
-      ).get(agentId, channel.channelId) as { count: number };
-      expect(runCount.count).toBe(0);
-    }
-
-    const participantCount = db.prepare(
-      `SELECT COUNT(*) as count
-       FROM target_participants
-       WHERE channel_id = ? AND thread_root_id = ''`,
-    ).get(channel.channelId) as { count: number };
-    expect(participantCount.count).toBe(0);
-  });
-
   it('POST /api/channels/:id/messages 在主频道一次 @ 多个 agent 时，每个 agent 都应看到一致的 active participants', async () => {
     const channel = manager.createChannel({ name: 'mention-batch-room' });
     const bob = manager.createAgent({
@@ -2154,19 +1983,19 @@ describe('REST API', () => {
     expect(carolConv).not.toBeNull();
 
     const bobDebug = db.prepare(
-      `SELECT prompt_text as promptText, context_text as contextText
+      `SELECT prompt_text as promptText, context_text as contextText, activation_metadata_json as activationMetadataJson
        FROM run_debug_inputs
        WHERE conversation_id = ?
        ORDER BY created_at DESC
        LIMIT 1`,
-    ).get(bobConv?.id) as { promptText: string; contextText: string | null } | undefined;
+    ).get(bobConv?.id) as { promptText: string; contextText: string | null; activationMetadataJson: string | null } | undefined;
     const carolDebug = db.prepare(
-      `SELECT prompt_text as promptText, context_text as contextText
+      `SELECT prompt_text as promptText, context_text as contextText, activation_metadata_json as activationMetadataJson
        FROM run_debug_inputs
        WHERE conversation_id = ?
        ORDER BY created_at DESC
        LIMIT 1`,
-    ).get(carolConv?.id) as { promptText: string; contextText: string | null } | undefined;
+    ).get(carolConv?.id) as { promptText: string; contextText: string | null; activationMetadataJson: string | null } | undefined;
 
     expect(bobDebug?.promptText).toContain('[System: You were @mentioned in #mention-batch-room by User.]');
     expect(carolDebug?.promptText).toContain('[System: You were @mentioned in #mention-batch-room by User.]');
@@ -2180,57 +2009,79 @@ describe('REST API', () => {
     expect(bobParticipants).toBe(carolParticipants);
     expect(bobParticipants).toContain('@PromptBatchBob');
     expect(bobParticipants).toContain('@PromptBatchCarol');
+    expect(bobDebug?.activationMetadataJson).toContain('"mode":"root_user_multi_mention"');
+    expect(bobDebug?.activationMetadataJson).toContain(carol.agentId);
+    expect(carolDebug?.activationMetadataJson).toContain(bob.agentId);
   });
 
-  it('POST /api/channels/:id/messages 在 subscribed_agents 模式下，第二轮 root activity 遇到 active recent participant 时应进入 queue，而其他 root participants 正常 dispatch', async () => {
-    const channel = manager.createChannel({
-      name: 'subscribed-active-queue',
-      collaborationMode: 'subscribed_agents',
-    });
+  it('POST /api/channels/:id/messages 主频道普通消息命中 active recent participant 时，应进入 queue，而其他 recent participants 正常 dispatch', async () => {
+    const channel = manager.createChannel({ name: 'root-recent-queue-room' });
     const alpha = manager.createAgent({
-      name: 'SubscribedAlpha',
+      name: 'RecentQueueAlpha',
       agentType: 'claude_acp',
       nodeId: 'missing-node',
-      workspacePath: '/tmp/subscribed-alpha',
+      workspacePath: '/tmp/recent-queue-alpha',
     });
     const beta = manager.createAgent({
-      name: 'SubscribedBeta',
+      name: 'RecentQueueBeta',
       agentType: 'claude_acp',
       nodeId: 'missing-node',
-      workspacePath: '/tmp/subscribed-beta',
+      workspacePath: '/tmp/recent-queue-beta',
     });
     const gamma = manager.createAgent({
-      name: 'SubscribedGamma',
+      name: 'RecentQueueGamma',
       agentType: 'claude_acp',
       nodeId: 'missing-node',
-      workspacePath: '/tmp/subscribed-gamma',
+      workspacePath: '/tmp/recent-queue-gamma',
     });
     manager.joinChannel(alpha.agentId, channel.channelId);
     manager.joinChannel(beta.agentId, channel.channelId);
     manager.joinChannel(gamma.agentId, channel.channelId);
 
-    const firstResponse = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: '第一轮：请大家看一下这个新频道消息', senderName: 'User' }),
-    });
-    expect(firstResponse.status).toBe(201);
-
     const alphaConv = manager.openAgentChannelThread(alpha.agentId, channel.channelId, null);
     const betaConv = manager.openAgentChannelThread(beta.agentId, channel.channelId, null);
     const gammaConv = manager.openAgentChannelThread(gamma.agentId, channel.channelId, null);
-    if (!alphaConv || !betaConv || !gammaConv) throw new Error('missing subscribed conversations');
+    if (!alphaConv || !betaConv || !gammaConv) throw new Error('missing recent queue conversations');
 
+    upsertTargetParticipant(db, {
+      agentId: alpha.agentId,
+      channelId: channel.channelId,
+      threadRootId: null,
+      role: 'participant',
+      lastActiveAt: Date.now(),
+    });
+    upsertTargetParticipant(db, {
+      agentId: beta.agentId,
+      channelId: channel.channelId,
+      threadRootId: null,
+      role: 'participant',
+      lastActiveAt: Date.now(),
+    });
+    upsertTargetParticipant(db, {
+      agentId: gamma.agentId,
+      channelId: channel.channelId,
+      threadRootId: null,
+      role: 'participant',
+      lastActiveAt: Date.now(),
+    });
+
+    const betaSession = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(betaConv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-server-root-recent-queue-beta',
+      sessionKey: betaSession.sessionKey,
+      promptText: 'already active on the channel root',
+    });
     db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', alphaConv.id);
     db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('active', betaConv.id);
     db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', gammaConv.id);
 
-    const secondResponse = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
+    const response = await fetchJson(`/api/channels/${channel.channelId}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ content: '第二轮：请优先找最近还在看的 agent', senderName: 'User' }),
+      body: JSON.stringify({ content: '这是一条普通的主频道更新，应该只命中 recent participants。', senderName: 'User' }),
     });
-    expect(secondResponse.status).toBe(201);
+    expect(response.status).toBe(201);
 
     const alphaRunCount = db.prepare(
       `SELECT COUNT(*) as count
@@ -2251,9 +2102,9 @@ describe('REST API', () => {
        WHERE c.id = ?`,
     ).get(gammaConv.id) as { count: number };
 
-    expect(alphaRunCount.count).toBe(2);
+    expect(alphaRunCount.count).toBe(1);
     expect(betaRunCount.count).toBe(1);
-    expect(gammaRunCount.count).toBe(2);
+    expect(gammaRunCount.count).toBe(1);
 
     const betaQueueRows = db.prepare(
       `SELECT prompt_text as promptText, activation_context_text as activationContextText

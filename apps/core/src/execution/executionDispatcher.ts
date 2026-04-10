@@ -16,6 +16,7 @@ import { buildTargetActivationContext, type ActivationContextMessage } from '../
 import { sanitizePromptHistoryContent } from '../web/promptHistorySanitizer.js';
 
 const TURN_REPLY_CONTRACT = [
+  '\n',
   '[Reply contract]',
   'Reply only via mcp__chat__send_message(...). Do not output user-visible text directly.',
   'Use mcp__chat__send_message(..., kind="progress") only while work is still ongoing.',
@@ -31,12 +32,21 @@ type PendingDispatchAcceptance = {
   timer: NodeJS.Timeout;
 };
 
+export type PromptActivationMetadata = {
+  mentionSuppression?: {
+    mode: 'root_user_multi_mention';
+    triggerSeq: number;
+    peerMentionedAgentIds: string[];
+  };
+};
+
 type PromptSubmitOptions = {
   recordAsUserMessage?: boolean;
   activationContextText?: string;
   replayOverlapRecentMessages?: ActivationContextMessage[];
   senderName?: string;
   clientMessageId?: string;
+  activationMetadata?: PromptActivationMetadata;
 };
 
 export class ExecutionDispatcher {
@@ -199,6 +209,7 @@ export class ExecutionDispatcher {
       contextText: contextText || null,
       promptText,
       dispatchedPromptText: dispatchedPrompt,
+      activationMetadataJson: serializePromptActivationMetadata(options?.activationMetadata),
     });
 
     const node = this.nodeRegistry?.getNode(row.nodeId);
@@ -369,6 +380,7 @@ export class ExecutionDispatcher {
               prompt_text as promptText, record_as_user_message as recordAsUserMessage,
               activation_context_text as activationContextText,
               replay_overlap_recent_messages_json as replayOverlapRecentMessagesJson,
+              activation_metadata_json as activationMetadataJson,
               sender_name as senderName,
               client_message_id as clientMessageId
        FROM conversation_prompt_queue
@@ -383,6 +395,7 @@ export class ExecutionDispatcher {
       recordAsUserMessage: number;
       activationContextText: string | null;
       replayOverlapRecentMessagesJson: string | null;
+      activationMetadataJson: string | null;
       senderName: string | null;
       clientMessageId: string | null;
     } | undefined;
@@ -395,6 +408,7 @@ export class ExecutionDispatcher {
         recordAsUserMessage: next.recordAsUserMessage !== 0,
         activationContextText: next.activationContextText ?? undefined,
         replayOverlapRecentMessages: parseReplayOverlapRecentMessages(next.replayOverlapRecentMessagesJson),
+        activationMetadata: parsePromptActivationMetadata(next.activationMetadataJson),
         senderName: next.senderName ?? undefined,
         clientMessageId: next.clientMessageId ?? undefined,
       });
@@ -586,9 +600,9 @@ export class ExecutionDispatcher {
     const now = Date.now();
     this.db.prepare(
       `INSERT INTO conversation_prompt_queue(
-         agent_id, conversation_id, prompt_text, record_as_user_message, activation_context_text, replay_overlap_recent_messages_json, sender_name, client_message_id, created_at, updated_at
+         agent_id, conversation_id, prompt_text, record_as_user_message, activation_context_text, replay_overlap_recent_messages_json, activation_metadata_json, sender_name, client_message_id, created_at, updated_at
        )
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       agentId,
       conversationId,
@@ -596,6 +610,7 @@ export class ExecutionDispatcher {
       (options?.recordAsUserMessage ?? true) ? 1 : 0,
       options?.activationContextText?.trim() || null,
       serializeReplayOverlapRecentMessages(options?.replayOverlapRecentMessages),
+      serializePromptActivationMetadata(options?.activationMetadata),
       options?.senderName ?? null,
       options?.clientMessageId ?? null,
       now,
@@ -772,16 +787,17 @@ function upsertPendingRunDebugInput(
     contextText: string | null;
     promptText: string;
     dispatchedPromptText: string;
+    activationMetadataJson: string | null;
   },
 ): void {
   const now = Date.now();
   db.prepare(
     `INSERT INTO run_debug_inputs(
        run_id, conversation_id, session_key, dispatch_mode, reply_target,
-       system_prompt_text, context_text, prompt_text, dispatched_prompt_text,
+       system_prompt_text, context_text, prompt_text, dispatched_prompt_text, activation_metadata_json,
        created_at, updated_at
      )
-     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(run_id) DO UPDATE SET
        conversation_id = excluded.conversation_id,
        session_key = excluded.session_key,
@@ -791,6 +807,7 @@ function upsertPendingRunDebugInput(
        context_text = excluded.context_text,
        prompt_text = excluded.prompt_text,
        dispatched_prompt_text = excluded.dispatched_prompt_text,
+       activation_metadata_json = excluded.activation_metadata_json,
        updated_at = excluded.updated_at`,
   ).run(
     params.runId,
@@ -802,7 +819,48 @@ function upsertPendingRunDebugInput(
     params.contextText,
     params.promptText,
     params.dispatchedPromptText,
+    params.activationMetadataJson,
     now,
     now,
   );
+}
+
+function serializePromptActivationMetadata(metadata: PromptActivationMetadata | undefined): string | null {
+  if (!metadata) return null;
+  if (!metadata.mentionSuppression) return null;
+  const peerMentionedAgentIds = metadata.mentionSuppression.peerMentionedAgentIds
+    .map((agentId) => agentId.trim())
+    .filter(Boolean);
+  if (peerMentionedAgentIds.length === 0) return null;
+  return JSON.stringify({
+    mentionSuppression: {
+      mode: metadata.mentionSuppression.mode,
+      triggerSeq: metadata.mentionSuppression.triggerSeq,
+      peerMentionedAgentIds,
+    },
+  });
+}
+
+function parsePromptActivationMetadata(value: string | null | undefined): PromptActivationMetadata | undefined {
+  if (!value) return undefined;
+  try {
+    const parsed = JSON.parse(value) as PromptActivationMetadata;
+    const mentionSuppression = parsed?.mentionSuppression;
+    if (!mentionSuppression) return undefined;
+    const peerMentionedAgentIds = Array.isArray(mentionSuppression.peerMentionedAgentIds)
+      ? mentionSuppression.peerMentionedAgentIds.filter((agentId): agentId is string => typeof agentId === 'string' && agentId.trim().length > 0)
+      : [];
+    if (mentionSuppression.mode !== 'root_user_multi_mention' || !Number.isFinite(mentionSuppression.triggerSeq) || peerMentionedAgentIds.length === 0) {
+      return undefined;
+    }
+    return {
+      mentionSuppression: {
+        mode: 'root_user_multi_mention',
+        triggerSeq: mentionSuppression.triggerSeq,
+        peerMentionedAgentIds,
+      },
+    };
+  } catch {
+    return undefined;
+  }
 }

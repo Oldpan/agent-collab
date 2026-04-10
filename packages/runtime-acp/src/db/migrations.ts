@@ -1279,4 +1279,19 @@ export function migrate(db: Db): void {
       db.exec(`UPDATE schema_version SET version = 57;`);
     }
   }
+
+  const queueColsV58 = db.prepare("PRAGMA table_info('conversation_prompt_queue')").all() as Array<{ name: string }>;
+  if (!queueColsV58.some((c) => c.name === 'activation_metadata_json')) {
+    db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN activation_metadata_json TEXT;`);
+  }
+
+  const runDebugColsV58 = db.prepare("PRAGMA table_info('run_debug_inputs')").all() as Array<{ name: string }>;
+  if (!runDebugColsV58.some((c) => c.name === 'activation_metadata_json')) {
+    db.exec(`ALTER TABLE run_debug_inputs ADD COLUMN activation_metadata_json TEXT;`);
+  }
+
+  const v58Row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
+  if (v58Row.version < 58) {
+    db.exec(`UPDATE schema_version SET version = 58;`);
+  }
 }

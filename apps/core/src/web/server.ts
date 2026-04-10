@@ -43,7 +43,6 @@ import { appendChannelResetMarkers } from './channelMemoryNotes.js';
 import { buildTargetActivationContext, ensureDmThreadContextSnapshot } from './activationContext.js';
 import { resolveDirectThreadRootMessage } from './directThreadResolver.js';
 import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
-import { deleteChannelSubscription, listChannelSubscriptions, upsertChannelSubscription } from './channelSubscriptions.js';
 import {
   deleteTargetParticipantsForAgentInChannel,
   listRecentTargetParticipants,
@@ -402,6 +401,17 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         }
 
         notifiedAgentIds.add(agentId);
+        const activationMetadata = !threadRootId && reason === 'mention' && mentionedAgents.length > 1
+          ? {
+              mentionSuppression: {
+                mode: 'root_user_multi_mention' as const,
+                triggerSeq: seq,
+                peerMentionedAgentIds: mentionedAgents
+                  .map((mentionedAgent) => mentionedAgent.agentId)
+                  .filter((mentionedAgentId) => mentionedAgentId !== agentId),
+              },
+            }
+          : undefined;
         conversationManager.submitPrompt(
           conv.id,
           buildChannelActivationPrompt({
@@ -425,6 +435,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
               openTasks: activationContext.openTasks,
             }) || undefined,
             replayOverlapRecentMessages: activationContext.recentMessages,
+            activationMetadata,
           },
         ).then(() => {
           bumpAgentMessageCheckpoint(db, agentId, params.channelId, seq, threadRootId ?? null);
@@ -487,25 +498,14 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       notifyAgent(agent.agentId, 'mention', threadRootId ? 'participant' : 'owner');
     }
 
-    if (!threadRootId && mentionedAgents.length === 0 && channel.collaborationMode === 'subscribed_agents') {
+    if (!threadRootId) {
       const rootParticipants = listRecentTargetParticipants(db, {
         channelId: params.channelId,
         threadRootId: null,
         activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
       });
-      const subscribedAgents = listChannelSubscriptions(db, params.channelId);
-      const agentsToWake = rootParticipants.length > 0
-        ? rootParticipants.map((participant) => ({
-            agentId: participant.agentId,
-            role: participant.role,
-          }))
-        : subscribedAgents.map((agent) => ({
-            agentId: agent.agentId,
-            role: 'participant' as const,
-          }));
-
-      for (const agent of agentsToWake) {
-        notifyAgent(agent.agentId, 'channel_activity', agent.role);
+      for (const participant of rootParticipants) {
+        notifyAgent(participant.agentId, 'channel_activity', participant.role);
       }
     }
 
@@ -2218,7 +2218,6 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         name: body.name,
         workspacePath: body.workspacePath,
         description: body.description,
-        collaborationMode: body.collaborationMode,
       });
       for (const agentId of body.agentIds ?? []) {
         if (conversationManager.getAgent(agentId)) {
@@ -2264,37 +2263,6 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       conversationManager.leaveChannel(req.params.agentId, req.params.id);
-      return conversationManager.getChannel(req.params.id);
-    },
-  );
-
-  app.post<{ Params: { id: string; agentId: string } }>(
-    '/api/channels/:id/subscriptions/:agentId',
-    async (req, reply) => {
-      if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
-      const channel = conversationManager.getChannel(req.params.id);
-      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
-      const agent = conversationManager.getAgent(req.params.agentId);
-      if (!agent) { reply.code(404); return { error: 'Agent not found' }; }
-      upsertChannelSubscription(db, {
-        channelId: req.params.id,
-        agentId: req.params.agentId,
-      });
-      return conversationManager.getChannel(req.params.id);
-    },
-  );
-
-  app.delete<{ Params: { id: string; agentId: string } }>(
-    '/api/channels/:id/subscriptions/:agentId',
-    async (req, reply) => {
-      if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
-      const channel = conversationManager.getChannel(req.params.id);
-      if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
-      deleteChannelSubscription(db, req.params.id, req.params.agentId);
-      deleteTargetParticipantsForAgentInChannel(db, {
-        agentId: req.params.agentId,
-        channelId: req.params.id,
-      });
       return conversationManager.getChannel(req.params.id);
     },
   );

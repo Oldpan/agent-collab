@@ -130,6 +130,14 @@ type BoundTaskThreadContext = {
   boundTask: BoundThreadTask;
 };
 
+type RunActivationMetadata = {
+  mentionSuppression?: {
+    mode: 'root_user_multi_mention';
+    triggerSeq: number;
+    peerMentionedAgentIds: string[];
+  };
+};
+
 function parseBoundedPositiveInt(value: string | undefined, fallback: number, max: number): number {
   const parsed = Number(value);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
@@ -186,6 +194,41 @@ function fetchTaskContext(db: Db, channelId: string, messageId: string, limit = 
 
 function doesThreadRootExist(db: Db, channelId: string, threadRootId: string): boolean {
   return Boolean(findThreadRootMessageId(db, channelId, threadRootId));
+}
+
+function getRunActivationMetadata(db: Db, runId: string | null): RunActivationMetadata | null {
+  if (!runId) return null;
+  const row = db.prepare(
+    `SELECT activation_metadata_json as activationMetadataJson
+     FROM run_debug_inputs
+     WHERE run_id = ?
+     LIMIT 1`,
+  ).get(runId) as { activationMetadataJson: string | null } | undefined;
+  if (!row?.activationMetadataJson) return null;
+  try {
+    const parsed = JSON.parse(row.activationMetadataJson) as RunActivationMetadata;
+    const mentionSuppression = parsed?.mentionSuppression;
+    if (!mentionSuppression) return null;
+    if (
+      mentionSuppression.mode !== 'root_user_multi_mention'
+      || !Number.isFinite(mentionSuppression.triggerSeq)
+      || !Array.isArray(mentionSuppression.peerMentionedAgentIds)
+    ) {
+      return null;
+    }
+    const peerMentionedAgentIds = mentionSuppression.peerMentionedAgentIds
+      .filter((agentId): agentId is string => typeof agentId === 'string' && agentId.trim().length > 0);
+    if (peerMentionedAgentIds.length === 0) return null;
+    return {
+      mentionSuppression: {
+        mode: 'root_user_multi_mention',
+        triggerSeq: mentionSuppression.triggerSeq,
+        peerMentionedAgentIds,
+      },
+    };
+  } catch {
+    return null;
+  }
 }
 
 function fetchLatestTopLevelUserMessageForTarget(
@@ -786,6 +829,7 @@ export function registerInternalAgentRoutes(
     }
 
     const activeRunId = conversationId ? findActiveConversationRunId(db, conversationId) : null;
+    const activeRunActivationMetadata = getRunActivationMetadata(db, activeRunId);
     const activeConversationHandoff = getActiveRunHandoff(conversationId);
     if (activeConversationHandoff) {
       reply.code(409);
@@ -909,6 +953,10 @@ export function registerInternalAgentRoutes(
         .listAgents(channelId)
         .filter((candidate) => candidate.agentId !== agentId);
       const mentionedAgents = findMentionedAgents(normalizedContent, mentionableAgents);
+      const suppressedPeerMentionAgentIds = !threadRootId
+        && activeRunActivationMetadata?.mentionSuppression?.mode === 'root_user_multi_mention'
+          ? new Set(activeRunActivationMetadata.mentionSuppression.peerMentionedAgentIds)
+          : null;
       const pendingNotifications = new Map<string, { reason: 'thread_reply' | 'agent_mention'; role: 'owner' | 'participant' }>();
       const reasonPriority = (reason: 'thread_reply' | 'agent_mention'): number => (
         reason === 'agent_mention' ? 2 : 1
@@ -975,6 +1023,9 @@ export function registerInternalAgentRoutes(
       }
 
       for (const mentionedAgent of mentionedAgents) {
+        if (suppressedPeerMentionAgentIds?.has(mentionedAgent.agentId)) {
+          continue;
+        }
         if (!shouldTriggerAgentMention(db, {
           channelId,
           threadRootId,

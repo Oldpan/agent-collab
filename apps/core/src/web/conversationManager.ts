@@ -7,7 +7,6 @@ import type {
   ConversationInfo,
   AgentType,
   ChannelInfo,
-  ChannelCollaborationMode,
   AgentInfo,
   CreateAgentRequest,
   UpdateAgentRequest,
@@ -30,12 +29,8 @@ import type { Db } from '@agent-collab/runtime-acp';
 import { getRuntimeDriver } from '@agent-collab/protocol';
 import type { AppConfig } from '../config.js';
 import { ExecutionDispatcher } from '../execution/executionDispatcher.js';
+import type { PromptActivationMetadata } from '../execution/executionDispatcher.js';
 import type { NodeRegistry } from '../services/nodeRegistry.js';
-import {
-  deleteChannelSubscription,
-  listChannelSubscriptions,
-  upsertChannelSubscription,
-} from './channelSubscriptions.js';
 import type { ActivationContextMessage } from './activationContext.js';
 import { resolveThreadRootLookup } from './threadRoots.js';
 import {
@@ -893,6 +888,7 @@ export class ConversationManager {
       replayOverlapRecentMessages?: ActivationContextMessage[];
       senderName?: string;
       clientMessageId?: string;
+      activationMetadata?: PromptActivationMetadata;
     },
   ): Promise<{ queued: boolean; runId?: string }> {
     return this.executionDispatcher.submitPrompt(conversationId, promptText, options);
@@ -926,7 +922,6 @@ export class ConversationManager {
       this.db.prepare(`UPDATE agents SET channel_id = ?, updated_at = ? WHERE agent_id = ?`)
         .run(channelId, now, agentId);
     }
-    upsertChannelSubscription(this.db, { agentId, channelId, subscribedAt: now, lastActiveAt: now });
   }
 
   leaveChannel(agentId: string, channelId: string): void {
@@ -934,7 +929,6 @@ export class ConversationManager {
     this.db.prepare(
       `DELETE FROM agent_channel_memberships WHERE agent_id = ? AND channel_id = ?`
     ).run(agentId, channelId);
-    deleteChannelSubscription(this.db, channelId, agentId);
     deleteTargetParticipantsForAgentInChannel(this.db, { agentId, channelId });
     if (agent?.channelId === channelId) {
       const nextHome = this.db.prepare(
@@ -960,25 +954,21 @@ export class ConversationManager {
     name: string;
     workspacePath?: string | null;
     description?: string;
-    collaborationMode?: ChannelCollaborationMode;
   }): ChannelInfo {
     const channelId = params.name === 'default' ? 'default' : randomUUID();
     const now = Date.now();
-    const collaborationMode = params.collaborationMode ?? 'mention_only';
     this.db
       .prepare(
         `INSERT INTO channels(channel_id, name, workspace_path, description, collaboration_mode, created_at, updated_at)
          VALUES(?, ?, ?, ?, ?, ?, ?)`,
       )
-      .run(channelId, params.name, params.workspacePath ?? null, params.description ?? null, collaborationMode, now, now);
+      .run(channelId, params.name, params.workspacePath ?? null, params.description ?? null, 'mention_only', now, now);
     return {
       channelId,
       name: params.name,
       workspacePath: params.workspacePath ?? null,
       description: params.description,
-      collaborationMode,
       members: [],
-      subscribedAgents: [],
       createdAt: now,
       updatedAt: now,
     };
@@ -988,14 +978,12 @@ export class ConversationManager {
     const existing = this.getChannel(channelId);
     if (!existing) return null;
     const now = Date.now();
-    const collaborationMode = req.collaborationMode ?? existing.collaborationMode ?? 'mention_only';
     this.db.prepare(
-      `UPDATE channels SET description = ?, collaboration_mode = ?, updated_at = ? WHERE channel_id = ?`
-    ).run(req.description ?? existing.description ?? null, collaborationMode, now, channelId);
+      `UPDATE channels SET description = ?, updated_at = ? WHERE channel_id = ?`
+    ).run(req.description ?? existing.description ?? null, now, channelId);
     return {
       ...existing,
       description: req.description ?? existing.description,
-      collaborationMode,
       updatedAt: now,
     };
   }
@@ -1057,18 +1045,14 @@ export class ConversationManager {
     const rows = this.db
       .prepare(
         `SELECT channel_id as channelId, name, workspace_path as workspacePath,
-                description, collaboration_mode as collaborationMode,
+                description,
                 created_at as createdAt, updated_at as updatedAt
          FROM channels ORDER BY created_at ASC`,
       )
-      .all() as Array<Omit<ChannelInfo, 'subscribedAgents'>>;
+      .all() as ChannelInfo[];
     return rows.map((row) => ({
       ...row,
       members: this.listChannelMembers(row.channelId),
-      subscribedAgents: listChannelSubscriptions(this.db, row.channelId).map((item) => ({
-        agentId: item.agentId,
-        name: item.name,
-      })),
     }));
   }
 
@@ -1076,19 +1060,15 @@ export class ConversationManager {
     const row = this.db
       .prepare(
         `SELECT channel_id as channelId, name, workspace_path as workspacePath,
-                description, collaboration_mode as collaborationMode,
+                description,
                 created_at as createdAt, updated_at as updatedAt
          FROM channels WHERE channel_id = ?`,
       )
-      .get(channelId) as Omit<ChannelInfo, 'subscribedAgents'> | undefined;
+      .get(channelId) as ChannelInfo | undefined;
     if (!row) return null;
     return {
       ...row,
       members: this.listChannelMembers(channelId),
-      subscribedAgents: listChannelSubscriptions(this.db, channelId).map((item) => ({
-        agentId: item.agentId,
-        name: item.name,
-      })),
     };
   }
 

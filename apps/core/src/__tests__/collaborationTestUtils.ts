@@ -12,7 +12,6 @@ import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js
 import { buildChannelActivationContextText, buildChannelActivationPrompt } from '../web/channelActivationPrompt.js';
 import { buildTargetActivationContext } from '../web/activationContext.js';
 import { findMentionedAgents } from '../web/channelMentions.js';
-import { upsertChannelSubscription, listChannelSubscriptions } from '../web/channelSubscriptions.js';
 import { bumpAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
 import {
   listRecentTargetParticipants,
@@ -212,6 +211,17 @@ export async function createCollaborationHarness(): Promise<CollaborationHarness
             triggerSeq: seq,
             threadRootId: threadRootId ?? null,
           });
+          const activationMetadata = !threadRootId && reason === 'mention' && mentionedAgents.length > 1
+            ? {
+                mentionSuppression: {
+                  mode: 'root_user_multi_mention' as const,
+                  triggerSeq: seq,
+                  peerMentionedAgentIds: mentionedAgents
+                    .map((mentionedAgent) => mentionedAgent.agentId)
+                    .filter((mentionedAgentId) => mentionedAgentId !== agentId),
+                },
+              }
+            : undefined;
           void manager.submitPrompt(
             conv.id,
             buildChannelActivationPrompt({
@@ -235,6 +245,7 @@ export async function createCollaborationHarness(): Promise<CollaborationHarness
                 openTasks: activationContext.openTasks,
               }) || undefined,
               replayOverlapRecentMessages: activationContext.recentMessages,
+              activationMetadata,
             },
           ).then(() => {
             bumpAgentMessageCheckpoint(db, agentId, req.params.id, seq, threadRootId ?? null);
@@ -278,25 +289,14 @@ export async function createCollaborationHarness(): Promise<CollaborationHarness
         queueAgentNotification(agent.agentId, 'mention', threadRootId ? 'participant' : 'owner');
       }
 
-      if (!threadRootId && mentionedAgents.length === 0 && channel.collaborationMode === 'subscribed_agents') {
+      if (!threadRootId) {
         const rootParticipants = listRecentTargetParticipants(db, {
           channelId: req.params.id,
           threadRootId: null,
           activeSince: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
         });
-        const subscribedAgents = listChannelSubscriptions(db, req.params.id);
-        const agentsToWake = rootParticipants.length > 0
-          ? rootParticipants.map((participant) => ({
-              agentId: participant.agentId,
-              role: participant.role,
-            }))
-          : subscribedAgents.map((agent) => ({
-              agentId: agent.agentId,
-              role: 'participant' as const,
-            }));
-
-        for (const agent of agentsToWake) {
-          queueAgentNotification(agent.agentId, 'channel_activity', agent.role);
+        for (const participant of rootParticipants) {
+          queueAgentNotification(participant.agentId, 'channel_activity', participant.role);
         }
       }
 
@@ -395,13 +395,6 @@ export function createJoinedAgent(
   });
   harness.manager.joinChannel(agent.agentId, params.channelId);
   return agent;
-}
-
-export function upsertSubscription(
-  harness: CollaborationHarness,
-  params: { channelId: string; agentId: string; subscribedAt?: number; lastActiveAt?: number },
-): void {
-  upsertChannelSubscription(harness.db, params);
 }
 
 export function requireChannelConversation(

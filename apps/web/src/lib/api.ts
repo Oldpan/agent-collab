@@ -388,7 +388,6 @@ export async function createChannel(req: {
   name: string;
   workspacePath?: string;
   description?: string;
-  collaborationMode?: 'mention_only' | 'subscribed_agents';
   agentIds?: string[];
 }): Promise<ChannelInfo> {
   const res = await fetch(`${API_BASE}/channels`, {
@@ -424,7 +423,6 @@ export async function getUnreadSummary(req: UnreadSummaryRequest): Promise<Unrea
 
 export async function updateChannel(channelId: string, req: {
   description?: string;
-  collaborationMode?: 'mention_only' | 'subscribed_agents';
 }): Promise<ChannelInfo> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}`, {
     method: 'PATCH',
@@ -432,24 +430,6 @@ export async function updateChannel(channelId: string, req: {
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error(`Failed to update channel: ${res.statusText}`);
-  return res.json();
-}
-
-export async function subscribeChannelAgent(channelId: string, agentId: string): Promise<ChannelInfo> {
-  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/subscriptions/${encodeURIComponent(agentId)}`, {
-    method: "POST",
-    headers: withAuthHeaders(),
-  });
-  if (!res.ok) throw new Error(`Failed to subscribe agent: ${res.statusText}`);
-  return res.json();
-}
-
-export async function unsubscribeChannelAgent(channelId: string, agentId: string): Promise<ChannelInfo> {
-  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/subscriptions/${encodeURIComponent(agentId)}`, {
-    method: "DELETE",
-    headers: withAuthHeaders(),
-  });
-  if (!res.ok) throw new Error(`Failed to unsubscribe agent: ${res.statusText}`);
   return res.json();
 }
 

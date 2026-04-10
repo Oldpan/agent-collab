@@ -23,7 +23,6 @@ import {
   sendAgentMessage,
   setConversationStatus,
   settleHarness,
-  upsertSubscription,
   waitForLocalDebug,
 } from './collaborationTestUtils.js';
 
@@ -375,124 +374,84 @@ describe('collaborationScenarios', () => {
       ],
     },
     {
-      id: 'subscribed_root_multi_round_prefers_recent_participants',
-      summary: 'subscribed_agents 根频道应先唤醒订阅者，再在后续轮次优先最近参与者',
+      id: 'root_recent_participant_continues_after_mention',
+      summary: '根频道先显式 @ 激活 agent，后续无 @ 的用户消息仍应继续唤醒 recent participant',
       setup: async (harness) => {
         const channel = harness.manager.createChannel({
-          name: `scenario-subscribed-${randomUUID().slice(0, 8)}`,
-          collaborationMode: 'subscribed_agents',
+          name: `scenario-root-recent-${randomUUID().slice(0, 8)}`,
         });
         const alpha = createJoinedAgent(harness, {
-          name: 'ScenarioSubscribedAlpha',
+          name: 'ScenarioRecentAlpha',
           channelId: channel.channelId,
-          workspacePath: '/tmp/scenario-subscribed-alpha',
+          workspacePath: '/tmp/scenario-recent-alpha',
         });
         const beta = createJoinedAgent(harness, {
-          name: 'ScenarioSubscribedBeta',
+          name: 'ScenarioRecentBeta',
           channelId: channel.channelId,
-          workspacePath: '/tmp/scenario-subscribed-beta',
+          workspacePath: '/tmp/scenario-recent-beta',
         });
-        const gamma = createJoinedAgent(harness, {
-          name: 'ScenarioSubscribedGamma',
-          channelId: channel.channelId,
-          workspacePath: '/tmp/scenario-subscribed-gamma',
-        });
-
-        for (const agent of [alpha, beta, gamma]) {
-          upsertSubscription(harness, { channelId: channel.channelId, agentId: agent.agentId });
-        }
 
         harness.state = {
           channelId: channel.channelId,
-          alphaAgentId: alpha.agentId,
-          betaAgentId: beta.agentId,
-          gammaAgentId: gamma.agentId,
           alphaConversationId: requireChannelConversation(harness, alpha.agentId, channel.channelId, null).id,
           betaConversationId: requireChannelConversation(harness, beta.agentId, channel.channelId, null).id,
-          gammaConversationId: requireChannelConversation(harness, gamma.agentId, channel.channelId, null).id,
         };
       },
       steps: [
         {
-          name: 'first_round_wakes_all_subscribers_with_consistent_participants',
+          name: 'explicit_mention_wakes_alpha_only',
           run: async (harness) => {
             const channelId = harness.state.channelId as string;
             const alphaConversationId = harness.state.alphaConversationId as string;
             const betaConversationId = harness.state.betaConversationId as string;
-            const gammaConversationId = harness.state.gammaConversationId as string;
 
             const response = await postUserChannelMessage(harness, {
               channelId,
-              content: '第一轮根频道广播，没有 recent participants。',
+              content: '@ScenarioRecentAlpha 先看一下这个问题。',
             });
             expect(response.status).toBe(201);
             await settleHarness();
 
-            const alphaDebug = await waitForLocalDebug(harness, alphaConversationId);
-            const betaDebug = await waitForLocalDebug(harness, betaConversationId);
-            const gammaDebug = await waitForLocalDebug(harness, gammaConversationId);
-            const alphaParticipants = participantsBlock(alphaDebug.contextText);
-            expect(alphaParticipants).toContain('@ScenarioSubscribedAlpha (participant)');
-            expect(alphaParticipants).toContain('@ScenarioSubscribedBeta (participant)');
-            expect(alphaParticipants).toContain('@ScenarioSubscribedGamma (participant)');
-            expect(participantsBlock(betaDebug.contextText)).toBe(alphaParticipants);
-            expect(participantsBlock(gammaDebug.contextText)).toBe(alphaParticipants);
+            expect(conversationRunCount(harness, null, channelId, null, alphaConversationId)).toBe(1);
+            expect(conversationRunCount(harness, null, channelId, null, betaConversationId)).toBe(0);
 
-            for (const conversationId of [alphaConversationId, betaConversationId, gammaConversationId]) {
-              const runId = latestConversationRunId(harness, conversationId);
-              expect(runId).toBeTruthy();
-              finishRun(harness.db, { runId: runId!, stopReason: 'end_turn' });
-              setConversationStatus(harness, conversationId, 'idle');
-              await harness.manager.onConversationSettled(conversationId);
-            }
+            const alphaRunId = latestConversationRunId(harness, alphaConversationId);
+            expect(alphaRunId).toBeTruthy();
+            finishRun(harness.db, { runId: alphaRunId!, stopReason: 'end_turn' });
+            setConversationStatus(harness, alphaConversationId, 'idle');
+            await harness.manager.onConversationSettled(alphaConversationId);
           },
         },
         {
-          name: 'second_round_uses_recent_participants_instead_of_falling_back_to_subscribers',
+          name: 'plain_root_message_continues_waking_recent_alpha',
           run: async (harness) => {
             const channelId = harness.state.channelId as string;
-            const alphaAgentId = harness.state.alphaAgentId as string;
-            const betaAgentId = harness.state.betaAgentId as string;
-            const gammaAgentId = harness.state.gammaAgentId as string;
             const alphaConversationId = harness.state.alphaConversationId as string;
             const betaConversationId = harness.state.betaConversationId as string;
-            const gammaConversationId = harness.state.gammaConversationId as string;
-            harness.advanceTime(TARGET_PARTICIPANT_ACTIVE_WINDOW_MS + 1_000);
-
-            expect(betaAgentId).not.toBe(alphaAgentId);
-            expect(gammaAgentId).not.toBe(alphaAgentId);
-            upsertTargetParticipant(harness.db, {
-              agentId: alphaAgentId,
-              channelId,
-              threadRootId: null,
-              role: 'participant',
-              lastActiveAt: harness.now(),
-            });
 
             const response = await postUserChannelMessage(harness, {
               channelId,
-              content: '第二轮根频道广播，应该只命中 recent participant。',
+              content: '这里补充一些新信息，这次不再显式 @。',
             });
             expect(response.status).toBe(201);
             await settleHarness();
 
             expect(conversationRunCount(harness, null, channelId, null, alphaConversationId)).toBe(2);
-            expect(conversationRunCount(harness, null, channelId, null, betaConversationId)).toBe(1);
-            expect(conversationRunCount(harness, null, channelId, null, gammaConversationId)).toBe(1);
+            expect(conversationRunCount(harness, null, channelId, null, betaConversationId)).toBe(0);
 
             const alphaDebug = latestRunDebug(harness, alphaConversationId);
-            expect(participantsBlock(alphaDebug?.contextText)).toBe('@ScenarioSubscribedAlpha (participant)');
+            expect(alphaDebug?.promptText).toContain('There is new channel activity');
+            expect(participantsBlock(alphaDebug?.contextText)).toContain('@ScenarioRecentAlpha (owner)');
           },
         },
       ],
     },
     {
-      id: 'mention_only_root_plain_message_no_wake',
-      summary: 'mention_only 根频道普通消息不应误唤醒任何 agent',
+      id: 'root_plain_message_without_recent_participants_keeps_agents_idle',
+      summary: '根频道普通消息在没有显式 @ 且没有 recent participants 时不应误唤醒任何 agent',
       setup: async (harness) => {
         const channel = harness.manager.createChannel({
           name: `scenario-plain-${randomUUID().slice(0, 8)}`,
-          collaborationMode: 'mention_only',
         });
         const alpha = createJoinedAgent(harness, {
           name: 'ScenarioPlainAlpha',
@@ -610,7 +569,7 @@ describe('collaborationScenarios', () => {
       },
       steps: [
         {
-          name: 'explicit_mention_only_changes_reason_not_shared_context',
+          name: 'explicit_mention_changes_reason_not_shared_context',
           run: async (harness) => {
             const channelId = harness.state.channelId as string;
             const threadRootId = harness.state.threadRootId as string;
@@ -835,7 +794,7 @@ describe('collaborationScenarios', () => {
       },
       steps: [
         {
-          name: 'root_mention_only_hits_root_queue',
+          name: 'root_mention_hits_root_queue',
           run: async (harness) => {
             const channelId = harness.state.channelId as string;
             const rootConversationId = harness.state.rootConversationId as string;

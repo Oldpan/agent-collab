@@ -4,7 +4,7 @@ import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquare
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buildThreadShortId, type ChannelInfo, type AgentInfo, type ConversationInfo } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
-import { addAgentToChannel, clearChannelChat, removeAgentFromChannel, subscribeChannelAgent, unsubscribeChannelAgent, updateChannel, claimMessageAsTask, uploadAttachment } from "@/lib/api";
+import { addAgentToChannel, clearChannelChat, removeAgentFromChannel, claimMessageAsTask, uploadAttachment } from "@/lib/api";
 import { useChannelStream, type ChannelNotice } from "@/hooks/useChannelStream";
 import { ThreadPanel } from "./ThreadPanel";
 import { BranchInspectorPanel } from "./BranchInspectorPanel";
@@ -696,17 +696,8 @@ function SettingsTab({
   const [clearing, setClearing] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [clearError, setClearError] = useState<string | null>(null);
-  const [submittingAgentId, setSubmittingAgentId] = useState<string | null>(null);
   const [membershipAgentId, setMembershipAgentId] = useState<string | null>(null);
-  const [updatingMode, setUpdatingMode] = useState(false);
   const [membershipError, setMembershipError] = useState<string | null>(null);
-  const [subscriptionError, setSubscriptionError] = useState<string | null>(null);
-  const [modeError, setModeError] = useState<string | null>(null);
-
-  const subscribedAgentIds = useMemo(
-    () => new Set((channel.subscribedAgents ?? []).map((agent) => agent.agentId)),
-    [channel.subscribedAgents],
-  );
   const memberAgentIds = useMemo(
     () => new Set(members.map((agent) => agent.agentId)),
     [members],
@@ -725,21 +716,6 @@ function SettingsTab({
     }
   }, [onClearChat]);
 
-  const handleSubscriptionToggle = useCallback(async (agentId: string, subscribe: boolean) => {
-    setSubmittingAgentId(agentId);
-    setSubscriptionError(null);
-    try {
-      const next = subscribe
-        ? await subscribeChannelAgent(channel.channelId, agentId)
-        : await unsubscribeChannelAgent(channel.channelId, agentId);
-      onChannelUpdated?.(next);
-    } catch (err) {
-      setSubscriptionError(String((err as Error)?.message ?? err));
-    } finally {
-      setSubmittingAgentId(null);
-    }
-  }, [channel.channelId, onChannelUpdated]);
-
   const handleMembershipToggle = useCallback(async (agentId: string, join: boolean) => {
     setMembershipAgentId(agentId);
     setMembershipError(null);
@@ -756,20 +732,6 @@ function SettingsTab({
     }
   }, [channel.channelId, onAgentsUpdated, onChannelUpdated]);
 
-  const handleModeChange = useCallback(async (mode: ChannelPanelInfo["collaborationMode"]) => {
-    if (mode === channel.collaborationMode) return;
-    setUpdatingMode(true);
-    setModeError(null);
-    try {
-      const next = await updateChannel(channel.channelId, { collaborationMode: mode });
-      onChannelUpdated?.(next);
-    } catch (err) {
-      setModeError(String((err as Error)?.message ?? err));
-    } finally {
-      setUpdatingMode(false);
-    }
-  }, [channel.channelId, channel.collaborationMode, onChannelUpdated]);
-
   return (
     <>
       <div className="flex-1 overflow-y-auto p-4">
@@ -782,64 +744,9 @@ function SettingsTab({
             ) : (
               <div className="mt-1 text-xs text-zinc-500">No description</div>
             )}
-            <div className="mt-3 flex flex-wrap gap-2 text-[11px]">
-              <span className="rounded-full border border-zinc-900/70 bg-white px-2 py-0.5 text-zinc-700">
-                Mode: {channel.collaborationMode === "subscribed_agents" ? "subscribed agents" : "mention only"}
-              </span>
-              <span className="rounded-full border border-zinc-900/70 bg-white px-2 py-0.5 text-zinc-700">
-                {channel.subscribedAgents?.length ?? 0} subscribed
-              </span>
-            </div>
-            <div className="mt-4 border-t border-zinc-900/10 pt-3">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Collaboration mode</div>
-              <div className="mt-2 grid grid-cols-2 gap-2">
-                <Button
-                  type="button"
-                  disabled={updatingMode || !isAdmin}
-                  onClick={() => void handleModeChange("mention_only")}
-                  className={cn(
-                    "h-auto min-h-16 flex-col items-start rounded-sm border-2 border-zinc-900 px-3 py-2 text-left shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
-                    channel.collaborationMode === "mention_only"
-                      ? "bg-[#d8efff] text-zinc-950 hover:bg-[#c9e7ff]"
-                      : "bg-white text-zinc-700 hover:bg-zinc-50",
-                  )}
-                >
-                  <span className="text-xs font-semibold uppercase tracking-wide">Mention only</span>
-                  <span className="mt-1 text-[11px] font-normal leading-4">
-                    Only explicit @mentions and thread replies wake agents.
-                  </span>
-                </Button>
-                <Button
-                  type="button"
-                  disabled={updatingMode || !isAdmin}
-                  onClick={() => void handleModeChange("subscribed_agents")}
-                  className={cn(
-                    "h-auto min-h-16 flex-col items-start rounded-sm border-2 border-zinc-900 px-3 py-2 text-left shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
-                    channel.collaborationMode === "subscribed_agents"
-                      ? "bg-[#d8f8c8] text-zinc-950 hover:bg-[#c8efb8]"
-                      : "bg-white text-zinc-700 hover:bg-zinc-50",
-                  )}
-                >
-                  <span className="text-xs font-semibold uppercase tracking-wide">Subscribed agents</span>
-                  <span className="mt-1 text-[11px] font-normal leading-4">
-                    Top-level channel activity can wake subscribed agents even without @mentions.
-                  </span>
-                </Button>
-              </div>
-              <div className="mt-2 text-xs text-zinc-500">
-                {!isAdmin
-                  ? "Channel settings are read-only for non-admin users."
-                  : updatingMode
-                  ? "Saving collaboration mode..."
-                  : channel.collaborationMode === "subscribed_agents"
-                    ? "This channel can passively wake subscribed agents on non-thread top-level messages."
-                    : "This channel only wakes agents when they are explicitly mentioned or already involved in a thread."}
-              </div>
-              {modeError ? (
-                <div className="mt-2 rounded-sm border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700">
-                  {modeError}
-                </div>
-              ) : null}
+            <div className="mt-3 rounded-sm border border-zinc-900/10 bg-white/60 px-3 py-2 text-xs text-zinc-600">
+              Agents become active in this channel when you <span className="font-medium">@mention</span> them.
+              After that, later user messages in the main channel continue to reach recent participants until they age out.
             </div>
             <div className="mt-3">
               <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Members</div>
@@ -908,73 +815,6 @@ function SettingsTab({
                 </div>
               ) : null}
             </div>
-            <div className="mt-4 border-t border-zinc-900/10 pt-3">
-              <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Subscribed agents</div>
-              {channel.subscribedAgents && channel.subscribedAgents.length > 0 ? (
-                <div className="mt-2 flex flex-wrap gap-1.5">
-                  {channel.subscribedAgents.map((agent) => (
-                    <span
-                      key={agent.agentId}
-                      className="rounded-full border border-zinc-300 bg-white px-2 py-0.5 text-[11px] text-zinc-700"
-                    >
-                      @{agent.name}
-                    </span>
-                  ))}
-                </div>
-              ) : (
-                <div className="mt-2 text-xs text-zinc-500">No subscribed agents.</div>
-              )}
-            </div>
-            {channel.collaborationMode === "subscribed_agents" ? (
-              <div className="mt-4 border-t border-zinc-900/10 pt-3">
-                <div className="text-[10px] font-semibold uppercase tracking-wide text-zinc-500">Manage subscriptions</div>
-                <div className="mt-2 space-y-2">
-                  {members.length > 0 ? (
-                    members.map((agent) => {
-                      const subscribed = subscribedAgentIds.has(agent.agentId);
-                      const pending = submittingAgentId === agent.agentId;
-                      return (
-                        <div
-                          key={agent.agentId}
-                          className="flex items-center justify-between gap-3 rounded-sm border border-zinc-900/10 bg-white/70 px-3 py-2"
-                        >
-                          <div className="min-w-0">
-                            <div className="text-sm font-medium text-zinc-900">@{agent.name}</div>
-                            <div className="text-[11px] text-zinc-500">
-                              {subscribed ? "Subscribed to passive channel wakeups" : "Not subscribed"}
-                            </div>
-                          </div>
-                          <Button
-                            size="sm"
-                            disabled={pending || !isAdmin}
-                            onClick={() => void handleSubscriptionToggle(agent.agentId, !subscribed)}
-                            className={cn(
-                              "h-8 rounded-sm border-2 border-zinc-900 text-xs shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
-                              subscribed
-                                ? "bg-[#ffd8d8] text-zinc-950 hover:bg-[#ffc6c6]"
-                                : "bg-[#d8f8c8] text-zinc-950 hover:bg-[#c8efb8]",
-                            )}
-                          >
-                            {pending ? "Saving..." : subscribed ? "Unsubscribe" : "Subscribe"}
-                          </Button>
-                        </div>
-                      );
-                    })
-                  ) : (
-                    <div className="text-xs text-zinc-500">No channel members available.</div>
-                  )}
-                </div>
-                {subscriptionError ? (
-                  <div className="mt-2 rounded-sm border border-red-300 bg-red-50 px-2 py-1 text-xs text-red-700">
-                    {subscriptionError}
-                  </div>
-                ) : null}
-              </div>
-            ) : (
-              <div className="mt-4 rounded-sm border border-zinc-900/10 bg-white/60 px-3 py-2 text-xs text-zinc-500">
-                Switch this channel to <span className="font-medium">subscribed agents</span> mode to manage passive wakeups here.
-              </div>
-            )}
           </section>
 
           <section className="rounded-md border-2 border-zinc-900 bg-[#fff0d0] px-4 py-4 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)]">

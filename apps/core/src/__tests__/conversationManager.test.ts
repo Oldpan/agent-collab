@@ -147,29 +147,26 @@ describe('ConversationManager', () => {
   });
 
   describe('channels', () => {
-    it('createChannel 应保存 collaborationMode，并默认 mention_only', () => {
-      const defaultChannel = manager.createChannel({ name: 'ops-default' });
-      const subscribedChannel = manager.createChannel({
-        name: 'ops-subscribed',
-        collaborationMode: 'subscribed_agents',
-      });
+    it('createChannel 应返回不带协作模式和订阅信息的 channel', () => {
+      const channel = manager.createChannel({ name: 'ops-default' });
 
-      expect(defaultChannel.collaborationMode).toBe('mention_only');
-      expect(subscribedChannel.collaborationMode).toBe('subscribed_agents');
-      expect(manager.getChannel(subscribedChannel.channelId)?.collaborationMode).toBe('subscribed_agents');
+      expect(channel).not.toHaveProperty('collaborationMode');
+      expect(channel).not.toHaveProperty('subscribedAgents');
+      expect(manager.getChannel(channel.channelId)).not.toHaveProperty('collaborationMode');
+      expect(manager.getChannel(channel.channelId)).not.toHaveProperty('subscribedAgents');
     });
 
-    it('updateChannel 应支持更新 collaborationMode', () => {
+    it('updateChannel 应只更新 description', () => {
       const channel = manager.createChannel({ name: 'ops-update' });
       const updated = manager.updateChannel(channel.channelId, {
-        collaborationMode: 'subscribed_agents',
+        description: 'updated description',
       });
 
-      expect(updated?.collaborationMode).toBe('subscribed_agents');
-      expect(manager.getChannel(channel.channelId)?.collaborationMode).toBe('subscribed_agents');
+      expect(updated?.description).toBe('updated description');
+      expect(manager.getChannel(channel.channelId)?.description).toBe('updated description');
     });
 
-    it('joinChannel/leaveChannel 应同步维护 subscribedAgents', () => {
+    it('joinChannel/leaveChannel 不应暴露 subscribedAgents', () => {
       const channel = manager.createChannel({ name: 'ops-subscribers' });
       const agent = manager.createAgent({
         name: 'SubBob',
@@ -179,12 +176,10 @@ describe('ConversationManager', () => {
       });
 
       manager.joinChannel(agent.agentId, channel.channelId);
-      expect(manager.getChannel(channel.channelId)?.subscribedAgents).toEqual([
-        { agentId: agent.agentId, name: 'SubBob' },
-      ]);
+      expect(manager.getChannel(channel.channelId)).not.toHaveProperty('subscribedAgents');
 
       manager.leaveChannel(agent.agentId, channel.channelId);
-      expect(manager.getChannel(channel.channelId)?.subscribedAgents).toEqual([]);
+      expect(manager.getChannel(channel.channelId)).not.toHaveProperty('subscribedAgents');
     });
 
     it('leaveChannel 应清理该 agent 在此 channel 下残留的 target participants', () => {
