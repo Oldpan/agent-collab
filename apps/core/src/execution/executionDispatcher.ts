@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 
 import type { AgentInfo, ConversationStatus } from '@agent-collab/protocol';
 import { getRuntimeDriver, type RuntimeDispatchMode } from '@agent-collab/protocol';
-import { buildAgentContextText, buildAgentSessionSystemPromptText } from '@agent-collab/memory';
+import { buildAgentSessionSystemPromptText } from '@agent-collab/memory';
 import { createRun, finishRun, log } from '@agent-collab/runtime-acp';
 import type { Db } from '@agent-collab/runtime-acp';
 import type { AppConfig } from '../config.js';
@@ -105,12 +105,6 @@ export class ExecutionDispatcher {
           agentName: agent.name,
           agentBio: agent.description || undefined,
           agentDescription: agent.systemPrompt || undefined,
-          workspacePath: row.workspacePath ?? this.config.workspaceRoot,
-        });
-        contextText = await buildAgentContextText({
-          agentName: agent.name,
-          agentDescription: agent.systemPrompt || undefined,
-          agentType: agent.agentType,
           workspacePath: row.workspacePath ?? this.config.workspaceRoot,
         });
         let replayOverlapMessages = options?.replayOverlapRecentMessages;

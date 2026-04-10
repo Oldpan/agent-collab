@@ -36,8 +36,21 @@ describe('workspaceFs', () => {
     expect(result.content).toContain('# Memory');
   });
 
+  it('应生成 slock 风格的 MEMORY.md scaffold', () => {
+    const root = createWorkspace();
+
+    const result = readWorkspaceFile(root, 'MEMORY.md');
+
+    expect(result.content).toContain('## Role');
+    expect(result.content).toContain('## Key Knowledge');
+    expect(result.content).toContain('## Active Context');
+    expect(result.content).toContain('notes/channels/');
+    expect(result.content).toContain('notes/domain.md');
+  });
+
   it('应支持读取常见图片预览并返回 data url', () => {
     const root = createWorkspace();
+    fs.mkdirSync(path.join(root, 'notes'), { recursive: true });
     const pngBytes = Buffer.from('89504E470D0A1A0A0000000D49484452', 'hex');
     fs.writeFileSync(path.join(root, 'notes', 'plot.png'), pngBytes);
 
@@ -50,6 +63,7 @@ describe('workspaceFs', () => {
 
   it('应将 svg 当作图片预览返回', () => {
     const root = createWorkspace();
+    fs.mkdirSync(path.join(root, 'notes'), { recursive: true });
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"></svg>';
     fs.writeFileSync(path.join(root, 'notes', 'diagram.svg'), svg, 'utf8');
 

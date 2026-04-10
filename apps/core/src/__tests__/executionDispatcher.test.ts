@@ -142,7 +142,7 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.disabledToolKinds).toEqual(['execute', 'delete']);
   });
 
-  it('dispatchToNode 应分开发送 true system prompt 和本地 memory context', async () => {
+  it('dispatchToNode 应发送 slock 风格的 system prompt，且不再预注入本地 memory context', async () => {
     const agent = manager.createAgent({
       name: 'Memory Agent',
       agentType: 'claude_acp',
@@ -163,9 +163,13 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.systemPromptText).toContain('mcp__chat__send_message');
     expect(dispatch.systemPromptText).toContain('mcp__chat__check_messages');
     expect(dispatch.systemPromptText).toContain('Compaction safety');
+    expect(dispatch.systemPromptText).toContain('Read MEMORY.md (in your cwd)');
+    expect(dispatch.systemPromptText).toContain('### What to memorize');
+    expect(dispatch.systemPromptText).toContain('### How to organize memory');
+    expect(dispatch.systemPromptText).toContain('**Domain knowledge**');
     expect(dispatch.systemPromptText).toContain('This is your only user-visible output channel');
     expect(dispatch.systemPromptText).toContain('If the run needs a user-visible reply, send it with `mcp__chat__send_message`');
-    expect(dispatch.systemPromptText).toContain('Follow-up messages in the same conversation will be delivered in later runs');
+    expect(dispatch.systemPromptText).toContain('Follow-up messages in the same conversation arrive in later runs');
     expect(dispatch.systemPromptText).toContain('prefer `mcp__chat__send_message(content="...")` with no target');
     expect(dispatch.systemPromptText).toContain('Do **not** convert a main-channel message');
     expect(dispatch.systemPromptText).toContain('Do **not** quote or repeat that metadata block back to the user');
@@ -173,19 +177,14 @@ describe('ExecutionDispatcher', () => {
     expect(dispatch.systemPromptText).toContain('If you need another agent\'s help in a channel or thread, explicitly `@mention` them');
     expect(dispatch.systemPromptText).toContain('If you are not the owner of the current task thread, default to coordination, review, or support');
     expect(dispatch.systemPromptText).toContain('Only create or claim a task in a primary DM if the user explicitly wants task tracking');
-    expect(dispatch.systemPromptText).toContain('If fulfilling a message requires action beyond replying');
+    expect(dispatch.systemPromptText).toContain('If a request clearly requires trackable work beyond replying');
     expect(dispatch.systemPromptText).toContain('claim_tasks') ;
     expect(dispatch.systemPromptText).toContain('message_ids=["msgid"], description="goal and done criteria"');
     expect(dispatch.systemPromptText).toContain('These rules apply in both channels and DMs');
     expect(dispatch.systemPromptText).toContain('Maintain memory carefully');
     expect(dispatch.systemPromptText).not.toContain('put to sleep when idle');
     expect(dispatch.systemPromptText).not.toContain('stdin prompt');
-    expect(dispatch.contextText).toContain('[Local Memory Guide]');
-    expect(dispatch.contextText).toContain('Local memory is stored as ordinary workspace files');
-    expect(dispatch.contextText).toContain('Use normal file read/edit tools');
-    expect(dispatch.contextText).toContain('MEMORY.md');
-    expect(dispatch.contextText).toContain('notes/*.md');
-    expect(dispatch.contextText).not.toContain('[System Prompt]');
+    expect(dispatch.contextText).toBeUndefined();
     expect(dispatch.prompt).toContain('[Reply contract]');
     expect(dispatch.prompt).toContain('Use mcp__chat__send_message(..., kind="progress") only while work is still ongoing.');
     expect(dispatch.prompt).toContain('Use kind="final" only when your current answer is complete. The runtime decides when the run ends.');
@@ -214,7 +213,7 @@ describe('ExecutionDispatcher', () => {
     expect(debugRow).toBeDefined();
     expect(debugRow?.dispatchMode).toBe('cold_start');
     expect(debugRow?.systemPromptText).toContain('"Memory Agent"');
-    expect(debugRow?.contextText).toContain('[Local Memory Guide]');
+    expect(debugRow?.contextText).toBeNull();
     expect(debugRow?.promptText).toContain('remember this');
     expect(debugRow?.dispatchedPromptText).toContain('[Reply contract]');
     expect(debugRow?.isExact).toBe(0);

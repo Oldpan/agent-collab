@@ -8,14 +8,8 @@ export function resolveMemoryBackend(agentType: string, workspacePath: string): 
 }
 
 function buildLocalMemoryGuide(workspacePath: string): string {
-  return [
-    'Local memory is stored as ordinary workspace files, not as MCP resources.',
-    `Workspace root: \`${workspacePath}\``,
-    'Use normal file read/edit tools against these paths when you need to inspect or update memory:',
-    '- `MEMORY.md`',
-    '- `notes/*.md`',
-    'If a memory read/write attempt fails, do not loop on the same failing tool call. Switch to normal workspace file tools or explain the concrete blocker.',
-  ].join('\n');
+  void workspacePath;
+  return '';
 }
 
 export function buildAgentSessionSystemPromptText(params: {
@@ -34,11 +28,8 @@ export function buildAgentSessionSystemPromptText(params: {
 }
 
 /**
- * Builds the non-system context text to inject at the start of a fresh ACP session.
- * Combines: local memory guide + local native memory (from filesystem).
- *
- * agentDescription is intentionally excluded here and belongs in the true system prompt.
- * toolPrefix controls the MCP tool name prefix (default: 'mcp__chat__').
+ * Local memory is no longer pre-injected into fresh ACP sessions.
+ * Agents read MEMORY.md and any needed notes directly from the workspace.
  */
 export async function buildAgentContextText(params: {
   agentName: string;
@@ -47,14 +38,6 @@ export async function buildAgentContextText(params: {
   workspacePath: string;
   toolPrefix?: string;
 }): Promise<string> {
-  const { agentType, workspacePath } = params;
-
-  const backend = resolveMemoryBackend(agentType, workspacePath);
-  const nativeMemory = await backend.load();
-
-  const parts: string[] = [];
-  parts.push(`[Local Memory Guide]\n${buildLocalMemoryGuide(workspacePath)}`);
-  if (nativeMemory.trim()) parts.push(`[Local Memory]\n${nativeMemory.trim()}`);
-
-  return parts.join('\n\n');
+  void params;
+  return '';
 }
