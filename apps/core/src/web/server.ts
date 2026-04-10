@@ -12,6 +12,7 @@ import fastifyMultipart from '@fastify/multipart';
 import type { Db } from '@agent-collab/runtime-acp';
 import { log, finishRun } from '@agent-collab/runtime-acp';
 import {
+  buildLegacyThreadShortId,
   buildThreadShortId,
   type CreateConversationRequest,
   type CreateChannelRequest,
@@ -45,6 +46,7 @@ import { resolveDirectThreadRootMessage } from './directThreadResolver.js';
 import { bumpAgentMessageCheckpoint } from './messageCheckpoints.js';
 import {
   deleteTargetParticipantsForAgentInChannel,
+  listTargetParticipants,
   listRecentTargetParticipants,
   setTargetOwner,
   TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
@@ -1511,7 +1513,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
           : undefined;
 
         return {
-          messages: rows.map(mapPublicChannelMessage),
+          messages: hydratePublicChannelReplyCounts(dmChannelId, rows).map(mapPublicChannelMessage),
           ...(contextSnapshot
             ? {
                 contextSnapshot: {
@@ -1571,7 +1573,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       ).all(dmChannelId, directTarget, brokenDmTaskTarget, directThreadPrefix, limit) as PublicChannelRow[];
 
       return {
-        messages: rows.reverse().map(mapPublicChannelMessage),
+        messages: hydratePublicChannelReplyCounts(dmChannelId, rows).reverse().map(mapPublicChannelMessage),
       };
     },
   );
@@ -2074,6 +2076,39 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     return conversationManager.listChannels().filter((c) => allowed.includes(c.channelId));
   });
 
+  app.get<{ Params: { id: string } }>('/api/channels/:id/member-statuses', async (req, reply) => {
+    const user = requireChannelAccess(req, reply, req.params.id);
+    if (!user) return { error: 'Access denied' };
+    const channel = conversationManager.getChannel(req.params.id);
+    if (!channel) {
+      reply.code(404);
+      return { error: 'Channel not found' };
+    }
+
+    const members = channel.members ?? [];
+    const participants = listTargetParticipants(db, {
+      channelId: req.params.id,
+      threadRootId: null,
+    });
+    const recentParticipants = listRecentTargetParticipants(db, {
+      channelId: req.params.id,
+      threadRootId: null,
+      activeSince: Date.now() - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS,
+    });
+    const participantByAgentId = new Map(participants.map((participant) => [participant.agentId, participant]));
+    const recentAgentIds = new Set(recentParticipants.map((participant) => participant.agentId));
+
+    return members.map((member) => {
+      const participant = participantByAgentId.get(member.agentId);
+      return {
+        agentId: member.agentId,
+        isOwner: participant?.role === 'owner',
+        isRecentParticipant: recentAgentIds.has(member.agentId),
+        lastActiveAt: participant?.lastActiveAt ?? null,
+      };
+    });
+  });
+
   function buildPublicFtsMatchQuery(rawQuery: string): string | null {
     const tokens = rawQuery
       .trim()
@@ -2134,6 +2169,32 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     ...(row.messageSource ? { messageSource: row.messageSource } : {}),
     ...(row.attachmentIds ? { attachmentIds: JSON.parse(row.attachmentIds) as string[] } : {}),
   });
+
+  const hydratePublicChannelReplyCounts = (
+    channelId: string,
+    rows: PublicChannelRow[],
+  ): PublicChannelRow[] => {
+    if (rows.length === 0) return rows;
+    const threadRootIds = Array.from(new Set(
+      rows.flatMap((row) => [buildLegacyThreadShortId(row.id), buildThreadShortId(row.id)]),
+    ));
+    if (threadRootIds.length === 0) return rows;
+    const placeholders = threadRootIds.map(() => '?').join(', ');
+    const counts = db.prepare(
+      `SELECT thread_root_id as threadRootId, COUNT(*) as count
+       FROM channel_messages
+       WHERE channel_id = ?
+         AND thread_root_id IN (${placeholders})
+       GROUP BY thread_root_id`,
+    ).all(channelId, ...threadRootIds) as Array<{ threadRootId: string; count: number }>;
+    const countByThreadRootId = new Map(counts.map((row) => [row.threadRootId, row.count]));
+    return rows.map((row) => ({
+      ...row,
+      replyCount:
+        (countByThreadRootId.get(buildLegacyThreadShortId(row.id)) ?? 0)
+        + (countByThreadRootId.get(buildThreadShortId(row.id)) ?? 0),
+    }));
+  };
 
   app.get<{ Querystring: { q?: string; limit?: string } }>(
     '/api/search/messages',
@@ -2494,7 +2555,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         ).get(req.params.id, lastSeq);
 
         return {
-          messages: rows.map(mapPublicChannelMessage),
+          messages: hydratePublicChannelReplyCounts(req.params.id, rows).map(mapPublicChannelMessage),
           hasOlder,
           hasNewer,
         };
@@ -2535,7 +2596,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
           ).all(req.params.id, limit)
       ) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; seq: number; replyCount: number; messageSource: string | null; attachmentIds: string | null; taskNumber: number | null; taskStatus: string | null; taskAssigneeName: string | null }>;
       return {
-        messages: rows.reverse().map(mapPublicChannelMessage),
+        messages: hydratePublicChannelReplyCounts(req.params.id, rows).reverse().map(mapPublicChannelMessage),
       };
     },
   );

@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 57;
+const LATEST_VERSION = 58;
 
 function buildAgentTaskRefCandidate(taskId: string, length: number): string {
   const normalized = taskId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();

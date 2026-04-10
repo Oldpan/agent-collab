@@ -281,7 +281,7 @@ function ThreadComposer({
     if (mentionQuery !== null && mentionCandidates.length > 0) {
       if (e.key === "ArrowDown") { e.preventDefault(); setMentionIndex(i => Math.min(i + 1, mentionCandidates.length - 1)); return; }
       if (e.key === "ArrowUp") { e.preventDefault(); setMentionIndex(i => Math.max(i - 1, 0)); return; }
-      if (e.key === "Enter" && !e.shiftKey) {
+      if ((e.key === "Enter" && !e.shiftKey) || (e.key === "Tab" && !e.shiftKey)) {
         e.preventDefault();
         const c = mentionCandidates[mentionIndex] ?? mentionCandidates[0];
         if (c) selectMention(c.name);

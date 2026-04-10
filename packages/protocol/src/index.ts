@@ -842,6 +842,13 @@ export type ChannelInfo = {
   updatedAt: number;
 };
 
+export type ChannelMemberStatus = {
+  agentId: string;
+  isOwner: boolean;
+  isRecentParticipant: boolean;
+  lastActiveAt: number | null;
+};
+
 export type CreateChannelRequest = {
   name: string;
   workspacePath?: string;

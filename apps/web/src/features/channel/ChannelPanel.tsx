@@ -2,9 +2,9 @@ import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon, Settings2Icon, MessageSquareOffIcon, ListTodoIcon, PaperclipIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildThreadShortId, type ChannelInfo, type AgentInfo, type ConversationInfo } from "@agent-collab/protocol";
+import { buildThreadShortId, type ChannelInfo, type AgentInfo, type ConversationInfo, type ChannelMemberStatus } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
-import { addAgentToChannel, clearChannelChat, removeAgentFromChannel, claimMessageAsTask, uploadAttachment } from "@/lib/api";
+import { addAgentToChannel, clearChannelChat, removeAgentFromChannel, claimMessageAsTask, getChannelMemberStatuses, uploadAttachment } from "@/lib/api";
 import { useChannelStream, type ChannelNotice } from "@/hooks/useChannelStream";
 import { ThreadPanel } from "./ThreadPanel";
 import { BranchInspectorPanel } from "./BranchInspectorPanel";
@@ -451,7 +451,7 @@ function ChannelComposer({
           setMentionIndex((i) => Math.max(i - 1, 0));
           return;
         }
-        if (e.key === "Enter" && !e.shiftKey) {
+        if ((e.key === "Enter" && !e.shiftKey) || (e.key === "Tab" && !e.shiftKey)) {
           e.preventDefault();
           const candidate = mentionCandidates[mentionIndex] ?? mentionCandidates[0];
           if (candidate) selectMention(candidate.name);
@@ -629,46 +629,89 @@ function ChannelStatusBar({
 function MembersTab({
   channelId,
   members,
+  refreshKey,
   onOpenSession,
 }: {
   channelId: string;
   members: AgentInfo[];
+  refreshKey: string;
   onOpenSession?: (agentId: string, channelId: string, threadRootId?: string | null) => Promise<void> | void;
 }) {
+  const [statuses, setStatuses] = useState<Map<string, ChannelMemberStatus>>(new Map());
+
+  useEffect(() => {
+    let cancelled = false;
+    getChannelMemberStatuses(channelId)
+      .then((items) => {
+        if (!cancelled) {
+          setStatuses(new Map(items.map((item) => [item.agentId, item])));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setStatuses(new Map());
+        }
+      });
+    return () => { cancelled = true; };
+  }, [channelId, refreshKey]);
+
   return (
     <div className="flex-1 overflow-y-auto p-4">
+      <div className="mb-3 rounded-md border border-zinc-900/10 bg-white/70 px-3 py-2 text-[11px] leading-5 text-zinc-600">
+        <span className="font-semibold text-zinc-800">Status guide.</span>{" "}
+        <span><span className="font-medium text-blue-700">Owner</span> means the agent currently owns the main channel target.</span>{" "}
+        <span><span className="font-medium text-emerald-700">Recent</span> means the agent was active in the main channel recently and may keep receiving follow-up channel messages until it ages out.</span>{" "}
+        <span>These badges describe the main channel only, not individual threads.</span>
+      </div>
       {members.length === 0 ? (
         <p className="rounded-md border-2 border-dashed border-zinc-900/40 bg-[#fff8d8] px-3 py-4 text-center text-xs text-zinc-500">
           No agents assigned to this channel yet
         </p>
       ) : (
         <div className="flex flex-col gap-2">
-          {members.map((agent) => (
-            <div
-              key={agent.agentId}
-              className="flex items-center gap-2.5 rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]"
-            >
-              <div className="flex size-8 shrink-0 items-center justify-center rounded-full border-2 border-zinc-900 bg-[#d8f8c8] text-[11px] font-bold text-green-800 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]">
-                {agent.name.slice(0, 2).toUpperCase()}
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-xs font-semibold text-zinc-900">{agent.name}</div>
-                <div className="text-[10px] text-zinc-500">
-                  {agent.agentType === "claude_acp" ? "Claude" : "Codex"}
+          {members.map((agent) => {
+            const status = statuses.get(agent.agentId);
+            return (
+              <div
+                key={agent.agentId}
+                className="flex items-center gap-2.5 rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-3 py-2 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]"
+              >
+                <div className="flex size-8 shrink-0 items-center justify-center rounded-full border-2 border-zinc-900 bg-[#d8f8c8] text-[11px] font-bold text-green-800 shadow-[2px_2px_0_0_rgba(0,0,0,0.1)]">
+                  {agent.name.slice(0, 2).toUpperCase()}
                 </div>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-xs font-semibold text-zinc-900">{agent.name}</div>
+                  <div className="text-[10px] text-zinc-500">
+                    {agent.agentType === "claude_acp" ? "Claude" : "Codex"}
+                  </div>
+                  {(status?.isOwner || status?.isRecentParticipant) && (
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {status?.isOwner && (
+                        <span className="rounded-full border border-blue-300 bg-blue-50 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
+                          Owner
+                        </span>
+                      )}
+                      {status?.isRecentParticipant && (
+                        <span className="rounded-full border border-emerald-300 bg-emerald-50 px-1.5 py-0.5 text-[10px] font-medium text-emerald-700">
+                          Recent
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
+                {onOpenSession && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 rounded-sm border-2 border-zinc-900 bg-[#fffdf4] px-2 text-[11px] text-zinc-900 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#fff1a9]"
+                    onClick={() => void onOpenSession(agent.agentId, channelId, null)}
+                  >
+                    Inspect branch
+                  </Button>
+                )}
               </div>
-              {onOpenSession && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="h-7 rounded-sm border-2 border-zinc-900 bg-[#fffdf4] px-2 text-[11px] text-zinc-900 shadow-[2px_2px_0_0_rgba(0,0,0,0.08)] hover:bg-[#fff1a9]"
-                  onClick={() => void onOpenSession(agent.agentId, channelId, null)}
-                >
-                  Inspect branch
-                </Button>
-              )}
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>
@@ -899,6 +942,7 @@ export function ChannelPanel({
       : agents.filter((agent) => agent.channelIds?.includes(channel.channelId) ?? false),
     [agents, channel.channelId, channelMemberIds],
   );
+  const latestMessageRefreshKey = messages[messages.length - 1]?.id ?? "empty";
   const [openThread, setOpenThread] = useState<ChannelMessage | null>(null);
   const [branchInspectorConversation, setBranchInspectorConversation] = useState<ConversationInfo | null>(null);
   // Local task overrides: messageId → partial fields added after claim-message
@@ -1174,6 +1218,7 @@ export function ChannelPanel({
         <MembersTab
           channelId={channel.channelId}
           members={channelMembers}
+          refreshKey={latestMessageRefreshKey}
           onOpenSession={handleOpenBranchInspector}
         />
       ) : activeTab === "settings" ? (

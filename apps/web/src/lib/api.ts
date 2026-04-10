@@ -6,6 +6,7 @@ import type {
   CreateAgentRequest,
   UpdateAgentRequest,
   ChannelInfo,
+  ChannelMemberStatus,
   TaskInfo,
   MachineInfo,
   CreateMachineRequest,
@@ -205,6 +206,14 @@ export async function listChannels(): Promise<ChannelInfo[]> {
     headers: withAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Failed to list channels: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getChannelMemberStatuses(channelId: string): Promise<ChannelMemberStatus[]> {
+  const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/member-statuses`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) throw new Error(`Failed to get channel member statuses: ${res.statusText}`);
   return res.json();
 }
 
