@@ -1,4 +1,5 @@
 import { Button } from "@/components/ui/button";
+import { clearDraft, readDraft, writeDraft } from "@/lib/drafts";
 import { cn } from "@/lib/utils";
 import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon, Settings2Icon, MessageSquareOffIcon, ListTodoIcon, PaperclipIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -348,11 +349,13 @@ function MessageRow({
 function ChannelComposer({
   onSend,
   channelMembers,
+  draftKey,
 }: {
   onSend: (text: string, attachmentIds?: string[]) => void;
   channelMembers: AgentInfo[];
+  draftKey: string;
 }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => readDraft(draftKey));
   const [sending, setSending] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<Array<{ id: string; name: string }>>([]);
   const [uploading, setUploading] = useState(false);
@@ -372,6 +375,17 @@ function ChannelComposer({
   useEffect(() => {
     setMentionIndex(0);
   }, [mentionCandidates.length]);
+
+  useEffect(() => {
+    const nextText = readDraft(draftKey);
+    setText(nextText);
+    const ta = textareaRef.current;
+    if (!ta) return;
+    requestAnimationFrame(() => {
+      ta.style.height = "auto";
+      ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
+    });
+  }, [draftKey]);
 
   const selectMention = useCallback(
     (agentName: string) => {
@@ -399,6 +413,7 @@ function ChannelComposer({
   const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setText(val);
+    writeDraft(draftKey, val);
     const cursor = e.target.selectionStart ?? val.length;
     const atMatch = /@([a-zA-Z0-9_-]*)$/.exec(val.slice(0, cursor));
     setMentionQuery(atMatch ? (atMatch[1] ?? "") : null);
@@ -407,7 +422,7 @@ function ChannelComposer({
       ta.style.height = "auto";
       ta.style.height = `${Math.min(ta.scrollHeight, 200)}px`;
     }
-  }, []);
+  }, [draftKey]);
 
   const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -434,6 +449,7 @@ function ChannelComposer({
     setSending(true);
     const ids = pendingFiles.map((f) => f.id);
     setText("");
+    clearDraft(draftKey);
     setPendingFiles([]);
     setMentionQuery(null);
     const ta = textareaRef.current;
@@ -443,7 +459,7 @@ function ChannelComposer({
     } finally {
       setSending(false);
     }
-  }, [text, pendingFiles, onSend, sending]);
+  }, [draftKey, text, pendingFiles, onSend, sending]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -1292,7 +1308,11 @@ export function ChannelPanel({
                 </>
               )}
             </div>
-            <ChannelComposer onSend={sendMessage} channelMembers={channelMembers} />
+            <ChannelComposer
+              onSend={sendMessage}
+              channelMembers={channelMembers}
+              draftKey={`channel:${channel.channelId}`}
+            />
           </div>
 
           {branchInspectorConversation ? (

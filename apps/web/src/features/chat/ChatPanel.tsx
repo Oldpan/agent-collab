@@ -592,6 +592,7 @@ export function ChatPanel({
                   ready={connectionReady}
                   showCancel={shouldShowCancel}
                   disableInput={shouldDisableInput}
+                  draftKey={`dm:${conversation.id}`}
                   onSend={sendPrompt}
                   onCancel={cancel}
                 />
@@ -689,6 +690,7 @@ export function ChatPanel({
                 ready={connectionReady}
                 showCancel={shouldShowCancel}
                 disableInput={shouldDisableInput}
+                draftKey={`dm:${conversation.id}`}
                 onSend={sendPrompt}
                 onCancel={cancel}
               />

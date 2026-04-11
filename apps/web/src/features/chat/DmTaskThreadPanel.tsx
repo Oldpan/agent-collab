@@ -310,6 +310,7 @@ export function DmTaskThreadPanel({
         ready={connectionReady}
         showCancel={status === "submitted" || status === "streaming" || status === "recovering" || status === "awaiting_approval"}
         disableInput={false}
+        draftKey={`dm-thread:${conversation.id}`}
         onSend={sendPrompt}
         onCancel={cancel}
       />

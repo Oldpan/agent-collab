@@ -1,7 +1,8 @@
 import { Button } from "@/components/ui/button";
+import { clearDraft, readDraft, writeDraft } from "@/lib/drafts";
 import { cn } from "@/lib/utils";
 import { SendIcon, SquareIcon, PaperclipIcon, XIcon } from "lucide-react";
-import { useCallback, useRef, useState, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { ChatStatus } from "@/hooks/types";
 import { uploadAttachment } from "@/lib/api";
 
@@ -10,6 +11,7 @@ export type PromptComposerProps = {
   ready?: boolean;
   showCancel?: boolean;
   disableInput?: boolean;
+  draftKey?: string;
   onSend: (text: string, attachmentIds?: string[]) => boolean;
   onCancel: () => void;
 };
@@ -20,14 +22,27 @@ export function PromptComposer({
   ready = true,
   showCancel,
   disableInput,
+  draftKey,
   onSend,
   onCancel,
 }: PromptComposerProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const shiftPressedRef = useRef(false);
+  const [text, setText] = useState(() => readDraft(draftKey));
   const [pendingFiles, setPendingFiles] = useState<Array<{ id: string; name: string }>>([]);
   const [uploading, setUploading] = useState(false);
+
+  useEffect(() => {
+    const nextText = readDraft(draftKey);
+    setText(nextText);
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+    requestAnimationFrame(() => {
+      textarea.style.height = "auto";
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+    });
+  }, [draftKey]);
 
   const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -50,16 +65,18 @@ export function PromptComposer({
 
   const handleSubmit = useCallback(() => {
     const textarea = textareaRef.current;
-    if (!textarea) return;
-    const text = textarea.value.trim();
-    if (!text && pendingFiles.length === 0) return;
+    const trimmed = text.trim();
+    if (!trimmed && pendingFiles.length === 0) return;
     const ids = pendingFiles.map((f) => f.id);
-    const accepted = onSend(text, ids.length ? ids : undefined);
+    const accepted = onSend(trimmed, ids.length ? ids : undefined);
     if (!accepted) return;
-    textarea.value = "";
-    textarea.style.height = "auto";
+    setText("");
+    clearDraft(draftKey);
+    if (textarea) {
+      textarea.style.height = "auto";
+    }
     setPendingFiles([]);
-  }, [onSend, pendingFiles]);
+  }, [draftKey, onSend, pendingFiles, text]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -91,6 +108,14 @@ export function PromptComposer({
     textarea.style.height = "auto";
     textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
   }, []);
+
+  const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const nextText = e.target.value;
+    setText(nextText);
+    writeDraft(draftKey, nextText);
+    e.target.style.height = "auto";
+    e.target.style.height = `${Math.min(e.target.scrollHeight, 200)}px`;
+  }, [draftKey]);
 
   const isBusy =
     status === "queued" ||
@@ -149,6 +174,8 @@ export function PromptComposer({
         </button>
         <textarea
           ref={textareaRef}
+          value={text}
+          onChange={handleChange}
           className={cn(
             "min-h-[36px] max-h-[200px] flex-1 resize-none rounded-sm border border-transparent bg-transparent px-3 py-1.5 text-sm text-zinc-900",
             "placeholder:text-zinc-400",

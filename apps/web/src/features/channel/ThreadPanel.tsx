@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { useAuth } from "@/hooks/useAuth";
+import { clearDraft, readDraft, writeDraft } from "@/lib/drafts";
 import { cn } from "@/lib/utils";
 import { XIcon, SendIcon, MessageSquareIcon, ChevronDownIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -227,11 +228,13 @@ function ThreadSummaryCard({
 function ThreadComposer({
   onSend,
   channelMembers,
+  draftKey,
 }: {
   onSend: (text: string) => void;
   channelMembers: AgentInfo[];
+  draftKey: string;
 }) {
-  const [text, setText] = useState("");
+  const [text, setText] = useState(() => readDraft(draftKey));
   const [sending, setSending] = useState(false);
   const [mentionQuery, setMentionQuery] = useState<string | null>(null);
   const [mentionIndex, setMentionIndex] = useState(0);
@@ -246,6 +249,17 @@ function ThreadComposer({
   }, [mentionQuery, channelMembers]);
 
   useEffect(() => { setMentionIndex(0); }, [mentionCandidates.length]);
+
+  useEffect(() => {
+    const nextText = readDraft(draftKey);
+    setText(nextText);
+    const ta = textareaRef.current;
+    if (!ta) return;
+    requestAnimationFrame(() => {
+      ta.style.height = "auto";
+      ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
+    });
+  }, [draftKey]);
 
   const selectMention = useCallback((agentName: string) => {
     const ta = textareaRef.current;
@@ -267,23 +281,25 @@ function ThreadComposer({
   const handleChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const val = e.target.value;
     setText(val);
+    writeDraft(draftKey, val);
     const cursor = e.target.selectionStart ?? val.length;
     const atMatch = /@([a-zA-Z0-9_-]*)$/.exec(val.slice(0, cursor));
     setMentionQuery(atMatch ? (atMatch[1] ?? "") : null);
     const ta = textareaRef.current;
     if (ta) { ta.style.height = "auto"; ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`; }
-  }, []);
+  }, [draftKey]);
 
   const handleSubmit = useCallback(async () => {
     const trimmed = text.trim();
     if (!trimmed || sending) return;
     setSending(true);
     setText("");
+    clearDraft(draftKey);
     setMentionQuery(null);
     const ta = textareaRef.current;
     if (ta) ta.style.height = "auto";
     try { await onSend(trimmed); } finally { setSending(false); }
-  }, [text, onSend, sending]);
+  }, [draftKey, text, onSend, sending]);
 
   const handleKeyDown = useCallback((e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Shift") {
@@ -609,7 +625,11 @@ export function ThreadPanel({
         )}
       </div>
 
-      <ThreadComposer onSend={sendMessage} channelMembers={channelMembers} />
+      <ThreadComposer
+        onSend={sendMessage}
+        channelMembers={channelMembers}
+        draftKey={`thread:${channelId}:${threadRootId}`}
+      />
       <TaskEditorDialog
         isOpen={isEditingTask && Boolean(summaryState?.boundTask)}
         dialogTitle={summaryState?.boundTask ? `Edit Task #${summaryState.boundTask.taskNumber}` : "Edit task"}
