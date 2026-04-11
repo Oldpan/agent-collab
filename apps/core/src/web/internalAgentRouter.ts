@@ -3,7 +3,7 @@ import { writeFileSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { Db } from '@agent-collab/runtime-acp';
-import { buildThreadShortId, type ServerEvent } from '@agent-collab/protocol';
+import { buildThreadShortId, type ConversationStatus, type ServerEvent } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
 import type { AgentSkillsService } from '../services/agentSkillsService.js';
 import { AgentSkillsServiceError } from '../services/agentSkillsService.js';
@@ -288,6 +288,7 @@ export function registerInternalAgentRoutes(
   conversationManager: ConversationManager,
   broadcastToAgent: (agentId: string, event: ServerEvent, conversationId?: string) => void,
   broadcastToChannel: (channelId: string, event: ServerEvent) => void,
+  broadcastConversationStatus: (conversationId: string, status: ConversationStatus) => void,
   humanUserName: string,
   skillsService?: AgentSkillsService,
   internalAuthToken?: string,
@@ -686,7 +687,7 @@ export function registerInternalAgentRoutes(
         })
       : null;
     try {
-      await conversationManager.submitPrompt(
+      const result = await conversationManager.submitPrompt(
         threadConversationId,
         buildDmTaskHandoffPrompt({
           taskNumber: params.taskNumber,
@@ -710,6 +711,9 @@ export function registerInternalAgentRoutes(
             : undefined,
         },
       );
+      if (result.queued) {
+        broadcastConversationStatus(threadConversationId, 'queued');
+      }
       emitDmTaskLifecycleEvent({
         agentId: params.agentId,
         primaryTarget: params.currentPrimaryDmTarget,
@@ -1118,7 +1122,10 @@ export function registerInternalAgentRoutes(
             }) || undefined,
             replayOverlapRecentMessages: activationContext.recentMessages,
           },
-        ).then(() => {
+        ).then((result) => {
+          if (result.queued) {
+            broadcastConversationStatus(conv.id, 'queued');
+          }
           bumpAgentMessageCheckpoint(db, targetAgentId, channelId, seq, threadRootId);
         }).catch(() => {});
       }

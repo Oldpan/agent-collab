@@ -40,6 +40,15 @@ export async function listConversations(): Promise<ConversationInfo[]> {
   return res.json();
 }
 
+export async function listChannelConversations(channelId: string): Promise<ConversationInfo[]> {
+  const res = await fetch(
+    `${API_BASE}/channels/${encodeURIComponent(channelId)}/conversations`,
+    { headers: withAuthHeaders() },
+  );
+  if (!res.ok) throw new Error(`Failed to list channel conversations: ${res.statusText}`);
+  return res.json();
+}
+
 export async function createConversation(
   req: CreateConversationRequest,
 ): Promise<ConversationInfo> {

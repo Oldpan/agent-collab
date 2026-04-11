@@ -139,7 +139,7 @@ export async function createCollaborationHarness(): Promise<CollaborationHarness
     } as any,
   });
 
-  registerInternalAgentRoutes(app, db, manager, () => {}, () => {}, config.humanUserName, skillsService);
+  registerInternalAgentRoutes(app, db, manager, () => {}, () => {}, () => {}, config.humanUserName, skillsService);
 
   app.post<{ Params: { id: string }; Body: { content: string; senderName?: string; replyTo?: string } }>(
     '/api/channels/:id/messages',

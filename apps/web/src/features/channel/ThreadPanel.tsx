@@ -4,10 +4,12 @@ import { clearDraft, readDraft, writeDraft } from "@/lib/drafts";
 import { cn } from "@/lib/utils";
 import { XIcon, SendIcon, MessageSquareIcon, ChevronDownIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildThreadShortId, type AgentInfo } from "@agent-collab/protocol";
+import { buildThreadShortId, type AgentInfo, type ConversationStatus } from "@agent-collab/protocol";
+import { useConversationsStore } from "@/hooks/useConversations";
 import {
   type ChannelMessage,
   type ThreadCollaborationSummary,
+  listChannelConversations,
   updateChannelTaskDetails,
 } from "@/lib/api";
 import { useThreadStream } from "@/hooks/useThreadStream";
@@ -55,6 +57,7 @@ function ThreadMessage({
   threadRootId,
   currentUsername,
   userIdentity,
+  agentStatusMap,
   highlighted = false,
   onOpenAgentSession,
 }: {
@@ -64,12 +67,14 @@ function ThreadMessage({
   threadRootId: string;
   currentUsername: string | null;
   userIdentity: { name: string; avatarUrl: string | null };
+  agentStatusMap: Map<string, ConversationStatus>;
   highlighted?: boolean;
   onOpenAgentSession?: (agentId: string, channelId: string, threadRootId?: string | null) => Promise<void> | void;
 }) {
   const isUser = message.senderType === "user";
   const showFallbackBadge = message.messageSource === "delta_fallback" && !isUser;
   const showCurrentUserAvatar = isUser && currentUsername != null && message.senderName === currentUsername;
+  const agentConvStatus = agent ? (agentStatusMap.get(agent.agentId) ?? null) : null;
   return (
     <div
       data-message-id={message.id}
@@ -82,14 +87,27 @@ function ThreadMessage({
       {showCurrentUserAvatar ? (
         <ChatAvatar role="user" user={userIdentity} size={28} className="shrink-0" />
       ) : (
-        <div
-          className={cn(
-            "flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-zinc-900 text-[10px] font-bold shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
-            isUser ? "bg-[#d8efff] text-blue-800" : "bg-[#d8f8c8] text-green-800",
+        <div className="relative shrink-0 self-start">
+          <div
+            className={cn(
+              "flex size-7 items-center justify-center rounded-full border-2 border-zinc-900 text-[10px] font-bold shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+              isUser ? "bg-[#d8efff] text-blue-800" : "bg-[#d8f8c8] text-green-800",
+            )}
+            title={message.senderName}
+          >
+            {message.senderName.slice(0, 2).toUpperCase()}
+          </div>
+          {!isUser && agentConvStatus && (
+            <span className={cn(
+              "absolute -bottom-0.5 -right-0.5 size-2 rounded-full border-[1.5px] border-white",
+              agentConvStatus === "idle" && "bg-success",
+              agentConvStatus === "active" && "bg-orange-400",
+              agentConvStatus === "queued" && "bg-blue-400",
+              agentConvStatus === "recovering" && "bg-sky-400",
+              agentConvStatus === "awaiting_approval" && "bg-amber-500",
+              agentConvStatus === "failed" && "bg-destructive",
+            )} />
           )}
-          title={message.senderName}
-        >
-          {message.senderName.slice(0, 2).toUpperCase()}
         </div>
       )}
       <div className={cn("min-w-0 flex flex-col", isUser ? "items-end text-left" : "items-start text-left")}>
@@ -406,7 +424,39 @@ export function ThreadPanel({
 }: ThreadPanelProps) {
   const { user } = useAuth();
   const userIdentity = useStoredUserIdentity();
+  const conversations = useConversationsStore((s) => s.conversations);
+  const upsertConversation = useConversationsStore((s) => s.upsertConversation);
   const threadRootId = buildThreadShortId(rootMessage.id);
+
+  // Populate branch conversations for this channel on open so status dots have initial data.
+  useEffect(() => {
+    let cancelled = false;
+    listChannelConversations(channelId).then((convs) => {
+      if (cancelled) return;
+      for (const conv of convs) {
+        if (conv.threadKind === "branch") upsertConversation(conv, { select: false });
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [channelId, upsertConversation]);
+  // Map agentId → branch conversation status scoped to this exact thread.
+  // Filter by channelId + threadRootId to avoid cross-thread contamination.
+  // Use priority-based selection since patchConversationStatus() doesn't re-sort the store.
+  const agentStatusMap = useMemo(() => {
+    const priority: Record<ConversationStatus, number> = {
+      active: 5, awaiting_approval: 4, recovering: 3, queued: 2, failed: 1, idle: 0,
+    };
+    const map = new Map<string, ConversationStatus>();
+    for (const c of conversations) {
+      if (c.agentId && c.threadKind === "branch" && c.channelId === channelId && c.threadRootId === threadRootId) {
+        const prev = map.get(c.agentId);
+        if (prev === undefined || priority[c.status] > priority[prev]) {
+          map.set(c.agentId, c.status);
+        }
+      }
+    }
+    return map;
+  }, [conversations, channelId, threadRootId]);
   const { messages, summary, sendMessage, loadMore, hasMore } = useThreadStream(
     channelId,
     threadRootId,
@@ -523,13 +573,29 @@ export function ThreadPanel({
           {showCurrentUserRootAvatar ? (
             <ChatAvatar role="user" user={userIdentity} size={28} className="shrink-0" />
           ) : (
-            <div
-              className={cn(
-                "flex size-7 shrink-0 items-center justify-center rounded-full border-2 border-zinc-900 text-[10px] font-bold shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
-                isRootUser ? "bg-[#d8efff] text-blue-800" : "bg-[#d8f8c8] text-green-800",
-              )}
-            >
-              {rootMessage.senderName.slice(0, 2).toUpperCase()}
+            <div className="relative shrink-0 self-start">
+              <div
+                className={cn(
+                  "flex size-7 items-center justify-center rounded-full border-2 border-zinc-900 text-[10px] font-bold shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+                  isRootUser ? "bg-[#d8efff] text-blue-800" : "bg-[#d8f8c8] text-green-800",
+                )}
+              >
+                {rootMessage.senderName.slice(0, 2).toUpperCase()}
+              </div>
+              {!isRootUser && rootAgent && (() => {
+                const s = agentStatusMap.get(rootAgent.agentId) ?? null;
+                return s ? (
+                  <span className={cn(
+                    "absolute -bottom-0.5 -right-0.5 size-2 rounded-full border-[1.5px] border-white",
+                    s === "idle" && "bg-success",
+                    s === "active" && "bg-orange-400",
+                    s === "queued" && "bg-blue-400",
+                    s === "recovering" && "bg-sky-400",
+                    s === "awaiting_approval" && "bg-amber-500",
+                    s === "failed" && "bg-destructive",
+                  )} />
+                ) : null;
+              })()}
             </div>
           )}
           <div className={cn("min-w-0 flex flex-col", isRootUser ? "items-end text-left" : "items-start text-left")}>
@@ -617,6 +683,7 @@ export function ThreadPanel({
                 threadRootId={threadRootId}
                 currentUsername={currentUsername}
                 userIdentity={userIdentity}
+                agentStatusMap={agentStatusMap}
                 highlighted={highlightedMessageId === msg.id}
                 onOpenAgentSession={onOpenAgentSession}
               />

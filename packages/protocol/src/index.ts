@@ -224,6 +224,12 @@ export type ChannelTasksChangedEvent = {
   changedAt: number;
 };
 
+export type ChannelConversationStatusEvent = {
+  type: 'channel.conversation.status';
+  channelId: string;
+  conversation: ConversationInfo;
+};
+
 export type SystemNoticeEvent = {
   type: 'system.notice';
   message: string;
@@ -248,6 +254,7 @@ export type ServerEvent =
   | ChannelNoticeEvent
   | ChannelHistoryResetEvent
   | ChannelTasksChangedEvent
+  | ChannelConversationStatusEvent
   | SystemNoticeEvent;
 
 // ─── 客户端 → 服务端 事件 ───

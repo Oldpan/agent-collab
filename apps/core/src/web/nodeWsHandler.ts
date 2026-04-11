@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import type { WebSocket } from 'ws';
-import type { NodeToCore, ServerEvent, ConversationStatus } from '@agent-collab/protocol';
+import type { NodeToCore, ServerEvent, ConversationStatus, ConversationInfo } from '@agent-collab/protocol';
 import { log, finishRun } from '@agent-collab/runtime-acp';
 import type { Db } from '@agent-collab/runtime-acp';
 import type { NodeRegistry } from '../services/nodeRegistry.js';
@@ -81,6 +81,7 @@ const TASK_STATUS_REMINDER_EVENT_METHOD = 'platform/task-status-reminder';
 const TASK_STATUS_REMINDER_PROMPT_PREFIX = '[Platform task status reminder]';
 
 type EventBroadcaster = (conversationId: string, event: ServerEvent) => void;
+type ChannelBroadcaster = (channelId: string, event: ServerEvent) => void;
 
 function nextSyntheticRunEventSeq(db: Db, runId: string): number {
   const row = db.prepare(
@@ -655,10 +656,26 @@ export function handleNodeWebSocket(
   skillsBroker?: AgentSkillsBroker,
   codexTranscriptBroker?: CodexTranscriptBroker,
   claudeTranscriptBroker?: ClaudeTranscriptBroker,
+  broadcastToChannel?: ChannelBroadcaster,
 ): void {
   let nodeId: string | null = null;
   // Sequence counter per runId for node/event persistence
   const runSeq = new Map<string, number>();
+
+  // Wrap broadcast: when a branch conversation's status changes, also forward to its channel stream
+  const broadcastWithChannelForward: EventBroadcaster = (conversationId, event) => {
+    broadcast(conversationId, event);
+    if (event.type === 'conversation.status' && broadcastToChannel) {
+      const conv: ConversationInfo | null = manager.getConversation(conversationId);
+      if (conv?.channelId && conv.threadKind === 'branch') {
+        broadcastToChannel(conv.channelId, {
+          type: 'channel.conversation.status',
+          channelId: conv.channelId,
+          conversation: { ...conv, status: event.status },
+        });
+      }
+    }
+  };
 
   socket.on('message', (raw) => {
     let msg: NodeToCore;
@@ -754,7 +771,7 @@ export function handleNodeWebSocket(
           });
           break;
         }
-        broadcast(msg.conversationId, {
+        broadcastWithChannelForward(msg.conversationId, {
           type: 'conversation.status',
           conversationId: msg.conversationId,
           status: 'active',
@@ -767,7 +784,7 @@ export function handleNodeWebSocket(
         if (msg.event.type === 'conversation.status') {
           db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
             .run(msg.event.status, Date.now(), msg.conversationId);
-          broadcast(msg.conversationId, msg.event);
+          broadcastWithChannelForward(msg.conversationId, msg.event);
           break;
         }
         // Silently discard events for runs that no longer exist (deleted by reset/clear-chat)
@@ -782,7 +799,7 @@ export function handleNodeWebSocket(
             : msg.event.type === 'tool.result'
               ? { ...msg.event, endedAt: msg.event.endedAt ?? Date.now() }
               : msg.event;
-        broadcast(msg.conversationId, broadcastEvent);
+        broadcastWithChannelForward(msg.conversationId, broadcastEvent);
         // Persist replay-worthy events to core DB immediately
         if (REPLAY_EVENT_TYPES.has(msg.event.type)) {
           const seq = (runSeq.get(msg.runId) ?? 0) + 1;
@@ -813,7 +830,7 @@ export function handleNodeWebSocket(
             db,
             conversationId: msg.conversationId,
             runId: msg.runId,
-            broadcast,
+            broadcast: broadcastWithChannelForward,
             manager,
           });
           if (fallbackCount > 0) {
@@ -827,7 +844,7 @@ export function handleNodeWebSocket(
 
         finishConversationRun({
           db,
-          broadcast,
+          broadcast: broadcastWithChannelForward,
           manager,
           conversationId: msg.conversationId,
           runId: msg.runId,
@@ -854,12 +871,12 @@ export function handleNodeWebSocket(
       case 'permission.request': {
         db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
           .run('awaiting_approval', Date.now(), msg.conversationId);
-        broadcast(msg.conversationId, {
+        broadcastWithChannelForward(msg.conversationId, {
           type: 'conversation.status',
           conversationId: msg.conversationId,
           status: 'awaiting_approval',
         });
-        broadcast(msg.conversationId, {
+        broadcastWithChannelForward(msg.conversationId, {
           type: 'approval.request',
           requestId: msg.requestId,
           toolName: msg.toolName,
@@ -959,12 +976,12 @@ export function handleNodeWebSocket(
       db.prepare(`UPDATE conversations SET status='failed', updated_at=? WHERE node_id=? AND status != 'idle'`)
         .run(Date.now(), nodeId);
       for (const conv of affected) {
-        broadcast(conv.id, {
+        broadcastWithChannelForward(conv.id, {
           type: 'conversation.status',
           conversationId: conv.id,
           status: 'failed',
         });
-        broadcast(conv.id, {
+        broadcastWithChannelForward(conv.id, {
           type: 'error',
           message: disconnectMessage,
         });

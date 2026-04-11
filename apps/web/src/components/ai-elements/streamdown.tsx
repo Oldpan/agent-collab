@@ -135,7 +135,7 @@ const StreamdownTd = ({ className, children, ...props }: ComponentProps<"td">) =
 export const streamdownComponents: StreamdownProps["components"] = {
   code: StreamdownCode,
   pre: StreamdownPre as any,
-  table: StreamdownTable,
-  th: StreamdownTh,
-  td: StreamdownTd,
+  table: StreamdownTable as any,
+  th: StreamdownTh as any,
+  td: StreamdownTd as any,
 };

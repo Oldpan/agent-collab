@@ -1,9 +1,10 @@
 import { useState, useCallback, useRef, useLayoutEffect, useEffect } from "react";
-import { buildThreadShortId } from "@agent-collab/protocol";
+import { buildThreadShortId, type ConversationInfo } from "@agent-collab/protocol";
 import type { ChannelMessage } from "@/lib/api";
 import * as api from "@/lib/api";
 import { readStoredUserIdentity } from "@/lib/userIdentity";
 import { useAuthStore } from "./useAuth";
+import { useConversationsStore } from "./useConversations";
 
 function canMarkSeen(): boolean {
   return typeof document === "undefined" || document.visibilityState === "visible";
@@ -24,6 +25,14 @@ type UseChannelStreamOptions = {
 };
 
 export type ChannelNotice = { message: string; createdAt: string };
+
+type ChannelStreamEvent = {
+  type: string;
+  message?: ChannelMessage;
+  notice?: { message: string; createdAt: string };
+  channelId?: string;
+  conversation?: ConversationInfo;
+};
 
 export function useChannelStream(options: UseChannelStreamOptions): {
   messages: ChannelMessage[];
@@ -108,12 +117,7 @@ export function useChannelStream(options: UseChannelStreamOptions): {
       ws.onmessage = (evt) => {
         if (wsRef.current !== ws) return;
         try {
-          const event = JSON.parse(evt.data as string) as {
-            type: string;
-            message?: ChannelMessage;
-            notice?: { message: string; createdAt: string };
-            channelId?: string;
-          };
+          const event = JSON.parse(evt.data as string) as ChannelStreamEvent;
           if (event.type === "channel.message" && event.message) {
             const msg = event.message;
             if (typeof msg.seq === "number" && canMarkSeen()) {
@@ -142,6 +146,9 @@ export function useChannelStream(options: UseChannelStreamOptions): {
           } else if (event.type === "channel.tasks.changed" && event.channelId === channelId) {
             setTaskVersion((prev) => prev + 1);
             void loadInitialMessages(channelId).catch(() => {});
+          } else if (event.type === "channel.conversation.status" && event.conversation) {
+            // Keep branch conversation status live in the global store
+            useConversationsStore.getState().upsertConversation(event.conversation, { select: false });
           }
         } catch {
           // ignore malformed messages

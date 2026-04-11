@@ -3,9 +3,10 @@ import { clearDraft, readDraft, writeDraft } from "@/lib/drafts";
 import { cn } from "@/lib/utils";
 import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon, Settings2Icon, MessageSquareOffIcon, ListTodoIcon, PaperclipIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildThreadShortId, type ChannelInfo, type AgentInfo, type ConversationInfo, type ChannelMemberStatus } from "@agent-collab/protocol";
+import { buildThreadShortId, type ChannelInfo, type AgentInfo, type ConversationInfo, type ChannelMemberStatus, type ConversationStatus } from "@agent-collab/protocol";
+import { useConversationsStore } from "@/hooks/useConversations";
 import type { ChannelMessage } from "@/lib/api";
-import { addAgentToChannel, clearChannelChat, removeAgentFromChannel, claimMessageAsTask, getChannelMemberStatuses, uploadAttachment } from "@/lib/api";
+import { addAgentToChannel, clearChannelChat, listChannelConversations, removeAgentFromChannel, claimMessageAsTask, getChannelMemberStatuses, uploadAttachment } from "@/lib/api";
 import { useAuth } from "@/hooks/useAuth";
 import { useChannelStream, type ChannelNotice } from "@/hooks/useChannelStream";
 import { ThreadPanel } from "./ThreadPanel";
@@ -129,6 +130,7 @@ function MessageRow({
   onReply,
   onMakeTask,
   agents,
+  agentStatusMap,
   currentUsername,
   userIdentity,
   highlighted = false,
@@ -137,6 +139,7 @@ function MessageRow({
   onReply: (message: ChannelMessage) => void;
   onMakeTask?: (message: ChannelMessage) => void;
   agents: AgentInfo[];
+  agentStatusMap: Map<string, ConversationStatus>;
   currentUsername: string | null;
   userIdentity: { name: string; avatarUrl: string | null };
   highlighted?: boolean;
@@ -210,6 +213,7 @@ function MessageRow({
   }
 
   const agent = agents.find((a) => a.name === message.senderName);
+  const agentConvStatus = agent ? (agentStatusMap.get(agent.agentId) ?? null) : null;
   const showCurrentUserAvatar = isUser && currentUsername != null && message.senderName === currentUsername;
 
   return (
@@ -234,12 +238,20 @@ function MessageRow({
           </div>
         )
       ) : (
-        <ChatAvatar
-          role="assistant"
-          agent={agent}
-          size={32}
-          className="shrink-0"
-        />
+        <div className="relative shrink-0 self-start">
+          <ChatAvatar role="assistant" agent={agent} size={32} />
+          {agentConvStatus && (
+            <span className={cn(
+              "absolute -bottom-0.5 -right-0.5 size-2 rounded-full border-[1.5px] border-white",
+              agentConvStatus === "idle" && "bg-success",
+              agentConvStatus === "active" && "bg-orange-400",
+              agentConvStatus === "queued" && "bg-blue-400",
+              agentConvStatus === "recovering" && "bg-sky-400",
+              agentConvStatus === "awaiting_approval" && "bg-amber-500",
+              agentConvStatus === "failed" && "bg-destructive",
+            )} />
+          )}
+        </div>
       )}
 
       {/* Content wrapper with relative positioning for reply button */}
@@ -952,6 +964,39 @@ export function ChannelPanel({
 }: ChannelPanelProps) {
   const { user } = useAuth();
   const userIdentity = useStoredUserIdentity();
+  const conversations = useConversationsStore((s) => s.conversations);
+  const upsertConversation = useConversationsStore((s) => s.upsertConversation);
+
+  // Populate branch conversations for this channel on open so status dots have initial data.
+  // Live updates come via the channel WS stream (channel.conversation.status events).
+  useEffect(() => {
+    let cancelled = false;
+    listChannelConversations(channel.channelId).then((convs) => {
+      if (cancelled) return;
+      for (const conv of convs) {
+        if (conv.threadKind === "branch") upsertConversation(conv, { select: false });
+      }
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [channel.channelId, upsertConversation]);
+  // Map agentId → most-active branch conversation status for this channel's status dot.
+  // patchConversationStatus() mutates status in-place without re-sorting, so we can't
+  // rely on store order. Instead we pick the highest-priority status across all branches.
+  const agentStatusMap = useMemo(() => {
+    const priority: Record<ConversationStatus, number> = {
+      active: 5, awaiting_approval: 4, recovering: 3, queued: 2, failed: 1, idle: 0,
+    };
+    const map = new Map<string, ConversationStatus>();
+    for (const c of conversations) {
+      if (c.agentId && c.threadKind === "branch" && c.channelId === channel.channelId) {
+        const prev = map.get(c.agentId);
+        if (prev === undefined || priority[c.status] > priority[prev]) {
+          map.set(c.agentId, c.status);
+        }
+      }
+    }
+    return map;
+  }, [conversations, channel.channelId]);
   const [activeTab, setActiveTab] = useState<"chat" | "tasks" | "members" | "settings">("chat");
   const channelFocusAnchor = initialThreadRootId ?? focusMessageId ?? null;
   const { messages, notices, sendMessage, loadMore, hasMore, resetVersion, taskVersion, resetHistory } = useChannelStream({
@@ -1299,6 +1344,7 @@ export function ChannelPanel({
                         onReply={setOpenThread}
                         onMakeTask={handleMakeTask}
                         agents={channelMembers}
+                        agentStatusMap={agentStatusMap}
                         currentUsername={user?.username?.trim() || null}
                         userIdentity={userIdentity}
                         highlighted={highlightedMessageId === merged.id}

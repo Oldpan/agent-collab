@@ -94,7 +94,7 @@ beforeAll(async () => {
       },
     } as any,
   });
-  registerInternalAgentRoutes(app, db, manager, () => {}, () => {}, createTestConfig().humanUserName, skillsService);
+  registerInternalAgentRoutes(app, db, manager, () => {}, () => {}, () => {}, createTestConfig().humanUserName, skillsService);
 
   await app.listen({ port: 0, host: '127.0.0.1' });
   const addr = app.server.address() as { port: number };

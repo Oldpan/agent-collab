@@ -14,6 +14,7 @@ import { log, finishRun } from '@agent-collab/runtime-acp';
 import {
   buildLegacyThreadShortId,
   buildThreadShortId,
+  type ConversationStatus,
   type CreateConversationRequest,
   type CreateChannelRequest,
   type UpdateChannelRequest,
@@ -443,7 +444,10 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
             replayOverlapRecentMessages: activationContext.recentMessages,
             activationMetadata,
           },
-        ).then(() => {
+        ).then((result) => {
+          if (result.queued) {
+            broadcastConversationStatus(conv.id, 'queued');
+          }
           bumpAgentMessageCheckpoint(db, agentId, params.channelId, seq, threadRootId ?? null);
         }).catch(() => {});
       }
@@ -582,7 +586,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     }
     db.prepare('UPDATE conversations SET status = ?, updated_at = ? WHERE id = ?')
       .run('idle', now, conversation.id);
-    broadcast(conversation.id, { type: 'conversation.status', conversationId: conversation.id, status: 'idle' });
+    broadcastConversationStatus(conversation.id, 'idle');
     broadcast(conversation.id, { type: 'system.notice', message: 'Agent restarted — ready for new messages.' });
     void conversationManager.onConversationSettled(conversation.id);
 
@@ -612,11 +616,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       return { error: 'Not found' };
     }
     broadcast(clearedConversation.id, { type: 'history.reset' });
-    broadcast(clearedConversation.id, {
-      type: 'conversation.status',
-      conversationId: clearedConversation.id,
-      status: 'idle',
-    });
+    broadcastConversationStatus(clearedConversation.id, 'idle');
 
     return { ok: true, conversation: clearedConversation };
   });
@@ -1189,11 +1189,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
 
     for (const conversation of conversations) {
       broadcast(conversation.id, { type: 'history.reset' });
-      broadcast(conversation.id, {
-        type: 'conversation.status',
-        conversationId: conversation.id,
-        status: 'idle',
-      });
+      broadcastConversationStatus(conversation.id, 'idle');
     }
 
     return {
@@ -1324,6 +1320,9 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
             ? req.body.clientMessageId.trim()
             : undefined,
         });
+        if (result.queued) {
+          broadcastConversationStatus(req.params.id, 'queued');
+        }
         return result;
       } catch (error: any) {
         reply.code(500);
@@ -2066,6 +2065,9 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         const result = await conversationManager.submitPrompt(conversation.id, promptText, {
           senderName: user.username,
         });
+        if (result.queued) {
+          broadcastConversationStatus(conversation.id, 'queued');
+        }
         return {
           conversation,
           queued: result.queued,
@@ -2448,11 +2450,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       }
       for (const conversation of clearedConversations) {
         broadcast(conversation.id, { type: 'history.reset' });
-        broadcast(conversation.id, {
-          type: 'conversation.status',
-          conversationId: conversation.id,
-          status: 'idle',
-        });
+        broadcastConversationStatus(conversation.id, 'idle');
       }
       broadcastToChannel(req.params.id, { type: 'channel.history.reset' });
       broadcastChannelTasksChanged(req.params.id);
@@ -2840,12 +2838,24 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     }
   }
 
+  function broadcastConversationStatus(conversationId: string, status: ConversationStatus): void {
+    broadcast(conversationId, { type: 'conversation.status', conversationId, status });
+    const conversation = conversationManager.getConversation(conversationId);
+    if (!conversation?.channelId || conversation.threadKind !== 'branch') return;
+    broadcastToChannel(conversation.channelId, {
+      type: 'channel.conversation.status',
+      channelId: conversation.channelId,
+      conversation: { ...conversation, status },
+    });
+  }
+
   registerInternalAgentRoutes(
     app,
     db,
     conversationManager,
     broadcastToAgent,
     broadcastToChannel,
+    broadcastConversationStatus,
     config.humanUserName,
     skillsService,
     config.internalAgentAuthToken,
@@ -3392,7 +3402,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         return;
       }
       const senderName = wsUser?.username ?? config.humanUserName;
-      handleWebSocket(socket, conversationId, conversationManager, senderName);
+      handleWebSocket(socket, conversationId, conversationManager, senderName, broadcastConversationStatus);
     },
   );
 
@@ -3443,6 +3453,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         skillsBroker,
         codexTranscriptBroker,
         claudeTranscriptBroker,
+        broadcastToChannel,
       );
     },
   );

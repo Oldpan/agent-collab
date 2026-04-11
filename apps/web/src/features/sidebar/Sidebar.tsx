@@ -2,6 +2,7 @@ import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { CreateDialog } from "@/components/ui/create-dialog";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
   PlusIcon, TrashIcon, ChevronRightIcon, ChevronDownIcon, Rows3Icon, HashIcon, LogOutIcon, LinkIcon, SettingsIcon, UserIcon, ShieldIcon, SearchIcon, FolderSearchIcon,
@@ -102,26 +103,39 @@ function AgentStatusDot({
 
   if (!machineStatus || machineStatus === "offline") {
     color = "bg-zinc-300";
-    label = "offline";
+    label = "Offline";
   } else if (machineStatus === "pending") {
     color = "bg-yellow-400";
-    label = "connecting";
+    label = "Connecting";
   } else if (conversationStatus === "active") {
     color = "bg-orange-400";
-    label = "running";
+    label = "Running";
   } else if (conversationStatus === "queued") {
     color = "bg-blue-400";
-    label = "queued";
+    label = "Queued";
+  } else if (conversationStatus === "recovering") {
+    color = "bg-sky-400";
+    label = "Recovering";
+  } else if (conversationStatus === "awaiting_approval") {
+    color = "bg-amber-500";
+    label = "Awaiting approval";
+  } else if (conversationStatus === "failed") {
+    color = "bg-destructive";
+    label = "Failed";
   } else {
     color = "bg-green-500";
-    label = "online";
+    label = "Online";
   }
 
   return (
-    <span
-      className={cn("inline-block size-1.5 rounded-full shrink-0", color)}
-      title={label}
-    />
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className={cn("inline-block size-1.5 rounded-full shrink-0 cursor-default", color)} />
+      </TooltipTrigger>
+      <TooltipContent className="rounded-none border-2 border-zinc-900 bg-white text-zinc-900 shadow-[2px_2px_0_0_#000] px-2 py-0.5 text-[11px] font-semibold">
+        {label}
+      </TooltipContent>
+    </Tooltip>
   );
 }
 

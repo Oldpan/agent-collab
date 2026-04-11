@@ -1,5 +1,5 @@
 import type { WebSocket } from 'ws';
-import type { ServerEvent, ClientEvent } from '@agent-collab/protocol';
+import type { ServerEvent, ClientEvent, ConversationStatus } from '@agent-collab/protocol';
 import { log } from '@agent-collab/runtime-acp';
 import type { ConversationManager } from './conversationManager.js';
 
@@ -19,12 +19,15 @@ export function broadcast(conversationId: string, event: ServerEvent): void {
   }
 }
 
+type ConversationStatusBroadcaster = (conversationId: string, status: ConversationStatus) => void;
+
 /** Handle a new WebSocket connection for a conversation */
 export function handleWebSocket(
   socket: WebSocket,
   conversationId: string,
   manager: ConversationManager,
   senderName?: string,
+  broadcastStatus?: ConversationStatusBroadcaster,
 ): void {
   // Register this connection
   let sockets = connectionsByConversation.get(conversationId);
@@ -69,7 +72,7 @@ export function handleWebSocket(
       return;
     }
 
-    handleClientEvent(conversationId, event, manager, senderName).catch((err) => {
+    handleClientEvent(conversationId, event, manager, senderName, broadcastStatus).catch((err) => {
       log.warn('WebSocket client event error', err);
       broadcast(conversationId, { type: 'error', message: String(err?.message ?? err) });
     });
@@ -280,6 +283,7 @@ async function handleClientEvent(
   event: ClientEvent,
   manager: ConversationManager,
   senderName?: string,
+  broadcastStatus?: ConversationStatusBroadcaster,
 ): Promise<void> {
   switch (event.type) {
     case 'prompt': {
@@ -294,11 +298,19 @@ async function handleClientEvent(
       try {
         const result = await manager.submitPrompt(conversationId, event.text, { senderName });
         if (result.queued) {
-          broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'queued' });
+          if (broadcastStatus) {
+            broadcastStatus(conversationId, 'queued');
+          } else {
+            broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'queued' });
+          }
         }
       } catch (error: any) {
         broadcast(conversationId, { type: 'error', message: String(error?.message ?? error) });
-        broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'idle' });
+        if (broadcastStatus) {
+          broadcastStatus(conversationId, 'idle');
+        } else {
+          broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'idle' });
+        }
       }
       // turn.end and idle status come from nodeWsHandler on run.end
       break;
@@ -312,6 +324,10 @@ async function handleClientEvent(
       );
       if (!result.ok) {
         broadcast(conversationId, { type: 'error', message: result.message });
+      } else if (broadcastStatus) {
+        broadcastStatus(conversationId, 'active');
+      } else {
+        broadcast(conversationId, { type: 'conversation.status', conversationId, status: 'active' });
       }
       break;
     }

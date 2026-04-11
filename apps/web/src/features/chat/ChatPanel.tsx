@@ -35,7 +35,7 @@ import {
 } from "@/components/ai-elements/tool";
 import { useConversationStream } from "@/hooks/useConversationStream";
 import { ChevronRightIcon, ListTodoIcon, MenuIcon } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 
 function AttachmentImage({ attachmentId }: { attachmentId: string }) {
   const [src, setSrc] = useState<string | null>(null);
@@ -65,6 +65,7 @@ import type { LiveMessage, LiveToolCall } from "@/hooks/types";
 import { cn } from "@/lib/utils";
 import { MessageSourceBadge } from "@/components/MessageSourceBadge";
 import { useStoredUserIdentity } from "@/lib/userIdentity";
+import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 
 type ChatPanelProps = {
   conversation: ConversationInfo;
@@ -962,21 +963,38 @@ function ToolCallRow({ toolCall }: { toolCall: LiveToolCall }) {
   );
 }
 
-/** Small colored dot for conversation status */
+/** Status label for display */
+const STATUS_LABELS: Record<string, string> = {
+  idle: "Idle",
+  active: "Running",
+  queued: "Queued",
+  recovering: "Recovering session",
+  awaiting_approval: "Awaiting approval",
+  failed: "Failed",
+  unavailable: "Unavailable",
+};
+
+/** Small colored dot for conversation status, with hover tooltip */
 function StatusDot({ status }: { status: string }) {
   return (
-    <span
-      className={cn(
-        "size-2 rounded-full shrink-0",
-        status === "idle" && "bg-success",
-        status === "unavailable" && "bg-zinc-400",
-        status === "queued" && "bg-blue-500",
-        status === "active" && "bg-warning",
-        status === "recovering" && "bg-sky-500",
-        status === "awaiting_approval" && "bg-amber-500",
-        status === "failed" && "bg-destructive",
-      )}
-      title={status}
-    />
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          className={cn(
+            "size-2 rounded-full shrink-0 cursor-default",
+            status === "idle" && "bg-success",
+            status === "unavailable" && "bg-zinc-400",
+            status === "queued" && "bg-blue-500",
+            status === "active" && "bg-warning",
+            status === "recovering" && "bg-sky-500",
+            status === "awaiting_approval" && "bg-amber-500",
+            status === "failed" && "bg-destructive",
+          )}
+        />
+      </TooltipTrigger>
+      <TooltipContent className="rounded-none border-2 border-zinc-900 bg-white text-zinc-900 shadow-[2px_2px_0_0_#000] px-2 py-0.5 text-[11px] font-semibold">
+        {STATUS_LABELS[status] ?? status}
+      </TooltipContent>
+    </Tooltip>
   );
 }

@@ -1,7 +1,7 @@
 import { useCallback, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { XIcon, UserIcon, ShieldIcon, CalendarIcon, UploadIcon, RotateCcwIcon } from 'lucide-react';
+import { XIcon, ShieldIcon, CalendarIcon, UploadIcon, RotateCcwIcon } from 'lucide-react';
 import type { User } from '@/lib/auth-api';
 import { ChatAvatar } from '../chat/ChatAvatar';
 import { clearStoredUserAvatar, createStoredAvatarDataUrl, useStoredUserIdentity, writeStoredUserIdentity } from '@/lib/userIdentity';
