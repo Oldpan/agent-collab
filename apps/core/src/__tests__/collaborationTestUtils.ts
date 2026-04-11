@@ -211,16 +211,20 @@ export async function createCollaborationHarness(): Promise<CollaborationHarness
             triggerSeq: seq,
             threadRootId: threadRootId ?? null,
           });
-          const activationMetadata = !threadRootId && reason === 'mention' && mentionedAgents.length > 1
-            ? {
-                mentionSuppression: {
-                  mode: 'root_user_multi_mention' as const,
-                  triggerSeq: seq,
-                  peerMentionedAgentIds: mentionedAgents
-                    .map((mentionedAgent) => mentionedAgent.agentId)
-                    .filter((mentionedAgentId) => mentionedAgentId !== agentId),
-                },
-              }
+          const activationMetadata = !threadRootId
+            ? (() => {
+                const peerAgentIds = Array.from(pendingNotifications.keys())
+                  .filter((targetAgentId) => targetAgentId !== agentId);
+                return peerAgentIds.length > 0
+                  ? {
+                      mentionSuppression: {
+                        mode: 'root_user_multi_mention' as const,
+                        triggerSeq: seq,
+                        peerMentionedAgentIds: peerAgentIds,
+                      },
+                    }
+                  : undefined;
+              })()
             : undefined;
           void manager.submitPrompt(
             conv.id,

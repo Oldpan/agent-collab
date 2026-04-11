@@ -1806,19 +1806,19 @@ describe('REST API', () => {
     expect(betaConv).not.toBeNull();
 
     const alphaDebug = db.prepare(
-      `SELECT prompt_text as promptText, context_text as contextText
+      `SELECT prompt_text as promptText, context_text as contextText, activation_metadata_json as activationMetadataJson
        FROM run_debug_inputs
        WHERE conversation_id = ?
        ORDER BY created_at DESC
        LIMIT 1`,
-    ).get(alphaConv?.id) as { promptText: string; contextText: string | null } | undefined;
+    ).get(alphaConv?.id) as { promptText: string; contextText: string | null; activationMetadataJson: string | null } | undefined;
     const betaDebug = db.prepare(
-      `SELECT prompt_text as promptText, context_text as contextText
+      `SELECT prompt_text as promptText, context_text as contextText, activation_metadata_json as activationMetadataJson
        FROM run_debug_inputs
        WHERE conversation_id = ?
        ORDER BY created_at DESC
        LIMIT 1`,
-    ).get(betaConv?.id) as { promptText: string; contextText: string | null } | undefined;
+    ).get(betaConv?.id) as { promptText: string; contextText: string | null; activationMetadataJson: string | null } | undefined;
 
     expect(alphaDebug?.promptText).toContain('There is new channel activity');
     expect(betaDebug?.promptText).toContain('[System: You were @mentioned in #recent-and-mention-room by User.]');
@@ -1831,6 +1831,8 @@ describe('REST API', () => {
     expect(alphaParticipants).toBe(betaParticipants);
     expect(alphaParticipants).toContain('@CarryAlpha (owner)');
     expect(alphaParticipants).toContain('@CarryBeta (owner)');
+    expect(alphaDebug?.activationMetadataJson).toContain(beta.agentId);
+    expect(betaDebug?.activationMetadataJson).toContain(alpha.agentId);
   });
 
   it('POST /api/channels/:id/messages 过期 root participants 不应继续收到普通主频道消息', async () => {

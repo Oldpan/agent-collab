@@ -403,16 +403,20 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         }
 
         notifiedAgentIds.add(agentId);
-        const activationMetadata = !threadRootId && reason === 'mention' && mentionedAgents.length > 1
-          ? {
-              mentionSuppression: {
-                mode: 'root_user_multi_mention' as const,
-                triggerSeq: seq,
-                peerMentionedAgentIds: mentionedAgents
-                  .map((mentionedAgent) => mentionedAgent.agentId)
-                  .filter((mentionedAgentId) => mentionedAgentId !== agentId),
-              },
-            }
+        const activationMetadata = !threadRootId
+          ? (() => {
+              const peerAgentIds = Array.from(pendingNotifications.keys())
+                .filter((targetAgentId) => targetAgentId !== agentId);
+              return peerAgentIds.length > 0
+                ? {
+                    mentionSuppression: {
+                      mode: 'root_user_multi_mention' as const,
+                      triggerSeq: seq,
+                      peerMentionedAgentIds: peerAgentIds,
+                    },
+                  }
+                : undefined;
+            })()
           : undefined;
         conversationManager.submitPrompt(
           conv.id,
