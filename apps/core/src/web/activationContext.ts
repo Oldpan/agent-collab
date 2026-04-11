@@ -245,9 +245,12 @@ export function buildTargetActivationContext(
 ): TargetActivationContext {
   const recentLimit = Math.max(1, params.recentLimit ?? 8);
   const normalizedThreadRootId = params.threadRootId ?? null;
+  const isDirectThreadTarget = normalizedThreadRootId !== null && params.replyTarget.startsWith('dm:@');
   const threadClause = normalizedThreadRootId == null
     ? 'thread_root_id IS NULL'
-    : 'thread_root_id = ?';
+    : isDirectThreadTarget
+      ? '(thread_root_id = ? OR thread_root_id IS NULL)'
+      : 'thread_root_id = ?';
   const threadArgs = normalizedThreadRootId == null ? [] : [normalizedThreadRootId];
 
   const recentMessages = (

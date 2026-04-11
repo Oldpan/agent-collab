@@ -76,7 +76,8 @@ export class ExecutionDispatcher {
     const row = this.db.prepare(
       `SELECT session_key as sessionKey, agent_type as agentType,
               workspace_path as workspacePath, env_vars as envVarsJson,
-              node_id as nodeId, agent_id as agentId, reply_target as replyTarget
+              node_id as nodeId, agent_id as agentId, reply_target as replyTarget,
+              thread_kind as threadKind, thread_root_id as threadRootId
        FROM conversations WHERE id = ?`
     ).get(conversationId) as {
       sessionKey: string;
@@ -86,6 +87,8 @@ export class ExecutionDispatcher {
       nodeId: string | null;
       agentId: string | null;
       replyTarget: string | null;
+      threadKind: 'direct' | 'branch';
+      threadRootId: string | null;
     } | undefined;
 
     if (!row) throw new Error(`Unknown conversation: ${conversationId}`);
@@ -137,10 +140,21 @@ export class ExecutionDispatcher {
           const parsedAttachIds = attachNoteIdx >= 0
             ? [...promptText.slice(attachNoteIdx).matchAll(/^ID: ([a-f0-9-]{36})$/gm)].map((m) => m[1])
             : [];
+          const dmThreadRootId = row.threadKind === 'direct' ? row.threadRootId ?? null : null;
           this.db.prepare(
-            `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, attachment_ids)
-             VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, ?)`,
-          ).run(options?.clientMessageId ?? randomUUID(), dmChannelId, humanUserName, dmReplyTarget, displayContent, msgSeq, Date.now(), parsedAttachIds.length ? JSON.stringify(parsedAttachIds) : null);
+            `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, attachment_ids)
+             VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, ?, ?)`,
+          ).run(
+            options?.clientMessageId ?? randomUUID(),
+            dmChannelId,
+            humanUserName,
+            dmReplyTarget,
+            displayContent,
+            msgSeq,
+            Date.now(),
+            dmThreadRootId,
+            parsedAttachIds.length ? JSON.stringify(parsedAttachIds) : null,
+          );
 
           // Checkpoint will be bumped after confirmed delivery to avoid silent message
           // loss if the node is offline or the send fails.

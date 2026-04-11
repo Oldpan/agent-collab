@@ -1117,6 +1117,43 @@ describe('ExecutionDispatcher', () => {
     expect(queuedCount.count).toBe(0);
   });
 
+  it('direct task-thread 用户消息持久化时应写入 thread_root_id', async () => {
+    const agent = manager.createAgent({
+      name: 'Thread Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/thread-bob',
+    });
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES(?, ?, ?, 0, ?, ?)`,
+    ).run('oldpan', 'oldpan', 'hash', now, now);
+
+    const dmChannelId = `dm:${agent.agentId}`;
+    const threadRootId = 'deadbead';
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, message_kind)
+       VALUES(?, ?, 'user', 'oldpan', 'user', 'dm:@oldpan', '请处理这个任务线程', ?, ?, NULL, 'task')`,
+    ).run(`${threadRootId}-0000-0000-0000-000000000000`, dmChannelId, allocateNextChannelMessageSeq(db, dmChannelId), now + 1);
+
+    const thread = manager.openAgentDirectThread(agent.agentId, 'oldpan', threadRootId);
+    if (!thread) throw new Error('missing direct thread');
+
+    await manager.submitPrompt(thread.id, '后续请继续在这个 task thread 里处理');
+
+    const row = db.prepare(
+      `SELECT target, thread_root_id as threadRootId
+       FROM channel_messages
+       WHERE channel_id = ?
+       ORDER BY seq DESC
+       LIMIT 1`,
+    ).get(dmChannelId) as { target: string; threadRootId: string | null };
+
+    expect(row.target).toBe(thread.replyTarget);
+    expect(row.threadRootId).toBe(thread.threadRootId);
+  });
+
   it('同一 agent 的 channel root 与 thread branch 应可并发 dispatch', async () => {
     const channel = manager.createChannel({ name: 'project-room' });
     const agent = manager.createAgent({

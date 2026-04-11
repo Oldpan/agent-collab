@@ -364,6 +364,44 @@ describe('activationContext', () => {
     db.close();
   });
 
+  it('direct task-thread activation context 应包含 legacy thread target 用户消息', () => {
+    const db = createTestDb();
+    const now = Date.now();
+    const agentId = 'agent-kimi';
+    const channelId = `dm:${agentId}`;
+    const directTarget = 'dm:@oldpan';
+    const threadRootId = 'deadbead';
+    const threadTarget = `${directTarget}:${threadRootId}`;
+    const rootMessageId = `${threadRootId}-0000-0000-0000-000000000000`;
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, message_kind)
+       VALUES
+       (?, ?, 'user-1', 'oldpan', 'user', ?, '请把这个变成任务线程', 1, ?, NULL, 'task'),
+       ('legacy-thread-user', ?, 'user-1', 'oldpan', 'user', ?, '后面直接在这个 task thread 继续即可', 2, ?, NULL, NULL),
+       ('thread-agent-reply', ?, ?, 'Kimi', 'agent', ?, '收到，我继续在线程里推进。', 3, ?, ?, NULL)`,
+    ).run(
+      rootMessageId, channelId, directTarget, now,
+      channelId, threadTarget, now + 1,
+      channelId, agentId, threadTarget, now + 2, threadRootId,
+    );
+
+    const context = buildTargetActivationContext(db, {
+      agentId,
+      channelId,
+      replyTarget: threadTarget,
+      triggerSeq: 4,
+      threadRootId,
+    });
+
+    expect(context.recentMessages.map((message) => message.messageId)).toEqual([
+      'legacy-thread-user',
+      'thread-agent-reply',
+    ]);
+
+    db.close();
+  });
+
   it('主 DM activation context 应包含活跃 DM task threads 摘要', () => {
     const db = createTestDb();
     const now = Date.now();

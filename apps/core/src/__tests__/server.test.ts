@@ -1315,6 +1315,48 @@ describe('REST API', () => {
     expect(body.messages.map((message: { seq: number }) => message.seq)).toEqual([1, 2]);
   });
 
+  it('GET /api/conversations/:id/channel-messages 在 DM task-thread 中应兼容 legacy thread target 用户消息', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'ThreadBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/thread-bob-server',
+    });
+    db.prepare(
+      `INSERT INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES(?, ?, ?, 0, ?, ?)`,
+    ).run('oldpan', 'oldpan', 'hash', now, now);
+
+    const threadRootId = 'deadbead';
+    const rootMessageId = `${threadRootId}-0000-0000-0000-000000000000`;
+    const directTarget = 'dm:@oldpan';
+    const threadTarget = `${directTarget}:${threadRootId}`;
+    const threadConversation = manager.openAgentDirectThread(agent.agentId, 'oldpan', threadRootId);
+    if (!threadConversation) throw new Error('missing direct thread conversation');
+
+    const dmChannelId = `dm:${agent.agentId}`;
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, message_kind)
+       VALUES
+       (?, ?, 'user', 'oldpan', 'user', ?, '请处理这个任务线程', 1, ?, NULL, NULL, 'task'),
+       ('legacy-thread-user', ?, 'user', 'oldpan', 'user', ?, '你不需要在本机启动fastapi，使用远程已经搭建好的就行', 2, ?, NULL, NULL, NULL),
+       ('thread-agent-reply', ?, ?, ?, 'agent', ?, '收到，我改走远端服务。', 3, ?, 'run-1', ?, 'progress')`,
+    ).run(
+      rootMessageId, dmChannelId, directTarget, now,
+      dmChannelId, threadTarget, now + 1,
+      dmChannelId, agent.agentId, agent.name, threadTarget, now + 2, threadRootId,
+    );
+
+    const { status, body } = await fetchJson(`/api/conversations/${threadConversation.id}/channel-messages?limit=10`);
+    expect(status).toBe(200);
+    expect(body.messages.map((message: { content: string }) => message.content)).toEqual([
+      '请处理这个任务线程',
+      '你不需要在本机启动fastapi，使用远程已经搭建好的就行',
+      '收到，我改走远端服务。',
+    ]);
+  });
+
   it('POST /api/unread-summary 应分别统计 agent DM 和 channel 的未读数字', async () => {
     const agent = manager.createAgent({
       name: 'UnreadBob',

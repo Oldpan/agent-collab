@@ -151,10 +151,22 @@ function parseOptionalPositiveInt(value: string | undefined): number | undefined
   return Math.floor(parsed);
 }
 
-function buildMessageScope(alias: string, channelId: string, threadRootId: string | null): MessageScope {
+function buildMessageScope(
+  alias: string,
+  channelId: string,
+  threadRootId: string | null,
+  target?: string,
+): MessageScope {
   const params: Array<string | number> = [channelId];
   if (threadRootId !== null) {
     params.push(threadRootId);
+    if (target?.startsWith('dm:@')) {
+      params.push(target);
+      return {
+        clause: `${alias}.channel_id = ? AND (${alias}.thread_root_id = ? OR (${alias}.thread_root_id IS NULL AND ${alias}.target = ?))`,
+        params,
+      };
+    }
     return {
       clause: `${alias}.channel_id = ? AND ${alias}.thread_root_id = ?`,
       params,
@@ -1202,18 +1214,18 @@ export function registerInternalAgentRoutes(
 
       let allRows: MessageRow[] = [];
       for (const channelId of channelsToQuery) {
-        const threadKeys = (
-          db.prepare(
-            `SELECT DISTINCT COALESCE(thread_root_id, '') as threadKey
+        const threadKeys = Array.from(new Set(
+          (db.prepare(
+            `SELECT thread_root_id as threadRootId, target
              FROM channel_messages
-             WHERE channel_id = ? AND sender_id != ?
-             ORDER BY threadKey ASC`,
-          ).all(channelId, agentId) as Array<{ threadKey: string }>
-        ).map((row) => row.threadKey);
+             WHERE channel_id = ? AND sender_id != ?`,
+          ).all(channelId, agentId) as Array<{ threadRootId: string | null; target: string }>)
+            .map((row) => checkpointThreadKey(row.threadRootId ?? resolveThreadRootId(row.target))),
+        )).sort();
 
         for (const threadKey of threadKeys) {
           const checkpoint = getAgentMessageCheckpoint(db, agentId, channelId, threadKey || null);
-          const rows = db
+          const rows = (db
           .prepare(
             `SELECT cm.message_id as messageId, cm.channel_id as channelId, cm.sender_id as senderId,
                     cm.sender_name as senderName, cm.sender_type as senderType,
@@ -1221,11 +1233,19 @@ export function registerInternalAgentRoutes(
                     t.task_number as taskNumber, t.status as taskStatus, t.claimed_by_name as taskAssigneeName
              FROM channel_messages cm
              LEFT JOIN tasks t ON t.message_id = cm.message_id
-             WHERE cm.channel_id = ? AND cm.seq > ? AND cm.sender_id != ? AND COALESCE(cm.thread_root_id, '') = ?
+             WHERE cm.channel_id = ? AND cm.seq > ? AND cm.sender_id != ?
              ORDER BY cm.seq ASC
-             LIMIT 50`,
+             LIMIT 200`,
           )
-          .all(channelId, checkpoint, agentId, threadKey) as MessageRow[];
+          .all(channelId, checkpoint, agentId) as MessageRow[])
+            .map((row) => {
+              const effectiveThreadRootId = row.threadRootId ?? resolveThreadRootId(row.target);
+              return effectiveThreadRootId === row.threadRootId
+                ? row
+                : { ...row, threadRootId: effectiveThreadRootId };
+            })
+            .filter((row) => checkpointThreadKey(row.threadRootId) === threadKey)
+            .slice(0, 50);
 
           allRows = allRows.concat(rows);
         }
@@ -1359,8 +1379,13 @@ export function registerInternalAgentRoutes(
 
       const threadRootId = resolveThreadRootId(channelTarget);
       if (threadRootId !== null) {
-        whereParts.push('cm.thread_root_id = ?');
-        params.push(threadRootId);
+        if (channelTarget.startsWith('dm:@')) {
+          whereParts.push('(cm.thread_root_id = ? OR (cm.thread_root_id IS NULL AND cm.target = ?))');
+          params.push(threadRootId, channelTarget);
+        } else {
+          whereParts.push('cm.thread_root_id = ?');
+          params.push(threadRootId);
+        }
       }
     }
 
@@ -1437,7 +1462,7 @@ export function registerInternalAgentRoutes(
 
     // Thread filter: "#channel:shortId" reads thread; "#channel" reads main channel only
     const targetThreadRootId = resolveThreadRootId(channel);
-    const scope = buildMessageScope('cm', channelId, targetThreadRootId);
+    const scope = buildMessageScope('cm', channelId, targetThreadRootId, channel);
 
     const taskJoinSelect = `cm.message_id as messageId, cm.channel_id as channelId, cm.sender_id as senderId,
                   cm.sender_name as senderName, cm.sender_type as senderType,

@@ -2069,6 +2069,83 @@ describe('internalAgentRouter', () => {
     expect(body.messages.map((m) => m.content)).toEqual(['thread-2']);
   });
 
+  it('check_messages 应把 legacy DM task-thread 用户消息归到对应 thread bucket', async () => {
+    const agent = manager.createAgent({
+      name: 'LegacyDmReceiver',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/legacy-dm-receiver',
+    });
+    const dmChannelId = `dm:${agent.agentId}`;
+    const threadTarget = 'dm:@oldpan:deadbead';
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES
+       ('dm-root-1', ?, 'user', 'oldpan', 'user', 'dm:@oldpan', 'root-1', 1, 1000, NULL),
+       ('dm-thread-1', ?, 'user', 'oldpan', 'user', ?, 'thread-1', 2, 2000, NULL)`,
+    ).run(dmChannelId, dmChannelId, threadTarget);
+
+    let res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/receive`);
+    expect(res.status).toBe(200);
+    let body = await res.json() as { messages: Array<{ content: string }> };
+    expect(body.messages.map((message) => message.content)).toEqual(['root-1', 'thread-1']);
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES('dm-root-2', ?, 'user', 'oldpan', 'user', 'dm:@oldpan', 'root-2', 3, 3000, NULL)`,
+    ).run(dmChannelId);
+
+    res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/receive`);
+    expect(res.status).toBe(200);
+    body = await res.json() as { messages: Array<{ content: string }> };
+    expect(body.messages.map((message) => message.content)).toEqual(['root-2']);
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES('dm-thread-2', ?, 'user', 'oldpan', 'user', ?, 'thread-2', 4, 4000, NULL)`,
+    ).run(dmChannelId, threadTarget);
+
+    res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/receive`);
+    expect(res.status).toBe(200);
+    body = await res.json() as { messages: Array<{ content: string }> };
+    expect(body.messages.map((message) => message.content)).toEqual(['thread-2']);
+  });
+
+  it('read_history 在 DM task-thread 中应兼容 legacy thread target 用户消息', async () => {
+    const agent = manager.createAgent({
+      name: 'DmThreadReader',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/dm-thread-reader',
+    });
+    const dmChannelId = `dm:${agent.agentId}`;
+    const threadRootId = 'deadbead';
+    const threadTarget = `dm:@oldpan:${threadRootId}`;
+
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, message_kind)
+       VALUES
+       (?, ?, 'user', 'oldpan', 'user', 'dm:@oldpan', '请处理这个任务线程', 1, 1000, NULL, 'task'),
+       ('legacy-thread-user', ?, 'user', 'oldpan', 'user', ?, '你不需要在本机启动fastapi，使用远程已经搭建好的就行', 2, 2000, NULL, NULL),
+       ('thread-agent-reply', ?, ?, ?, 'agent', ?, '收到，我改走远端服务。', 3, 3000, ?, 'progress')`,
+    ).run(
+      `${threadRootId}-0000-0000-0000-000000000000`, dmChannelId,
+      dmChannelId, threadTarget,
+      dmChannelId, agent.agentId, agent.name, threadTarget, threadRootId,
+    );
+
+    const res = await fetch(
+      `${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent(threadTarget)}`,
+    );
+    expect(res.status).toBe(200);
+    const body = await res.json() as { messages: Array<{ content: string }> };
+    expect(body.messages.map((message) => message.content)).toEqual([
+      '你不需要在本机启动fastapi，使用远程已经搭建好的就行',
+      '收到，我改走远端服务。',
+    ]);
+  });
+
   it('read_history 对已加入的 channel 应返回历史', async () => {
     const agent = manager.createAgent({
       name: 'Reader',

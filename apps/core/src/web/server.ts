@@ -1502,10 +1502,18 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
            WHERE cm.channel_id = ?
              AND (
                (cm.message_id LIKE ? AND cm.thread_root_id IS NULL AND cm.target = ?)
+               OR (cm.thread_root_id IS NULL AND cm.target = ?)
                OR cm.thread_root_id = ?
              )
            ORDER BY cm.seq ASC LIMIT ?`,
-        ).all(dmChannelId, `${conv.threadRootId}%`, baseTarget, conv.threadRootId, limit) as PublicChannelRow[];
+        ).all(
+          dmChannelId,
+          `${conv.threadRootId}%`,
+          baseTarget,
+          directTarget,
+          conv.threadRootId,
+          limit,
+        ) as PublicChannelRow[];
         const rootMessageId = rows.find((row) => row.id.startsWith(conv.threadRootId!))?.id;
         const contextSnapshot = rootMessageId
           ? ensureDmThreadContextSnapshot(db, {
