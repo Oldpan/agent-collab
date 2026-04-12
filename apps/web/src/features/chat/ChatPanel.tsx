@@ -594,6 +594,7 @@ export function ChatPanel({
                   showCancel={shouldShowCancel}
                   disableInput={shouldDisableInput}
                   draftKey={`dm:${conversation.id}`}
+                  showSendAsTaskButton={isPrimaryDirectConversation}
                   onSend={sendPrompt}
                   onCancel={cancel}
                 />
@@ -692,6 +693,7 @@ export function ChatPanel({
                 showCancel={shouldShowCancel}
                 disableInput={shouldDisableInput}
                 draftKey={`dm:${conversation.id}`}
+                showSendAsTaskButton={isPrimaryDirectConversation}
                 onSend={sendPrompt}
                 onCancel={cancel}
               />

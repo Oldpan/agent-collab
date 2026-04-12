@@ -18,6 +18,11 @@ export type ActivationContextMessage = {
   senderType: 'user' | 'agent' | 'system';
   content: string;
   createdAt: number;
+  attachmentIds?: string[];
+};
+
+type ActivationContextMessageRow = Omit<ActivationContextMessage, 'attachmentIds'> & {
+  attachmentIds: string | null;
 };
 
 export type DmThreadContextSnapshot = {
@@ -67,13 +72,14 @@ function loadActivationMessageById(
   channelId: string,
   messageId: string,
 ): ActivationContextMessage | undefined {
-  return db.prepare(
+  const row = db.prepare(
     `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
-            content, created_at as createdAt
+            content, created_at as createdAt, attachment_ids as attachmentIds
      FROM channel_messages
      WHERE channel_id = ? AND message_id = ?
      LIMIT 1`,
-  ).get(channelId, messageId) as ActivationContextMessage | undefined;
+  ).get(channelId, messageId) as ActivationContextMessageRow | undefined;
+  return row ? hydrateActivationContextMessage(row) : undefined;
 }
 
 function loadThreadRootMessage(
@@ -100,18 +106,54 @@ function parseDmThreadContextSnapshot(raw: string): ActivationContextMessage[] {
       .filter((value): value is ActivationContextMessage => (
         !!value
         && typeof value === 'object'
-        && typeof (value as ActivationContextMessage).messageId === 'string'
-        && typeof (value as ActivationContextMessage).seq === 'number'
-        && typeof (value as ActivationContextMessage).target === 'string'
-        && typeof (value as ActivationContextMessage).senderName === 'string'
-        && typeof (value as ActivationContextMessage).senderType === 'string'
-        && typeof (value as ActivationContextMessage).content === 'string'
-        && typeof (value as ActivationContextMessage).createdAt === 'number'
+        && (() => {
+          const message = value as ActivationContextMessage;
+          return typeof message.messageId === 'string'
+            && typeof message.seq === 'number'
+            && typeof message.target === 'string'
+            && typeof message.senderName === 'string'
+            && typeof message.senderType === 'string'
+            && typeof message.content === 'string'
+            && typeof message.createdAt === 'number'
+            && (
+              message.attachmentIds == null
+              || (
+                Array.isArray(message.attachmentIds)
+                && message.attachmentIds.every((attachmentId) => typeof attachmentId === 'string')
+              )
+            );
+        })()
       ))
       .sort((a, b) => a.seq - b.seq);
   } catch {
     return [];
   }
+}
+
+function parseAttachmentIds(raw: string | null): string[] | undefined {
+  if (!raw) return undefined;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return undefined;
+    const attachmentIds = parsed.filter((value): value is string => typeof value === 'string');
+    return attachmentIds.length > 0 ? attachmentIds : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function hydrateActivationContextMessage(row: ActivationContextMessageRow): ActivationContextMessage {
+  const attachmentIds = parseAttachmentIds(row.attachmentIds);
+  return {
+    messageId: row.messageId,
+    seq: row.seq,
+    target: row.target,
+    senderName: row.senderName,
+    senderType: row.senderType,
+    content: row.content,
+    createdAt: row.createdAt,
+    ...(attachmentIds ? { attachmentIds } : {}),
+  };
 }
 
 export function getDmThreadContextSnapshot(
@@ -162,7 +204,7 @@ export function ensureDmThreadContextSnapshot(
   const recentMessages = (
     db.prepare(
       `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
-              content, created_at as createdAt
+              content, created_at as createdAt, attachment_ids as attachmentIds
        FROM channel_messages
        WHERE channel_id = ?
          AND target = ?
@@ -170,12 +212,12 @@ export function ensureDmThreadContextSnapshot(
          AND seq < ?
        ORDER BY seq DESC
        LIMIT ?`,
-    ).all(params.channelId, params.directTarget, rootMessage.seq, recentLimit) as ActivationContextMessage[]
-  ).reverse();
+    ).all(params.channelId, params.directTarget, rootMessage.seq, recentLimit) as ActivationContextMessageRow[]
+  ).map(hydrateActivationContextMessage).reverse();
 
   const latestUserMessage = db.prepare(
     `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
-            content, created_at as createdAt
+            content, created_at as createdAt, attachment_ids as attachmentIds
      FROM channel_messages
      WHERE channel_id = ?
        AND target = ?
@@ -184,11 +226,11 @@ export function ensureDmThreadContextSnapshot(
        AND seq < ?
      ORDER BY seq DESC
      LIMIT 1`,
-  ).get(params.channelId, params.directTarget, rootMessage.seq) as ActivationContextMessage | undefined;
+  ).get(params.channelId, params.directTarget, rootMessage.seq) as ActivationContextMessageRow | undefined;
 
-  const fallbackTriggerMessage = latestUserMessage ?? db.prepare(
+  const fallbackTriggerMessageRow = latestUserMessage ?? db.prepare(
     `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
-            content, created_at as createdAt
+            content, created_at as createdAt, attachment_ids as attachmentIds
      FROM channel_messages
      WHERE channel_id = ?
        AND target = ?
@@ -196,7 +238,10 @@ export function ensureDmThreadContextSnapshot(
        AND seq < ?
      ORDER BY seq DESC
      LIMIT 1`,
-  ).get(params.channelId, params.directTarget, rootMessage.seq) as ActivationContextMessage | undefined;
+  ).get(params.channelId, params.directTarget, rootMessage.seq) as ActivationContextMessageRow | undefined;
+  const fallbackTriggerMessage = fallbackTriggerMessageRow
+    ? hydrateActivationContextMessage(fallbackTriggerMessageRow)
+    : undefined;
 
   const triggerMessageId = rootMessage.senderType === 'user' && rootMessage.target === params.directTarget
     ? rootMessage.messageId
@@ -256,13 +301,14 @@ export function buildTargetActivationContext(
   const recentMessages = (
     db.prepare(
       `SELECT message_id as messageId, seq, target, sender_name as senderName, sender_type as senderType,
-              content, created_at as createdAt
+              content, created_at as createdAt, attachment_ids as attachmentIds
        FROM channel_messages
        WHERE channel_id = ? AND target = ? AND ${threadClause} AND seq < ?
        ORDER BY seq DESC
        LIMIT ?`,
-    ).all(params.channelId, params.replyTarget, ...threadArgs, params.triggerSeq, recentLimit) as ActivationContextMessage[]
+    ).all(params.channelId, params.replyTarget, ...threadArgs, params.triggerSeq, recentLimit) as ActivationContextMessageRow[]
   )
+    .map(hydrateActivationContextMessage)
     .reverse()
     .filter((message) => hasVisiblePromptHistoryContent(message.content, message.senderType));
 

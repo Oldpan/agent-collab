@@ -37,7 +37,7 @@ type ChannelStreamEvent = {
 export function useChannelStream(options: UseChannelStreamOptions): {
   messages: ChannelMessage[];
   notices: ChannelNotice[];
-  sendMessage: (content: string, attachmentIds?: string[]) => Promise<void>;
+  sendMessage: (content: string, attachmentIds?: string[], sendAsTask?: boolean) => Promise<void>;
   loadMore: () => Promise<void>;
   hasMore: boolean;
   resetVersion: number;
@@ -204,10 +204,17 @@ export function useChannelStream(options: UseChannelStreamOptions): {
   }, [channelId, messages, hasMore]);
 
   const sendMessage = useCallback(
-    async (content: string, attachmentIds?: string[]) => {
+    async (content: string, attachmentIds?: string[], sendAsTask?: boolean) => {
       if (!channelId) return;
       const senderName = readUserName();
-      const result = await api.sendChannelMessage(channelId, content, senderName, undefined, attachmentIds);
+      const result = await api.sendChannelMessage(
+        channelId,
+        content,
+        senderName,
+        undefined,
+        attachmentIds,
+        sendAsTask,
+      );
       // Add message only if WS broadcast hasn't delivered it yet (race: WS can arrive before REST response)
       setMessages((prev) => {
         if (prev.some((m) => m.id === result.messageId)) return prev;

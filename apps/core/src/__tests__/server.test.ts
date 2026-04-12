@@ -9,6 +9,7 @@ import WebSocket from 'ws';
 import { findMentionedAgents } from '../web/channelMentions.js';
 import { buildChannelActivationPrompt, buildChannelActivationContextText } from '../web/channelActivationPrompt.js';
 import { buildTargetActivationContext, ensureDmThreadContextSnapshot } from '../web/activationContext.js';
+import { buildDirectActivationContextText } from '../web/directActivationPrompt.js';
 import { resolveDirectThreadRootMessage } from '../web/directThreadResolver.js';
 import { bumpAgentMessageCheckpoint } from '../web/messageCheckpoints.js';
 import {
@@ -26,6 +27,7 @@ import {
   syncTaskThreadOwner,
 } from '../web/threadTaskBindings.js';
 import { isValidTransition } from '../web/taskStatusTransitions.js';
+import { upsertAgentTaskLink } from '../web/agentTaskLinks.js';
 import { buildThreadShortId, type TaskInfo } from '@agent-collab/protocol';
 
 type TestTaskClaimRow = {
@@ -63,15 +65,98 @@ function buildAgentTaskKickoffPrompt(params: {
   taskNumber: number;
   title: string;
   description: string;
+  attachmentIds?: string[];
 }): string {
+  const attachmentLines = params.attachmentIds?.length
+    ? [
+        '',
+        `[Task attachment${params.attachmentIds.length > 1 ? 's' : ''}]`,
+        ...params.attachmentIds.map((attachmentId) => `attachment_id: ${attachmentId}`),
+        `Use view_file(attachment_id="<one of the IDs above>") to inspect the attached image${params.attachmentIds.length > 1 ? 's' : ''} before acting on this task.`,
+      ]
+    : [];
   return [
     `@${params.agentName} you have been assigned task #${params.taskNumber}: ${params.title}`,
     "",
     "Task brief / goal / done criteria:",
     params.description,
+    ...attachmentLines,
     "",
     "Please start working from this thread, post progress updates here, and move the task to in_review when the implementation is ready.",
   ].join("\n");
+}
+
+function parsePromptTextForStorage(promptText: string): { displayContent: string; attachmentIds: string[] } {
+  const attachNoteIdx = promptText.indexOf('\n\n[Attached image');
+  if (attachNoteIdx < 0) {
+    return { displayContent: promptText, attachmentIds: [] };
+  }
+  return {
+    displayContent: promptText.slice(0, attachNoteIdx),
+    attachmentIds: [...promptText.slice(attachNoteIdx).matchAll(/^ID: ([a-f0-9-]{36})$/gm)].map((match) => match[1]),
+  };
+}
+
+function buildDmTaskThreadTarget(primaryTarget: string, messageId: string): string {
+  return `${primaryTarget}:${buildThreadShortId(messageId)}`;
+}
+
+function buildDmTaskHandoffPrompt(params: {
+  taskNumber: number;
+  title: string;
+  description: string;
+  threadTarget: string;
+  rootMessageId: string;
+  triggerMessageTarget: string;
+  triggerSenderName: string;
+  triggerContent: string;
+  attachmentIds?: string[];
+}): string {
+  const lines = [
+    '[DM Task Thread Handoff]',
+    'A task was just created from the main DM. Execution now continues in this task thread as the expected next phase.',
+    '',
+    '[Current conversation target]',
+    `reply_target: ${params.threadTarget}`,
+    `Task: #${params.taskNumber} ${params.title}`,
+    `Task thread target: ${params.threadTarget}`,
+    `Task root message id: ${params.rootMessageId}`,
+    '',
+    'Task brief / goal / done criteria:',
+    params.description,
+  ];
+  if (params.attachmentIds?.length) {
+    lines.push(
+      '',
+      `[Task attachment${params.attachmentIds.length > 1 ? 's' : ''}]`,
+      ...params.attachmentIds.map((attachmentId) => `attachment_id: ${attachmentId}`),
+      `Use view_file(attachment_id="<one of the IDs above>") to inspect the attached image${params.attachmentIds.length > 1 ? 's' : ''} before acting on this task.`,
+    );
+  }
+  if (params.triggerContent.trim()) {
+    lines.push(
+      '',
+      '[Triggered message metadata]',
+      `target: ${params.triggerMessageTarget}`,
+      `sender: @${params.triggerSenderName}`,
+      '',
+      '[Triggered message body]',
+      params.triggerContent,
+    );
+  }
+  lines.push(
+    '',
+    'Rules:',
+    '- This task thread is now the primary work surface for the task.',
+    '- The task already exists and is already claimed for this run.',
+    '- Put substantive progress updates, tool results, and the final answer in this thread.',
+    '- Send one substantive final result for the task. After that, update the task to in_review unless the work is trivial or a human explicitly approved done.',
+    '- Do not append a second redundant completion-summary message after the substantive final result.',
+    '- Do not send any manual follow-up in the main DM after this handoff.',
+    '- The platform will mirror task lifecycle status in the main DM separately.',
+    '- Start working on the task now.',
+  );
+  return lines.join('\n');
 }
 
 function getTaskUserName(req: { headers: Record<string, unknown> }): string {
@@ -338,7 +423,7 @@ beforeAll(async () => {
     };
   });
 
-  app.post<{ Params: { id: string }; Body: { content: string; senderName?: string; replyTo?: string } }>(
+  app.post<{ Params: { id: string }; Body: { content: string; senderName?: string; replyTo?: string; attachmentIds?: string[]; sendAsTask?: boolean } }>(
     '/api/channels/:id/messages',
     async (req, reply) => {
       const channel = manager.getChannel(req.params.id);
@@ -346,21 +431,106 @@ beforeAll(async () => {
         reply.code(404);
         return { error: 'Channel not found' };
       }
-      const { content, senderName = 'User', replyTo } = req.body ?? {};
+      const { content, replyTo, attachmentIds } = req.body ?? {};
+      const senderName = getTaskUserName(req as { headers: Record<string, unknown> });
+      const sendAsTask = req.body?.sendAsTask === true;
       if (!content) {
         reply.code(400);
         return { error: 'content is required' };
       }
+      const normalizedContent = normalizeRequiredText(content);
+      if (sendAsTask && !normalizedContent) {
+        reply.code(400);
+        return { error: 'Task messages require non-empty text content' };
+      }
+      if (sendAsTask && replyTo) {
+        reply.code(400);
+        return { error: 'Send-as-task is only available for top-level channel messages' };
+      }
 
-    const now = Date.now();
-    const messageId = `msg-${randomUUID()}`;
-    const seq = allocateNextChannelMessageSeq(db, req.params.id);
+      const now = Date.now();
+      const messageId = `msg-${randomUUID()}`;
+      const seq = allocateNextChannelMessageSeq(db, req.params.id);
       const threadRootId = replyTo ?? null;
       const target = threadRootId ? `#${channel.name}:${threadRootId}` : `#${channel.name}`;
       db.prepare(
-        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-         VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, NULL, ?)`,
-      ).run(messageId, req.params.id, senderName, target, content, seq, now, threadRootId);
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id, attachment_ids)
+         VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, NULL, ?, ?)`,
+      ).run(
+        messageId,
+        req.params.id,
+        senderName,
+        target,
+        content,
+        seq,
+        now,
+        threadRootId,
+        attachmentIds?.length ? JSON.stringify(attachmentIds) : null,
+      );
+
+      if (sendAsTask) {
+        const mentionedAgents = findMentionedAgents(content, manager.listAgents(req.params.id));
+        if (mentionedAgents.length !== 1) {
+          reply.code(400);
+          return { error: 'Send-as-task requires exactly one explicit @agent mention' };
+        }
+        const agent = mentionedAgents[0];
+        const taskDescription = normalizedContent;
+        if (!taskDescription) {
+          reply.code(400);
+          return { error: 'Task messages require non-empty text content' };
+        }
+        const taskTitle = deriveTaskTitle(undefined, taskDescription);
+        if (!taskTitle) {
+          reply.code(400);
+          return { error: 'Unable to derive task title from message text' };
+        }
+        const taskId = randomUUID();
+        const taskNumber = allocateNextTaskNumber(db, req.params.id);
+        db.prepare(
+          `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
+                             claimed_by_agent_id, claimed_by_name, assigned_by_user, created_at, updated_at)
+           VALUES(?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?)`,
+        ).run(taskId, req.params.id, taskNumber, taskTitle, taskDescription, messageId, agent.agentId, agent.name, senderName, now, now);
+        db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(messageId);
+        upsertAgentTaskLink(db, {
+          agentId: agent.agentId,
+          taskId,
+          linkedAt: now,
+          assigned: true,
+        });
+        syncTaskThreadOwner(db, {
+          taskId,
+          agentId: agent.agentId,
+          lastActiveAt: now,
+        });
+
+        const kickoffSeq = allocateNextChannelMessageSeq(db, req.params.id);
+        const taskThreadRootId = buildThreadShortId(messageId);
+        db.prepare(
+          `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
+           VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, NULL, ?)`,
+        ).run(
+          `msg-${randomUUID()}`,
+          req.params.id,
+          senderName,
+          `#${channel.name}:${taskThreadRootId}`,
+          buildAgentTaskKickoffPrompt({
+            agentName: agent.name,
+            taskNumber,
+            title: taskTitle,
+            description: taskDescription,
+            attachmentIds,
+          }),
+          kickoffSeq,
+          now + 1,
+          taskThreadRootId,
+        );
+        manager.openAgentChannelThread(agent.agentId, req.params.id, taskThreadRootId);
+
+        reply.code(201);
+        return { messageId, seq };
+      }
 
       const mentionedAgents = findMentionedAgents(content, manager.listAgents(req.params.id));
       const pendingNotifications = new Map<string, { reason: 'mention' | 'thread_reply' | 'channel_activity'; role: 'owner' | 'participant' }>();
@@ -515,6 +685,156 @@ beforeAll(async () => {
     reply.code(201);
     return conv;
   });
+
+  app.post<{ Params: { id: string }; Body: { text?: string; clientMessageId?: string; sendAsTask?: boolean } }>(
+    '/api/conversations/:id/prompt',
+    async (req, reply) => {
+      const conv = manager.getConversation(req.params.id);
+      if (!conv) {
+        reply.code(404);
+        return { error: 'Not found' };
+      }
+
+      const text = req.body?.text?.trim();
+      if (!text) {
+        reply.code(400);
+        return { error: 'Prompt text is required' };
+      }
+
+      const sendAsTask = req.body?.sendAsTask === true;
+      const clientMessageId = typeof req.body?.clientMessageId === 'string' && req.body.clientMessageId.trim()
+        ? req.body.clientMessageId.trim()
+        : `client-${randomUUID()}`;
+
+      if (!sendAsTask) {
+        const result = await manager.submitPrompt(req.params.id, text, {
+          senderName: 'User',
+          clientMessageId,
+        });
+        return result;
+      }
+
+      if (!conv.agentId || conv.threadKind !== 'direct' || !conv.isPrimaryThread) {
+        reply.code(409);
+        return { error: 'Only primary private chats can send the next message as a task' };
+      }
+
+      const agent = manager.getAgent(conv.agentId);
+      if (!agent) {
+        reply.code(404);
+        return { error: 'Agent not found' };
+      }
+
+      const directTarget = (conv.replyTarget ?? '').trim();
+      if (!directTarget) {
+        reply.code(409);
+        return { error: 'Conversation has no DM target' };
+      }
+
+      const { displayContent, attachmentIds } = parsePromptTextForStorage(text);
+      const normalizedDisplayContent = normalizeRequiredText(displayContent);
+      if (!normalizedDisplayContent) {
+        reply.code(400);
+        return { error: 'Task messages require non-empty text content' };
+      }
+
+      const now = Date.now();
+      const dmChannelId = `dm:${conv.agentId}`;
+      const msgSeq = allocateNextChannelMessageSeq(db, dmChannelId);
+      db.prepare(
+        `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, attachment_ids, message_kind)
+         VALUES(?, ?, 'user', 'User', 'user', ?, ?, ?, ?, NULL, ?, 'task')`,
+      ).run(
+        clientMessageId,
+        dmChannelId,
+        directTarget,
+        normalizedDisplayContent,
+        msgSeq,
+        now,
+        attachmentIds.length ? JSON.stringify(attachmentIds) : null,
+      );
+
+      const taskId = randomUUID();
+      const taskNumber = allocateNextTaskNumber(db, dmChannelId);
+      const taskTitle = deriveTaskTitle(undefined, normalizedDisplayContent);
+      if (!taskTitle) {
+        reply.code(400);
+        return { error: 'Unable to derive task title from message text' };
+      }
+      db.prepare(
+        `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
+                           claimed_by_agent_id, claimed_by_name, assigned_by_user, created_at, updated_at)
+         VALUES(?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?)`,
+      ).run(taskId, dmChannelId, taskNumber, taskTitle, normalizedDisplayContent, clientMessageId, conv.agentId, agent.name, 'User', now, now);
+      upsertAgentTaskLink(db, {
+        agentId: conv.agentId,
+        taskId,
+        linkedAt: now,
+        assigned: true,
+      });
+      syncTaskThreadOwner(db, {
+        taskId,
+        agentId: conv.agentId,
+        lastActiveAt: now,
+      });
+
+      const threadRootId = buildThreadShortId(clientMessageId);
+      const threadTarget = buildDmTaskThreadTarget(directTarget, clientMessageId);
+      ensureDmThreadContextSnapshot(db, {
+        channelId: dmChannelId,
+        directTarget,
+        threadRootId,
+        rootMessageId: clientMessageId,
+      });
+      const thread = manager.openAgentDirectThread(conv.agentId, conv.userId ?? null, threadRootId);
+      if (thread) {
+        const activationContext = buildTargetActivationContext(db, {
+          agentId: conv.agentId,
+          channelId: dmChannelId,
+          replyTarget: threadTarget,
+          triggerSeq: msgSeq + 1,
+          threadRootId,
+        });
+        void manager.submitPrompt(
+          thread.id,
+          buildDmTaskHandoffPrompt({
+            taskNumber,
+            title: taskTitle,
+            description: normalizedDisplayContent,
+            threadTarget,
+            rootMessageId: clientMessageId,
+            triggerMessageTarget: directTarget,
+            triggerSenderName: 'User',
+            triggerContent: normalizedDisplayContent,
+            attachmentIds,
+          }),
+          {
+            recordAsUserMessage: false,
+            activationContextText: buildDirectActivationContextText({
+              target: threadTarget,
+              recentMessages: activationContext.recentMessages,
+              unreadCount: activationContext.unreadCount,
+              oldestVisibleSeq: activationContext.oldestVisibleSeq,
+              rootMessage: activationContext.rootMessage,
+              dmContextSnapshot: activationContext.dmContextSnapshot,
+            }) || undefined,
+            activationMetadata: {
+              expectedTermination: {
+                kind: 'dm_handoff_bootstrap',
+                stopReason: 'handoff_bootstrap',
+              },
+            },
+          },
+        ).catch(() => {});
+      }
+
+      return {
+        queued: false,
+        skippedPrimaryDispatch: true,
+        handoffStarted: Boolean(thread),
+      };
+    },
+  );
 
   app.post<{ Params: { id: string } }>('/api/agents/:id/open-thread', async (req, reply) => {
     const thread = manager.openAgentThread(req.params.id);
@@ -1355,6 +1675,96 @@ describe('REST API', () => {
       '你不需要在本机启动fastapi，使用远程已经搭建好的就行',
       '收到，我改走远端服务。',
     ]);
+  });
+
+  it('POST /api/conversations/:id/prompt sendAsTask 应把当前 DM 用户消息直接创建为 task root，并启动 task-thread', async () => {
+    const now = Date.now();
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-dm-task-send', 'dmTaskUser', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+
+    const agent = manager.createAgent({
+      name: 'DmTaskBot',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/dm-task-bot',
+    });
+    const conversation = manager.openAgentThread(agent.agentId);
+    if (!conversation) throw new Error('missing primary dm conversation');
+    db.prepare(
+      `UPDATE conversations
+       SET reply_target = ?, user_id = ?
+       WHERE id = ?`,
+    ).run('dm:@dmTaskUser', 'user-dm-task-send', conversation.id);
+
+    const clientMessageId = 'client-dm-task-0000-0000-0000-000000000000';
+    const result = await fetchJson(`/api/conversations/${conversation.id}/prompt`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        text: '请把这个需求作为一个 task 去完成\n\n[Attached image]\nID: 11111111-1111-1111-1111-111111111111\nUse view_file(attachment_id="11111111-1111-1111-1111-111111111111") to view it.',
+        clientMessageId,
+        sendAsTask: true,
+      }),
+    });
+
+    expect(result.status).toBe(200);
+    expect(result.body.queued).toBe(false);
+    expect(result.body.skippedPrimaryDispatch).toBe(true);
+    expect(result.body.handoffStarted).toBe(true);
+
+    const dmChannelId = `dm:${agent.agentId}`;
+    const taskRow = db.prepare(
+      `SELECT task_number as taskNumber, status, claimed_by_agent_id as claimedByAgentId, message_id as messageId
+       FROM tasks
+       WHERE channel_id = ? AND message_id = ?`,
+    ).get(dmChannelId, clientMessageId) as {
+      taskNumber: number;
+      status: string;
+      claimedByAgentId: string | null;
+      messageId: string;
+    } | undefined;
+    expect(taskRow).toBeTruthy();
+    if (!taskRow) throw new Error('missing dm send-as-task row');
+    expect(taskRow.status).toBe('in_progress');
+    expect(taskRow.claimedByAgentId).toBe(agent.agentId);
+
+    const messageRow = db.prepare(
+      `SELECT target, content, message_kind as messageKind, attachment_ids as attachmentIds
+       FROM channel_messages
+       WHERE message_id = ?`,
+    ).get(clientMessageId) as { target: string; content: string; messageKind: string | null; attachmentIds: string | null } | undefined;
+    expect(messageRow?.target).toBe('dm:@dmTaskUser');
+    expect(messageRow?.content).toBe('请把这个需求作为一个 task 去完成');
+    expect(messageRow?.messageKind).toBe('task');
+    expect(messageRow?.attachmentIds).toBe('["11111111-1111-1111-1111-111111111111"]');
+
+    const primaryRunCount = db.prepare(
+      `SELECT COUNT(*) as count
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.id = ?`,
+    ).get(conversation.id) as { count: number };
+    expect(primaryRunCount.count).toBe(0);
+
+    const threadRootId = buildThreadShortId(clientMessageId);
+    const threadConversation = manager.listConversations().find((item) =>
+      item.agentId === agent.agentId && item.threadKind === 'direct' && item.threadRootId === threadRootId);
+    expect(threadConversation).toBeTruthy();
+    if (!threadConversation) throw new Error('missing dm task thread conversation');
+
+    const threadRun = db.prepare(
+      `SELECT r.prompt_text as promptText
+       FROM runs r
+       JOIN conversations c ON c.session_key = r.session_key
+       WHERE c.id = ?
+       ORDER BY r.started_at DESC
+       LIMIT 1`,
+    ).get(threadConversation.id) as { promptText: string } | undefined;
+    expect(threadRun?.promptText).toContain('[DM Task Thread Handoff]');
+    expect(threadRun?.promptText).toContain('请把这个需求作为一个 task 去完成');
+    expect(threadRun?.promptText).toContain('attachment_id: 11111111-1111-1111-1111-111111111111');
   });
 
   it('POST /api/channels/:id/agents/:agentId/open-session 应拒绝 stale 8-char threadRootId，且不写出 legacy conversation', async () => {
@@ -3023,6 +3433,114 @@ describe('REST API', () => {
       `SELECT message_kind as messageKind FROM channel_messages WHERE message_id = 'claimfeed-0000-0000-0000-000000000000'`,
     ).get() as { messageKind: string | null };
     expect(messageRow.messageKind).toBe('task');
+  });
+
+  it('POST /api/channels/:id/messages sendAsTask 应把根消息转成 task、指派唯一 @agent，并只启动 task thread', async () => {
+    const agent = manager.createAgent({
+      name: 'TaskFromSendBot',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/task-from-send-bot',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+
+    const result = await fetchJson('/api/channels/default/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': 'Alice',
+      },
+      body: JSON.stringify({
+        content: '@TaskFromSendBot 请直接把这个需求作为 task 完成',
+        attachmentIds: ['33333333-3333-3333-3333-333333333333'],
+        sendAsTask: true,
+      }),
+    });
+
+    expect(result.status).toBe(201);
+
+    const taskRow = db.prepare(
+      `SELECT task_number as taskNumber, status, claimed_by_agent_id as claimedByAgentId, message_id as messageId
+       FROM tasks
+       WHERE channel_id = 'default' AND message_id = ?`,
+    ).get(result.body.messageId) as {
+      taskNumber: number;
+      status: string;
+      claimedByAgentId: string | null;
+      messageId: string;
+    } | undefined;
+    expect(taskRow).toBeTruthy();
+    if (!taskRow) throw new Error('missing channel send-as-task row');
+    expect(taskRow.status).toBe('in_progress');
+    expect(taskRow.claimedByAgentId).toBe(agent.agentId);
+
+    const rootMessage = db.prepare(
+      `SELECT message_kind as messageKind, content, attachment_ids as attachmentIds
+       FROM channel_messages
+       WHERE message_id = ?`,
+    ).get(result.body.messageId) as { messageKind: string | null; content: string; attachmentIds: string | null } | undefined;
+    expect(rootMessage?.messageKind).toBe('task');
+    expect(rootMessage?.content).toContain('@TaskFromSendBot');
+    expect(rootMessage?.attachmentIds).toBe('["33333333-3333-3333-3333-333333333333"]');
+
+    const kickoff = db.prepare(
+      `SELECT content, thread_root_id as threadRootId
+       FROM channel_messages
+       WHERE channel_id = 'default' AND sender_name = 'Alice' AND thread_root_id = ?
+       ORDER BY seq DESC
+       LIMIT 1`,
+    ).get(buildThreadShortId(result.body.messageId)) as { content: string; threadRootId: string } | undefined;
+    expect(kickoff).toBeTruthy();
+    if (!kickoff) throw new Error('missing kickoff reply');
+    expect(kickoff.content).toContain('@TaskFromSendBot');
+    expect(kickoff.content).toContain('Task brief / goal / done criteria:');
+    expect(kickoff.content).toContain('attachment_id: 33333333-3333-3333-3333-333333333333');
+
+    const rootBranchConversation = manager.listConversations().find((item) =>
+      item.agentId === agent.agentId && item.channelId === 'default' && item.threadKind === 'branch' && item.threadRootId == null);
+    expect(rootBranchConversation).toBeFalsy();
+
+    const taskThreadConversation = manager.listConversations().find((item) =>
+      item.agentId === agent.agentId
+      && item.channelId === 'default'
+      && item.threadKind === 'branch'
+      && item.threadRootId === buildThreadShortId(result.body.messageId));
+    expect(taskThreadConversation).toBeTruthy();
+  });
+
+  it('POST /api/channels/:id/messages sendAsTask 应要求恰好一个显式 @agent', async () => {
+    const firstAgent = manager.createAgent({
+      name: 'TaskSendOne',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/task-send-one',
+      channelId: 'default',
+    });
+    const secondAgent = manager.createAgent({
+      name: 'TaskSendTwo',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/task-send-two',
+      channelId: 'default',
+    });
+    manager.joinChannel(firstAgent.agentId, 'default');
+    manager.joinChannel(secondAgent.agentId, 'default');
+
+    const result = await fetchJson('/api/channels/default/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-user-name': 'Alice',
+      },
+      body: JSON.stringify({
+        content: '@TaskSendOne @TaskSendTwo 一起看下这个 task',
+        sendAsTask: true,
+      }),
+    });
+
+    expect(result.status).toBe(400);
+    expect(result.body.error).toBe('Send-as-task requires exactly one explicit @agent mention');
   });
 
   it('POST /api/channels/:id/tasks 应要求 description，且创建 dedicated task message', async () => {

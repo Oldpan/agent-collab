@@ -1,7 +1,7 @@
 import { Button } from "@/components/ui/button";
 import { clearDraft, readDraft, writeDraft } from "@/lib/drafts";
 import { cn } from "@/lib/utils";
-import { SendIcon, SquareIcon, PaperclipIcon, XIcon } from "lucide-react";
+import { SendIcon, SquareIcon, PaperclipIcon, XIcon, ListTodoIcon } from "lucide-react";
 import { useCallback, useEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { ChatStatus } from "@/hooks/types";
 import { uploadAttachment } from "@/lib/api";
@@ -12,7 +12,8 @@ export type PromptComposerProps = {
   showCancel?: boolean;
   disableInput?: boolean;
   draftKey?: string;
-  onSend: (text: string, attachmentIds?: string[]) => boolean;
+  showSendAsTaskButton?: boolean;
+  onSend: (text: string, attachmentIds?: string[], sendAsTask?: boolean) => boolean;
   onCancel: () => void;
 };
 
@@ -23,6 +24,7 @@ export function PromptComposer({
   showCancel,
   disableInput,
   draftKey,
+  showSendAsTaskButton = false,
   onSend,
   onCancel,
 }: PromptComposerProps) {
@@ -32,10 +34,12 @@ export function PromptComposer({
   const [text, setText] = useState(() => readDraft(draftKey));
   const [pendingFiles, setPendingFiles] = useState<Array<{ id: string; name: string }>>([]);
   const [uploading, setUploading] = useState(false);
+  const [sendAsTask, setSendAsTask] = useState(false);
 
   useEffect(() => {
     const nextText = readDraft(draftKey);
     setText(nextText);
+    setSendAsTask(false);
     const textarea = textareaRef.current;
     if (!textarea) return;
     requestAnimationFrame(() => {
@@ -43,6 +47,12 @@ export function PromptComposer({
       textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
     });
   }, [draftKey]);
+
+  useEffect(() => {
+    if (!showSendAsTaskButton) {
+      setSendAsTask(false);
+    }
+  }, [showSendAsTaskButton]);
 
   const handleFileChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files ?? []);
@@ -66,9 +76,9 @@ export function PromptComposer({
   const handleSubmit = useCallback(() => {
     const textarea = textareaRef.current;
     const trimmed = text.trim();
-    if (!trimmed && pendingFiles.length === 0) return;
+    if ((!trimmed && pendingFiles.length === 0) || (sendAsTask && !trimmed)) return;
     const ids = pendingFiles.map((f) => f.id);
-    const accepted = onSend(trimmed, ids.length ? ids : undefined);
+    const accepted = onSend(trimmed, ids.length ? ids : undefined, sendAsTask || undefined);
     if (!accepted) return;
     setText("");
     clearDraft(draftKey);
@@ -76,7 +86,8 @@ export function PromptComposer({
       textarea.style.height = "auto";
     }
     setPendingFiles([]);
-  }, [draftKey, onSend, pendingFiles, text]);
+    setSendAsTask(false);
+  }, [draftKey, onSend, pendingFiles, sendAsTask, text]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -216,6 +227,26 @@ export function PromptComposer({
           >
             <SendIcon className="size-4" />
           </Button>
+          {showSendAsTaskButton && (
+            <Button
+              size="icon"
+              type="button"
+              variant="outline"
+              onClick={() => setSendAsTask((current) => !current)}
+              className={cn(
+                "rounded-sm border-2 border-zinc-900 text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+                sendAsTask
+                  ? "bg-[#d8f8c8] hover:bg-[#b8f0a8]"
+                  : "bg-white hover:bg-[#eef7ff]",
+              )}
+              title={sendAsTask ? "Next send will create a task" : "Send next message as a task"}
+              aria-label="Send next message as a task"
+              aria-pressed={sendAsTask}
+              disabled={shouldDisableInput || uploading}
+            >
+              <ListTodoIcon className="size-4" />
+            </Button>
+          )}
         </div>
       </div>
     </div>

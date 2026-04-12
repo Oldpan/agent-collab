@@ -66,11 +66,20 @@ export async function deleteConversation(id: string): Promise<void> {
   if (!res.ok) throw new Error(`Failed to delete conversation: ${res.statusText}`);
 }
 
-export async function sendConversationPrompt(id: string, text: string, clientMessageId?: string): Promise<{ queued: boolean }> {
+export async function sendConversationPrompt(
+  id: string,
+  text: string,
+  clientMessageId?: string,
+  sendAsTask?: boolean,
+): Promise<{ queued: boolean; skippedPrimaryDispatch?: boolean; handoffStarted?: boolean }> {
   const res = await fetch(`${API_BASE}/conversations/${id}/prompt`, {
     method: "POST",
     headers: withAuthHeaders({ "Content-Type": "application/json" }),
-    body: JSON.stringify({ text, clientMessageId }),
+    body: JSON.stringify({
+      text,
+      clientMessageId,
+      ...(sendAsTask ? { sendAsTask: true } : {}),
+    }),
   });
   if (!res.ok) {
     const err = (await res.json().catch(() => ({}))) as { error?: string };
@@ -765,6 +774,7 @@ export async function sendChannelMessage(
   senderName?: string,
   replyTo?: string,
   attachmentIds?: string[],
+  sendAsTask?: boolean,
 ): Promise<{ messageId: string; seq: number }> {
   const res = await fetch(`${API_BASE}/channels/${encodeURIComponent(channelId)}/messages`, {
     method: 'POST',
@@ -773,9 +783,13 @@ export async function sendChannelMessage(
       content, senderName,
       ...(replyTo ? { replyTo } : {}),
       ...(attachmentIds?.length ? { attachmentIds } : {}),
+      ...(sendAsTask ? { sendAsTask: true } : {}),
     }),
   });
-  if (!res.ok) throw new Error(`Failed to send channel message: ${res.statusText}`);
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Failed to send channel message: ${res.statusText}`);
+  }
   return res.json();
 }
 

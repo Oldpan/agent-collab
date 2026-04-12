@@ -3,7 +3,7 @@ import type {
   DmActiveTaskThreadSummary,
   DmThreadContextSnapshot,
 } from './activationContext.js';
-import { buildExactTargetHistoryContextText } from './channelActivationPrompt.js';
+import { buildAttachmentReferenceContextText, buildExactTargetHistoryContextText } from './channelActivationPrompt.js';
 import { sanitizePromptHistoryContent } from './promptHistorySanitizer.js';
 
 type DirectActivationPromptParams = {
@@ -51,11 +51,16 @@ export function buildDirectActivationContextText(params: DirectActivationContext
     const triggerTag = params.dmContextSnapshot?.triggerMessageId === params.rootMessage.messageId ? ' [Trigger]' : '';
     const rootContent = sanitizePromptHistoryContent(params.rootMessage.content, params.rootMessage.senderType);
     if (rootContent) {
+      const rootLines = [
+        '[Thread root message]',
+        `@${params.rootMessage.senderName}${triggerTag}: ${rootContent}`,
+      ];
+      const attachmentContext = buildAttachmentReferenceContextText(params.rootMessage.attachmentIds);
+      if (attachmentContext) {
+        rootLines.push('', attachmentContext);
+      }
       sections.push(
-        [
-          '[Thread root message]',
-          `@${params.rootMessage.senderName}${triggerTag}: ${rootContent}`,
-        ].join('\n'),
+        rootLines.join('\n'),
       );
     }
   }
@@ -75,13 +80,19 @@ export function buildDirectActivationContextText(params: DirectActivationContext
       })
       .filter((message): message is ActivationContextMessage => Boolean(message));
     if (visibleDmMessages.length) {
+      const formattedMessages = visibleDmMessages.map((message) => {
+        const triggerTag = params.dmContextSnapshot?.triggerMessageId === message.messageId ? ' [Trigger]' : '';
+        const lines = [`@${message.senderName}${triggerTag}: ${message.content}`];
+        const attachmentContext = buildAttachmentReferenceContextText(message.attachmentIds);
+        if (attachmentContext) {
+          lines.push(attachmentContext);
+        }
+        return lines.join('\n');
+      });
       sections.push(
         [
           '[Context from DM]',
-          ...visibleDmMessages.map((message) => {
-            const triggerTag = params.dmContextSnapshot?.triggerMessageId === message.messageId ? ' [Trigger]' : '';
-            return `@${message.senderName}${triggerTag}: ${message.content}`;
-          }),
+          formattedMessages.join('\n\n'),
         ].join('\n'),
       );
     }

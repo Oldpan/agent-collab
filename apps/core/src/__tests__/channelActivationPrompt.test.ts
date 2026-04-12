@@ -54,4 +54,26 @@ describe('buildChannelActivationContextText', () => {
     expect(text).toContain('Task brief / goal / done criteria:');
     expect(text).toContain('Goal: define the task brief flow.');
   });
+
+  it('应在消息上下文中暴露 attachment_id 引用', () => {
+    const text = buildChannelActivationContextText({
+      target: '#default',
+      recentMessages: [
+        {
+          messageId: 'with-attachment',
+          seq: 7,
+          target: '#default',
+          senderName: 'User',
+          senderType: 'user',
+          content: '请按这张图执行。',
+          createdAt: 7000,
+          attachmentIds: ['11111111-1111-1111-1111-111111111111'],
+        },
+      ],
+    });
+
+    expect(text).toContain('[Message attachments]');
+    expect(text).toContain('attachment_id: 11111111-1111-1111-1111-111111111111');
+    expect(text).toContain('Use view_file(attachment_id="<one of the IDs above>")');
+  });
 });

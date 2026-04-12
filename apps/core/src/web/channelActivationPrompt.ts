@@ -144,6 +144,15 @@ export function buildExactTargetHistoryContextText(params: ExactTargetHistoryCon
   return parts.join('\n\n');
 }
 
+export function buildAttachmentReferenceContextText(attachmentIds?: string[]): string {
+  if (!attachmentIds?.length) return '';
+  return [
+    `[Message attachment${attachmentIds.length > 1 ? 's' : ''}]`,
+    ...attachmentIds.map((attachmentId) => `attachment_id: ${attachmentId}`),
+    `Use view_file(attachment_id="<one of the IDs above>") to inspect the attached image${attachmentIds.length > 1 ? 's' : ''}.`,
+  ].join('\n');
+}
+
 function formatPromptMessage(message: ActivationContextMessage): string {
   const visibleContent = sanitizePromptHistoryContent(message.content, message.senderType);
   const firstLine = [
@@ -155,12 +164,17 @@ function formatPromptMessage(message: ActivationContextMessage): string {
     `sender: @${message.senderName}`,
   ];
   if (message.senderType === 'agent') secondLineParts.push('sender_type: agent');
-  return [
+  const parts = [
     '[Message metadata]',
     firstLine,
     secondLineParts.join('  '),
     '',
     '[Message body]',
     visibleContent,
-  ].join('\n');
+  ];
+  const attachmentContext = buildAttachmentReferenceContextText(message.attachmentIds);
+  if (attachmentContext) {
+    parts.push('', attachmentContext);
+  }
+  return parts.join('\n');
 }

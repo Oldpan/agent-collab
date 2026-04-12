@@ -3,7 +3,7 @@ import { clearDraft, readDraft, writeDraft } from "@/lib/drafts";
 import { cn } from "@/lib/utils";
 import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon, Settings2Icon, MessageSquareOffIcon, ListTodoIcon, PaperclipIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildThreadShortId, type ChannelInfo, type AgentInfo, type ConversationInfo, type ChannelMemberStatus, type ConversationStatus } from "@agent-collab/protocol";
+import { buildThreadShortId, extractMentionedNames, type ChannelInfo, type AgentInfo, type ConversationInfo, type ChannelMemberStatus, type ConversationStatus } from "@agent-collab/protocol";
 import { useConversationsStore } from "@/hooks/useConversations";
 import type { ChannelMessage } from "@/lib/api";
 import { addAgentToChannel, clearChannelChat, listChannelConversations, removeAgentFromChannel, claimMessageAsTask, getChannelMemberStatuses, uploadAttachment } from "@/lib/api";
@@ -363,7 +363,7 @@ function ChannelComposer({
   channelMembers,
   draftKey,
 }: {
-  onSend: (text: string, attachmentIds?: string[]) => void;
+  onSend: (text: string, attachmentIds?: string[], sendAsTask?: boolean) => Promise<void>;
   channelMembers: AgentInfo[];
   draftKey: string;
 }) {
@@ -376,6 +376,15 @@ function ChannelComposer({
   const [mentionIndex, setMentionIndex] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const shiftPressedRef = useRef(false);
+  const [sendAsTask, setSendAsTask] = useState(false);
+  const channelMemberNameSet = useMemo(
+    () => new Set(channelMembers.map((member) => member.name.toLowerCase())),
+    [channelMembers],
+  );
+
+  useEffect(() => {
+    setSendAsTask(false);
+  }, [draftKey]);
 
   const mentionCandidates = useMemo(() => {
     if (mentionQuery === null) return [];
@@ -457,21 +466,34 @@ function ChannelComposer({
 
   const handleSubmit = useCallback(async () => {
     const trimmed = text.trim();
-    if ((!trimmed && pendingFiles.length === 0) || sending) return;
+    if ((!trimmed && pendingFiles.length === 0) || (sendAsTask && !trimmed) || sending) return;
+    if (sendAsTask) {
+      const mentionedMemberNames = new Set(
+        extractMentionedNames(trimmed)
+          .filter((name) => channelMemberNameSet.has(name)),
+      );
+      if (mentionedMemberNames.size !== 1) {
+        alert("Task send requires exactly one explicit @agent mention in the message.");
+        return;
+      }
+    }
     setSending(true);
     const ids = pendingFiles.map((f) => f.id);
-    setText("");
-    clearDraft(draftKey);
-    setPendingFiles([]);
-    setMentionQuery(null);
-    const ta = textareaRef.current;
-    if (ta) ta.style.height = "auto";
     try {
-      await onSend(trimmed, ids.length ? ids : undefined);
+      await onSend(trimmed, ids.length ? ids : undefined, sendAsTask || undefined);
+      setText("");
+      clearDraft(draftKey);
+      setPendingFiles([]);
+      setMentionQuery(null);
+      setSendAsTask(false);
+      const ta = textareaRef.current;
+      if (ta) ta.style.height = "auto";
+    } catch (error) {
+      alert(String((error as Error)?.message ?? error));
     } finally {
       setSending(false);
     }
-  }, [draftKey, text, pendingFiles, onSend, sending]);
+  }, [channelMemberNameSet, draftKey, onSend, pendingFiles, sendAsTask, sending, text]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -614,6 +636,24 @@ function ChannelComposer({
           disabled={sending || uploading}
         >
           <SendIcon className="size-4" />
+        </Button>
+        <Button
+          size="icon"
+          type="button"
+          variant="outline"
+          onClick={() => setSendAsTask((current) => !current)}
+          className={cn(
+            "shrink-0 self-center rounded-sm border-2 border-zinc-900 text-zinc-950 shadow-[2px_2px_0_0_rgba(0,0,0,0.12)]",
+            sendAsTask
+              ? "bg-[#d8f8c8] hover:bg-[#b8f0a8]"
+              : "bg-white hover:bg-[#eef7ff]",
+          )}
+          title={sendAsTask ? "Next send will create a task" : "Send next message as a task"}
+          aria-label="Send next message as a task"
+          aria-pressed={sendAsTask}
+          disabled={sending || uploading}
+        >
+          <ListTodoIcon className="size-4" />
         </Button>
       </div>
     </div>

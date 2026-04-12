@@ -65,7 +65,8 @@ function readPendingPromptState(conversationId: string): PendingPromptState {
           return typeof value.id === "string"
             && typeof value.text === "string"
             && typeof value.createdAt === "number"
-            && (value.attachmentIds == null || Array.isArray(value.attachmentIds));
+            && (value.attachmentIds == null || Array.isArray(value.attachmentIds))
+            && (value.sendAsTask == null || typeof value.sendAsTask === "boolean");
         })
       : [];
     return {
@@ -102,7 +103,7 @@ function buildPromptTextWithAttachments(text: string, attachmentIds?: string[]):
 
 function mergePendingPrompts(
   items: PendingLocalPrompt[],
-): { displayText: string; promptText: string; attachmentIds: string[] } {
+): { displayText: string; promptText: string; attachmentIds: string[]; sendAsTask: boolean } {
   const displayParts = items
     .map((item) => item.text.trim())
     .filter((text) => text.length > 0);
@@ -112,6 +113,27 @@ function mergePendingPrompts(
     displayText,
     promptText: buildPromptTextWithAttachments(displayText, attachmentIds),
     attachmentIds,
+    sendAsTask: items.length === 1 && items[0]?.sendAsTask === true,
+  };
+}
+
+function splitPendingPromptBatch(items: PendingLocalPrompt[]): {
+  batch: PendingLocalPrompt[];
+  remaining: PendingLocalPrompt[];
+} {
+  const firstTaskIndex = items.findIndex((item) => item.sendAsTask === true);
+  if (firstTaskIndex === -1) {
+    return { batch: items, remaining: [] };
+  }
+  if (firstTaskIndex === 0) {
+    return {
+      batch: items.slice(0, 1),
+      remaining: items.slice(1),
+    };
+  }
+  return {
+    batch: items.slice(0, firstTaskIndex),
+    remaining: items.slice(firstTaskIndex),
   };
 }
 
@@ -243,7 +265,7 @@ type UseConversationStreamReturn = {
   isFlushingPending: boolean;
   pendingApproval: PendingApproval | null;
   contextSnapshot: ConversationContextSnapshot | null;
-  sendPrompt: (text: string, attachmentIds?: string[]) => boolean;
+  sendPrompt: (text: string, attachmentIds?: string[], sendAsTask?: boolean) => boolean;
   respondApproval: (requestId: string, decision: "allow" | "deny") => void;
   cancel: () => void;
 };
@@ -360,12 +382,13 @@ export function useConversationStream(
     ));
   }, []);
 
-  const enqueuePendingPrompt = useCallback((text: string, attachmentIds?: string[]) => {
+  const enqueuePendingPrompt = useCallback((text: string, attachmentIds?: string[], sendAsTask?: boolean) => {
     const pendingPrompt: PendingLocalPrompt = {
       id: createClientMessageId(),
       text,
       createdAt: Date.now(),
       ...(attachmentIds?.length ? { attachmentIds } : {}),
+      ...(sendAsTask ? { sendAsTask: true } : {}),
     };
     setPendingState((current) => ({
       items: [...current.items, pendingPrompt],
@@ -378,11 +401,11 @@ export function useConversationStream(
     const currentPending = pendingStateRef.current;
     if (currentPending.items.length === 0 || currentPending.awaitingIdle || isFlushingPending) return;
 
-    const batch = currentPending.items;
+    const { batch, remaining } = splitPendingPromptBatch(currentPending.items);
     const flushMessageId = createClientMessageId();
-    const { displayText, promptText, attachmentIds } = mergePendingPrompts(batch);
+    const { displayText, promptText, attachmentIds, sendAsTask } = mergePendingPrompts(batch);
     setIsFlushingPending(true);
-    setPendingState({ items: [], awaitingIdle: false });
+    setPendingState({ items: remaining, awaitingIdle: false });
     appendOptimisticUserMessage({
       id: flushMessageId,
       text: displayText,
@@ -391,8 +414,8 @@ export function useConversationStream(
     setStatus("submitted");
 
     try {
-      const result = await api.sendConversationPrompt(conversationId, promptText, flushMessageId);
-      setStatus(result.queued ? "queued" : "submitted");
+      const result = await api.sendConversationPrompt(conversationId, promptText, flushMessageId, sendAsTask || undefined);
+      setStatus(result.skippedPrimaryDispatch ? "idle" : result.queued ? "queued" : "submitted");
     } catch (error) {
       removeOptimisticUserMessage(flushMessageId);
       setPendingState((current) => ({
@@ -1194,7 +1217,7 @@ export function useConversationStream(
   }, []);
 
   const sendPrompt = useCallback(
-    (text: string, attachmentIds?: string[]) => {
+    (text: string, attachmentIds?: string[], sendAsTask?: boolean) => {
       if (!conversationId) {
         setStatus("error");
         return false;
@@ -1207,14 +1230,14 @@ export function useConversationStream(
         || status === "recovering"
         || status === "awaiting_approval";
       if (pendingStateRef.current.items.length > 0 && !isFlushingPending) {
-        enqueuePendingPrompt(text, attachmentIds);
+        enqueuePendingPrompt(text, attachmentIds, sendAsTask);
         if (!isBusy) {
           releasePendingBarrier();
         }
         return true;
       }
       if (isBusy) {
-        enqueuePendingPrompt(text, attachmentIds);
+        enqueuePendingPrompt(text, attachmentIds, sendAsTask);
         return true;
       }
 
@@ -1225,9 +1248,9 @@ export function useConversationStream(
 
       setStatus("submitted");
       void api
-        .sendConversationPrompt(conversationId, promptText, id)
+        .sendConversationPrompt(conversationId, promptText, id, sendAsTask || undefined)
         .then((result) => {
-          setStatus(result.queued ? "queued" : "submitted");
+          setStatus(result.skippedPrimaryDispatch ? "idle" : result.queued ? "queued" : "submitted");
         })
         .catch((error) => {
           rollback();

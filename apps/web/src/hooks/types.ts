@@ -61,6 +61,7 @@ export type PendingLocalPrompt = {
   text: string;
   createdAt: number;
   attachmentIds?: string[];
+  sendAsTask?: boolean;
 };
 
 /** A tool call within an assistant message */
