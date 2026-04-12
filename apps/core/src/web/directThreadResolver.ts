@@ -1,6 +1,5 @@
 import type { Db } from '@agent-collab/runtime-acp';
 import {
-  buildLegacyThreadShortId,
   buildThreadShortId,
   normalizeThreadShortIdInput,
 } from '@agent-collab/protocol';
@@ -79,13 +78,12 @@ export function resolveDirectThreadRootMessage(
       `SELECT 1
        FROM channel_messages
        WHERE channel_id = ?
-         AND thread_root_id IN (?, ?)
+         AND thread_root_id = ?
          AND target LIKE ?
        LIMIT 1`,
     ).get(
       dmChannelId,
       buildThreadShortId(rootMessageId),
-      buildLegacyThreadShortId(rootMessageId),
       `${params.directTarget}:%`,
     ) as { 1: number } | undefined;
     if (!hasDirectThreadMessages) return null;

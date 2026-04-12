@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { buildThreadShortId } from '@agent-collab/protocol';
 import { openDb, migrate } from '@agent-collab/runtime-acp';
 import { describe, it, expect } from 'vitest';
 import { createTestDb } from './helpers.js';
@@ -317,10 +318,12 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('v51 migration 应保守清理 legacy bindings，只 demote 明确的 non-root owner', () => {
+  it('v51 migration 应 canonicalize task-root owners 到 16-char thread id，并只 demote 明确的 non-root owner', () => {
     const dbPath = join(tmpdir(), `migration-v51-${randomUUID()}.db`);
     const db = openDb(dbPath);
     const now = Date.now();
+    const task1ThreadRootId = buildThreadShortId('feedbeef-0000-0000-0000-000000000000');
+    const task2ThreadRootId = buildThreadShortId('ambig001-0000-0000-0000-000000000000');
 
     db.exec(`
       CREATE TABLE schema_version(version INTEGER NOT NULL);
@@ -417,18 +420,22 @@ describe('migrations', () => {
     const demotedLegacyOwner = db.prepare(
       `SELECT role FROM target_participants WHERE agent_id = 'agent-1' AND channel_id = 'default' AND thread_root_id = 'wrongthr'`,
     ).get() as { role: string } | undefined;
-    const ambiguousLegacyOwner = db.prepare(
-      `SELECT role FROM target_participants WHERE agent_id = 'agent-1' AND channel_id = 'default' AND thread_root_id = 'ambig001'`,
-    ).get() as { role: string } | undefined;
+    const canonicalizedAmbiguousOwner = db.prepare(
+      `SELECT role FROM target_participants WHERE agent_id = 'agent-1' AND channel_id = 'default' AND thread_root_id = ?`,
+    ).get(task2ThreadRootId) as { role: string } | undefined;
     const rootOwner = db.prepare(
-      `SELECT role FROM target_participants WHERE agent_id = 'agent-1' AND channel_id = 'default' AND thread_root_id = 'feedbeef'`,
+      `SELECT role FROM target_participants WHERE agent_id = 'agent-1' AND channel_id = 'default' AND thread_root_id = ?`,
+    ).get(task1ThreadRootId) as { role: string } | undefined;
+    const staleAmbiguousOwner = db.prepare(
+      `SELECT role FROM target_participants WHERE agent_id = 'agent-1' AND channel_id = 'default' AND thread_root_id = 'ambig001'`,
     ).get() as { role: string } | undefined;
     const bindingCount = db.prepare(`SELECT count(*) as count FROM thread_task_bindings`).get() as { count: number };
     const taskFlags = db.prepare(`SELECT thread_unbound as threadUnbound FROM tasks WHERE task_id = 'task-1'`).get() as { threadUnbound: number };
 
     expect(demotedLegacyOwner?.role).toBe('participant');
-    expect(ambiguousLegacyOwner?.role).toBe('owner');
+    expect(canonicalizedAmbiguousOwner?.role).toBe('owner');
     expect(rootOwner?.role).toBe('owner');
+    expect(staleAmbiguousOwner).toBeUndefined();
     expect(bindingCount.count).toBe(0);
     expect(taskFlags.threadUnbound).toBe(0);
 

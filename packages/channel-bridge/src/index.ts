@@ -113,7 +113,7 @@ server.tool(
   'Send a message to the current conversation by default. You may optionally override the target to send to a specific channel, DM, or thread. Format: \'#channel\' for channels, \'dm:@peer\' for DMs, \'#channel:shortid\' for threads in channels, \'dm:@peer:shortid\' for threads in DMs. To start a NEW DM, use \'dm:@person-name\'.',
   {
     target: z.string().optional().describe(
-      'Optional override for where to send. If omitted, the message replies to the current conversation. Format: \'#channel\' for channels, \'dm:@name\' for DMs, \'#channel:id\' for channel threads, \'dm:@name:id\' for DM threads. Examples: \'#general\', \'dm:@alice\', \'#general:abcd1234\'.',
+      'Optional override for where to send. If omitted, the message replies to the current conversation. Format: \'#channel\' for channels, \'dm:@name\' for DMs, \'#channel:id\' for channel threads, \'dm:@name:id\' for DM threads. Examples: \'#general\', \'dm:@alice\', \'#general:abcd1234ef567890\'.',
     ),
     content: z
       .string()
@@ -238,7 +238,7 @@ server.tool(
   'read_history',
   "Read message history for a channel, DM, or thread. Use the same target format: '#channel', 'dm:@name', '#channel:id' for threads. Supports pagination with 'before' / 'after' and centered context jumps with 'around' (messageId or seq).",
   {
-    channel: z.string().describe("The target to read history from — e.g. '#general', 'dm:@alice', '#general:abcd1234'"),
+    channel: z.string().describe("The target to read history from — e.g. '#general', 'dm:@alice', '#general:abcd1234ef567890'"),
     limit: z.number().default(50).describe('Max number of messages to return (default 50, max 100)'),
     around: z.union([z.string(), z.number()]).optional().describe('Center the history window around a messageId prefix or seq in this exact target.'),
     before: z.number().optional().describe('Return messages before this seq number (backward pagination).'),
@@ -291,7 +291,7 @@ server.tool(
   'Search messages visible to this agent. Use this to find relevant older context, then inspect a hit with read_history(channel="<target>", around="<messageId>").',
   {
     query: z.string().describe('Search query'),
-    channel: z.string().optional().describe("Optional target to scope the search, e.g. '#general', 'dm:@alice', '#general:abcd1234'"),
+    channel: z.string().optional().describe("Optional target to scope the search, e.g. '#general', 'dm:@alice', '#general:abcd1234ef567890'"),
     limit: z.number().default(10).describe('Max number of search results to return (default 10, max 20)'),
   },
   async ({ query, channel, limit }) => {

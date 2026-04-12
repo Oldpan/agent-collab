@@ -459,7 +459,6 @@ export class ConversationManager {
     const dmChannelId = `dm:${agentId}`;
     const threadRootLookup = resolveThreadRootLookup(this.db, dmChannelId, normalizedThreadRootId);
     const canonicalThreadRootId = threadRootLookup?.canonicalThreadRootId ?? normalizedThreadRootId;
-    const acceptableThreadRootIds = new Set(threadRootLookup?.alternateThreadRootIds ?? [canonicalThreadRootId]);
 
     const existingCandidates = userId
       ? this.db.prepare(
@@ -485,7 +484,7 @@ export class ConversationManager {
            ORDER BY updated_at DESC`,
         ).all(agentId) as ConversationInfo[];
     const existing = existingCandidates.find(
-      (candidate) => candidate.threadRootId != null && acceptableThreadRootIds.has(candidate.threadRootId),
+      (candidate) => candidate.threadRootId === canonicalThreadRootId,
     );
 
     if (existing) {
@@ -536,7 +535,6 @@ export class ConversationManager {
       ? resolveThreadRootLookup(this.db, channelId, normalizedThreadRootId)
       : null;
     const canonicalThreadRootId = threadRootLookup?.canonicalThreadRootId ?? normalizedThreadRootId;
-    const acceptableThreadRootIds = new Set(threadRootLookup?.alternateThreadRootIds ?? []);
     const existing = (normalizedThreadRootId
       ? (this.db.prepare(
         `SELECT id, channel_id as channelId, title, agent_type as agentType,
@@ -549,7 +547,7 @@ export class ConversationManager {
          WHERE agent_id = ? AND channel_id = ? AND thread_kind = 'branch'
          ORDER BY updated_at DESC`,
       ).all(agentId, channelId) as ConversationInfo[]).find(
-        (candidate) => candidate.threadRootId != null && acceptableThreadRootIds.has(candidate.threadRootId),
+        (candidate) => candidate.threadRootId === canonicalThreadRootId,
       )
       : this.db.prepare(
         `SELECT id, channel_id as channelId, title, agent_type as agentType,

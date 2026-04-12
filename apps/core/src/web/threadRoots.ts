@@ -1,14 +1,11 @@
 import type { Db } from '@agent-collab/runtime-acp';
 import {
-  buildLegacyThreadShortId,
   buildThreadShortId,
-  matchesThreadShortId,
   normalizeThreadShortIdInput,
 } from '@agent-collab/protocol';
 
 export type ThreadRootLookup = {
   canonicalThreadRootId: string;
-  alternateThreadRootIds: string[];
   messageId: string | null;
 };
 
@@ -32,7 +29,7 @@ export function findThreadRootMessageId(
   if (!normalizedThreadRootId) return null;
 
   const match = listTopLevelMessageIds(db, channelId).find((messageId) =>
-    matchesThreadShortId(messageId, normalizedThreadRootId),
+    buildThreadShortId(messageId) === normalizedThreadRootId,
   );
   return match ?? null;
 }
@@ -48,22 +45,13 @@ export function resolveThreadRootLookup(
   const messageId = findThreadRootMessageId(db, channelId, normalizedThreadRootId);
   if (!messageId) {
     return {
-      canonicalThreadRootId: normalizedThreadRootId,
-      alternateThreadRootIds: [normalizedThreadRootId],
+      canonicalThreadRootId: buildThreadShortId(normalizedThreadRootId),
       messageId: null,
     };
   }
 
-  const canonicalThreadRootId = buildThreadShortId(messageId);
-  const alternateThreadRootIds = Array.from(new Set([
-    normalizedThreadRootId,
-    canonicalThreadRootId,
-    buildLegacyThreadShortId(messageId),
-  ]));
-
   return {
-    canonicalThreadRootId,
-    alternateThreadRootIds,
+    canonicalThreadRootId: buildThreadShortId(messageId),
     messageId,
   };
 }

@@ -2,6 +2,13 @@ import type { Db } from './db.js';
 
 const LATEST_VERSION = 58;
 
+function buildCanonicalThreadShortIdSql(column: string): string {
+  return `SUBSTR(REPLACE(CASE
+    WHEN LOWER(${column}) LIKE 'client-%' THEN SUBSTR(LOWER(${column}), 8)
+    ELSE LOWER(${column})
+  END, '-', ''), 1, 16)`;
+}
+
 function buildAgentTaskRefCandidate(taskId: string, length: number): string {
   const normalized = taskId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
   const sliceLength = Math.max(8, Math.min(length, normalized.length));
@@ -47,6 +54,9 @@ function backfillAgentTaskRefs(db: Db): void {
 }
 
 export function migrate(db: Db): void {
+  const canonicalTaskMessageIdSql = buildCanonicalThreadShortIdSql('t.message_id');
+  const canonicalTaskRootMessageIdSql = buildCanonicalThreadShortIdSql('task_root.message_id');
+
   db.exec(
     `
     CREATE TABLE IF NOT EXISTS schema_version (
@@ -949,6 +959,25 @@ export function migrate(db: Db): void {
       ON CONFLICT(channel_id) DO NOTHING;
 
       UPDATE target_participants
+      SET thread_root_id = (
+        SELECT ${canonicalTaskRootMessageIdSql}
+        FROM tasks task_root
+        WHERE task_root.channel_id = target_participants.channel_id
+          AND task_root.message_id IS NOT NULL
+          AND LENGTH(target_participants.thread_root_id) = 8
+          AND ${canonicalTaskRootMessageIdSql} LIKE LOWER(target_participants.thread_root_id) || '%'
+        LIMIT 1
+      )
+      WHERE LENGTH(target_participants.thread_root_id) = 8
+        AND EXISTS (
+          SELECT 1
+          FROM tasks task_root
+          WHERE task_root.channel_id = target_participants.channel_id
+            AND task_root.message_id IS NOT NULL
+            AND ${canonicalTaskRootMessageIdSql} LIKE LOWER(target_participants.thread_root_id) || '%'
+        );
+
+      UPDATE target_participants
       SET role = 'participant'
       WHERE role = 'owner'
         AND EXISTS (
@@ -958,13 +987,13 @@ export function migrate(db: Db): void {
           WHERE b.channel_id = target_participants.channel_id
             AND b.thread_root_id = target_participants.thread_root_id
             AND t.message_id IS NOT NULL
-            AND SUBSTR(t.message_id, 1, 8) != b.thread_root_id
+            AND ${canonicalTaskMessageIdSql} != b.thread_root_id
             AND NOT EXISTS (
               SELECT 1
               FROM tasks task_root
               WHERE task_root.channel_id = target_participants.channel_id
                 AND task_root.message_id IS NOT NULL
-                AND SUBSTR(task_root.message_id, 1, 8) = target_participants.thread_root_id
+                AND ${canonicalTaskRootMessageIdSql} = target_participants.thread_root_id
             )
         );
 
@@ -1285,9 +1314,17 @@ export function migrate(db: Db): void {
     db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN activation_metadata_json TEXT;`);
   }
 
-  const runDebugColsV58 = db.prepare("PRAGMA table_info('run_debug_inputs')").all() as Array<{ name: string }>;
-  if (!runDebugColsV58.some((c) => c.name === 'activation_metadata_json')) {
-    db.exec(`ALTER TABLE run_debug_inputs ADD COLUMN activation_metadata_json TEXT;`);
+  const runDebugInputsTableExists = !!db.prepare(
+    `SELECT 1
+     FROM sqlite_master
+     WHERE type = 'table' AND name = 'run_debug_inputs'
+     LIMIT 1`,
+  ).get();
+  if (runDebugInputsTableExists) {
+    const runDebugColsV58 = db.prepare("PRAGMA table_info('run_debug_inputs')").all() as Array<{ name: string }>;
+    if (!runDebugColsV58.some((c) => c.name === 'activation_metadata_json')) {
+      db.exec(`ALTER TABLE run_debug_inputs ADD COLUMN activation_metadata_json TEXT;`);
+    }
   }
 
   const v58Row = db.prepare('SELECT version FROM schema_version').get() as { version: number };

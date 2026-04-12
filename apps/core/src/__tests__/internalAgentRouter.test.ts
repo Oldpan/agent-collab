@@ -755,7 +755,8 @@ describe('internalAgentRouter', () => {
       workspacePath: '/tmp/viber-router',
       channelId: 'default',
     });
-    const conv = manager.openAgentChannelThread(agent.agentId, 'default', 'abcd1234');
+    const threadRootId = 'abcd1234ef567890';
+    const conv = manager.openAgentChannelThread(agent.agentId, 'default', threadRootId);
     if (!conv) throw new Error('missing channel conversation');
 
     const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
@@ -777,13 +778,13 @@ describe('internalAgentRouter', () => {
 
     expect(res.status).toBe(200);
     const body = await res.json() as { target?: string };
-    expect(body.target).toBe('#default:abcd1234');
+    expect(body.target).toBe(`#default:${threadRootId}`);
 
     const row = db.prepare(
       'SELECT channel_id as channelId, target FROM channel_messages WHERE sender_id = ? ORDER BY created_at DESC LIMIT 1',
     ).get(agent.agentId) as { channelId: string; target: string };
     expect(row.channelId).toBe('default');
-    expect(row.target).toBe('#default:abcd1234');
+    expect(row.target).toBe(`#default:${threadRootId}`);
   });
 
   it('channel root branch 未提供 target 时应默认回复当前 channel，而不是 thread', async () => {
@@ -852,7 +853,7 @@ describe('internalAgentRouter', () => {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         content: 'normalize ack',
-        target: '#default:2b5a7801',
+        target: '#default:2b5a7801cdef1234',
         conversationId: conv.id,
       }),
     });
@@ -1359,7 +1360,8 @@ describe('internalAgentRouter', () => {
     manager.joinChannel(tab.agentId, 'default');
     manager.joinChannel(bob.agentId, 'default');
 
-    const conv = manager.openAgentChannelThread(tab.agentId, 'default', 'thrd1234');
+    const threadRootId = 'thrd123400000000';
+    const conv = manager.openAgentChannelThread(tab.agentId, 'default', threadRootId);
     if (!conv) throw new Error('missing thread conversation');
 
     const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
@@ -1375,7 +1377,7 @@ describe('internalAgentRouter', () => {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        target: '#default:thrd1234',
+        target: `#default:${threadRootId}`,
         content: 'Need help in this thread, @ThreadBob.',
         kind: 'final',
         conversationId: conv.id,
@@ -1385,16 +1387,16 @@ describe('internalAgentRouter', () => {
     expect(res.status).toBe(200);
     await expectDispatchCount(1);
 
-    const bobConv = manager.openAgentChannelThread(bob.agentId, 'default', 'thrd1234');
+    const bobConv = manager.openAgentChannelThread(bob.agentId, 'default', threadRootId);
     if (!bobConv) throw new Error('missing mentioned thread conversation');
-    expect(bobConv.threadRootId).toBe('thrd1234');
+    expect(bobConv.threadRootId).toBe(threadRootId);
 
     const bobSession = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
       .get(bobConv.id) as { sessionKey: string };
     const runRow = db.prepare(
       'SELECT prompt_text as promptText FROM runs WHERE session_key = ? ORDER BY started_at DESC LIMIT 1',
     ).get(bobSession.sessionKey) as { promptText: string } | undefined;
-    expect(runRow?.promptText).toContain('#default:thrd1234');
+    expect(runRow?.promptText).toContain(`#default:${threadRootId}`);
   });
 
   it('agent 在线程发普通回复时应唤醒最近活跃的其他 thread participants', async () => {
@@ -1457,7 +1459,7 @@ describe('internalAgentRouter', () => {
       'SELECT prompt_text as promptText FROM runs WHERE session_key = ? ORDER BY started_at DESC LIMIT 1',
     ).get(bobSession.sessionKey) as { promptText: string } | undefined;
     expect(runRow?.promptText).toContain('Your collaborative thread in #default received a reply from RecentAlice.');
-    expect(runRow?.promptText).toContain(`#default:${threadRootId.slice(0, 8)}`);
+    expect(runRow?.promptText).toContain(`#default:${threadRootId}`);
   });
 
   it('agent 在线程 @ 多个 agent 且其中一个已 active 时，应让 active 目标先排队、其余目标正常派发，并保持 participants 一致', async () => {
@@ -2077,7 +2079,7 @@ describe('internalAgentRouter', () => {
       workspacePath: '/tmp/legacy-dm-receiver',
     });
     const dmChannelId = `dm:${agent.agentId}`;
-    const threadTarget = 'dm:@oldpan:deadbead';
+    const threadTarget = 'dm:@oldpan:deadbead00000000';
 
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
@@ -2120,7 +2122,7 @@ describe('internalAgentRouter', () => {
       workspacePath: '/tmp/dm-thread-reader',
     });
     const dmChannelId = `dm:${agent.agentId}`;
-    const threadRootId = 'deadbead';
+    const threadRootId = 'deadbead00000000';
     const threadTarget = `dm:@oldpan:${threadRootId}`;
 
     db.prepare(
@@ -2262,9 +2264,9 @@ describe('internalAgentRouter', () => {
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
        VALUES
        ('thread-around-root', 'default', 'user', 'User', 'user', '#default', 'main thread root', ?, ?, NULL),
-       ('thread-around-1', 'default', 'user', 'User', 'user', '#default:thr12345', 'thread only one', ?, ?, 'thr12345'),
-       ('thread-around-2', 'default', 'user', 'User', 'user', '#default:thr12345', 'thread only two', ?, ?, 'thr12345'),
-       ('thread-around-3', 'default', 'user', 'User', 'user', '#default:thr12345', 'thread only three', ?, ?, 'thr12345')`,
+       ('thread-around-1', 'default', 'user', 'User', 'user', '#default:thr1234500000000', 'thread only one', ?, ?, 'thr1234500000000'),
+       ('thread-around-2', 'default', 'user', 'User', 'user', '#default:thr1234500000000', 'thread only two', ?, ?, 'thr1234500000000'),
+       ('thread-around-3', 'default', 'user', 'User', 'user', '#default:thr1234500000000', 'thread only three', ?, ?, 'thr1234500000000')`,
     ).run(
       allocateNextChannelMessageSeq(db, 'default'),
       Date.now(),
@@ -2277,7 +2279,7 @@ describe('internalAgentRouter', () => {
     );
 
     const res = await fetch(
-      `${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent('#default:thr12345')}&around=${encodeURIComponent('thread-around-2')}&limit=3`,
+      `${baseUrl}/api/internal/agent/${agent.agentId}/history?channel=${encodeURIComponent('#default:thr1234500000000')}&around=${encodeURIComponent('thread-around-2')}&limit=3`,
     );
     expect(res.status).toBe(200);
 
@@ -2377,7 +2379,7 @@ describe('internalAgentRouter', () => {
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
        VALUES
        ('scope-root', 'default', 'user', 'User', 'user', '#default', 'scoped term main', ?, ?, NULL),
-       ('scope-thread', 'default', 'user', 'User', 'user', '#default:scope123', 'scoped term thread', ?, ?, 'scope123')`,
+       ('scope-thread', 'default', 'user', 'User', 'user', '#default:scope12300000000', 'scoped term thread', ?, ?, 'scope12300000000')`,
     ).run(
       allocateNextChannelMessageSeq(db, 'default'),
       Date.now(),
@@ -2394,7 +2396,7 @@ describe('internalAgentRouter', () => {
     expect(body.results.map((msg) => msg.content)).toContain('scoped term main');
     expect(body.results.map((msg) => msg.content)).toContain('scoped term thread');
     expect(body.results.map((msg) => msg.target)).toContain('#default');
-    expect(body.results.map((msg) => msg.target)).toContain('#default:scope123');
+    expect(body.results.map((msg) => msg.target)).toContain('#default:scope12300000000');
   });
 
   it('search 的 channel 过滤支持 exact thread target', async () => {
@@ -2410,7 +2412,7 @@ describe('internalAgentRouter', () => {
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
        VALUES
        ('thread-filter-root', 'default', 'user', 'User', 'user', '#default', 'focus term root', ?, ?, NULL),
-       ('thread-filter-thread', 'default', 'user', 'User', 'user', '#default:focus123', 'focus term thread', ?, ?, 'focus123')`,
+       ('thread-filter-thread', 'default', 'user', 'User', 'user', '#default:focus12300000000', 'focus term thread', ?, ?, 'focus12300000000')`,
     ).run(
       allocateNextChannelMessageSeq(db, 'default'),
       Date.now(),
@@ -2419,7 +2421,7 @@ describe('internalAgentRouter', () => {
     );
 
     const res = await fetch(
-      `${baseUrl}/api/internal/agent/${agent.agentId}/search?q=${encodeURIComponent('focus')}&channel=${encodeURIComponent('#default:focus123')}`,
+      `${baseUrl}/api/internal/agent/${agent.agentId}/search?q=${encodeURIComponent('focus')}&channel=${encodeURIComponent('#default:focus12300000000')}`,
     );
     expect(res.status).toBe(200);
 
@@ -2427,7 +2429,7 @@ describe('internalAgentRouter', () => {
       results: Array<{ content: string; target: string }>;
     };
     expect(body.results.map((msg) => msg.content)).toEqual(['focus term thread']);
-    expect(body.results.map((msg) => msg.target)).toEqual(['#default:focus123']);
+    expect(body.results.map((msg) => msg.target)).toEqual(['#default:focus12300000000']);
   });
 
   it('search 对未加入的 channel 过滤应返回 403', async () => {
@@ -2596,7 +2598,7 @@ describe('internalAgentRouter', () => {
       channelId: 'default',
     });
     manager.joinChannel(agent.agentId, 'default');
-    const conv = manager.openAgentChannelThread(agent.agentId, 'default', 'bind1234');
+    const conv = manager.openAgentChannelThread(agent.agentId, 'default', 'bind123400000000');
     if (!conv) throw new Error('missing thread conversation');
 
     const seq = allocateNextChannelMessageSeq(db, 'default');
@@ -2964,7 +2966,7 @@ describe('internalAgentRouter', () => {
     const seq = allocateNextChannelMessageSeq(db, 'default');
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
-       VALUES('threadmsg-0000-0000-0000-000000000000', 'default', 'user', 'User', 'user', '#default:root0001', 'Can you do this from a thread?', ?, ?, 'root0001')`,
+       VALUES('threadmsg-0000-0000-0000-000000000000', 'default', 'user', 'User', 'user', '#default:root000100000000', 'Can you do this from a thread?', ?, ?, 'root000100000000')`,
     ).run(seq, now);
 
     const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {

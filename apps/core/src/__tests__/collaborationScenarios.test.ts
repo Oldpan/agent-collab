@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { buildThreadShortId } from '@agent-collab/protocol';
 import { finishRun } from '@agent-collab/runtime-acp';
 import { TARGET_PARTICIPANT_ACTIVE_WINDOW_MS, upsertTargetParticipant } from '../web/targetParticipants.js';
 import { syncTaskThreadOwner } from '../web/threadTaskBindings.js';
@@ -97,7 +98,7 @@ describe('collaborationScenarios', () => {
           channelId: channel.channelId,
           rootAuthorAgentId: rootAuthor.agentId,
           ownerAgentId: owner.agentId,
-          threadRootId: rootMessageId.slice(0, 8),
+          threadRootId: buildThreadShortId(rootMessageId),
         };
       },
       steps: [
@@ -516,7 +517,7 @@ describe('collaborationScenarios', () => {
         });
 
         const rootMessageId = 'mixscn01-0000-0000-0000-000000000000';
-        const threadRootId = rootMessageId.slice(0, 8);
+        const threadRootId = buildThreadShortId(rootMessageId);
         const now = harness.now();
         insertChannelMessage(harness, {
           messageId: rootMessageId,

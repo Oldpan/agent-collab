@@ -1328,8 +1328,8 @@ describe('REST API', () => {
        VALUES(?, ?, ?, 0, ?, ?)`,
     ).run('oldpan', 'oldpan', 'hash', now, now);
 
-    const threadRootId = 'deadbead';
-    const rootMessageId = `${threadRootId}-0000-0000-0000-000000000000`;
+    const rootMessageId = 'deadbead-0000-0000-0000-000000000000';
+    const threadRootId = buildThreadShortId(rootMessageId);
     const directTarget = 'dm:@oldpan';
     const threadTarget = `${directTarget}:${threadRootId}`;
     const threadConversation = manager.openAgentDirectThread(agent.agentId, 'oldpan', threadRootId);
@@ -1355,6 +1355,49 @@ describe('REST API', () => {
       '你不需要在本机启动fastapi，使用远程已经搭建好的就行',
       '收到，我改走远端服务。',
     ]);
+  });
+
+  it('POST /api/channels/:id/agents/:agentId/open-session 应拒绝 stale 8-char threadRootId，且不写出 legacy conversation', async () => {
+    const now = Date.now();
+    const channel = manager.createChannel({ name: 'open-session-thread-guard' });
+    const agent = manager.createAgent({
+      name: 'OpenSessionBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/open-session-bob',
+      channelId: channel.channelId,
+    });
+    manager.joinChannel(agent.agentId, channel.channelId);
+
+    const rootMessageId = 'deadbeef-0000-0000-0000-000000000000';
+    const canonicalThreadRootId = buildThreadShortId(rootMessageId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
+       VALUES(?, ?, 'user', 'User', 'user', ?, 'thread root', 1, ?, NULL)`,
+    ).run(rootMessageId, channel.channelId, `#${channel.name}`, now);
+
+    const ok = await fetchJson(`/api/channels/${channel.channelId}/agents/${agent.agentId}/open-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ threadRootId: canonicalThreadRootId }),
+    });
+    expect(ok.status).toBe(200);
+    expect(ok.body.threadRootId).toBe(canonicalThreadRootId);
+
+    const bad = await fetchJson(`/api/channels/${channel.channelId}/agents/${agent.agentId}/open-session`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ threadRootId: 'deadbeef' }),
+    });
+    expect(bad.status).toBe(404);
+    expect(bad.body.error).toBe('Thread not found');
+
+    const legacyConversationCount = db.prepare(
+      `SELECT COUNT(*) as count
+       FROM conversations
+       WHERE agent_id = ? AND channel_id = ? AND thread_root_id = 'deadbeef'`,
+    ).get(agent.agentId, channel.channelId) as { count: number };
+    expect(legacyConversationCount.count).toBe(0);
   });
 
   it('POST /api/unread-summary 应分别统计 agent DM 和 channel 的未读数字', async () => {
@@ -1392,7 +1435,7 @@ describe('REST API', () => {
     ).run(randomUUID(), agent.agentId, agent.name, allocateNextChannelMessageSeq(db, 'default'), Date.now());
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, run_id, thread_root_id)
-       VALUES(?, 'default', ?, ?, 'agent', '#default:abcd1234', 'thread reply', ?, ?, NULL, 'abcd1234')`,
+       VALUES(?, 'default', ?, ?, 'agent', '#default:abcd1234ef567890', 'thread reply', ?, ?, NULL, 'abcd1234ef567890')`,
     ).run(randomUUID(), agent.agentId, agent.name, allocateNextChannelMessageSeq(db, 'default'), Date.now());
 
     const { status, body } = await fetchJson('/api/unread-summary', {
@@ -2396,13 +2439,13 @@ describe('REST API', () => {
       body: JSON.stringify({
         content: '我在 thread 里回复你',
         senderName: 'User',
-        replyTo: rootMessageId.slice(0, 8),
+        replyTo: buildThreadShortId(rootMessageId),
       }),
     });
 
     expect(response.status).toBe(201);
 
-    const conv = manager.openAgentChannelThread(agent.agentId, 'default', rootMessageId.slice(0, 8));
+    const conv = manager.openAgentChannelThread(agent.agentId, 'default', buildThreadShortId(rootMessageId));
     expect(conv).not.toBeNull();
     if (!conv) throw new Error('missing thread reply conversation');
 
@@ -2418,7 +2461,7 @@ describe('REST API', () => {
     ).get(sessionRow.sessionKey) as { promptText: string } | undefined;
 
     expect(runRow?.promptText).toContain(`[System: Your collaborative thread in #default received a reply from User.]`);
-    expect(runRow?.promptText).toContain(`target: #default:${rootMessageId.slice(0, 8)}`);
+    expect(runRow?.promptText).toContain(`target: #default:${buildThreadShortId(rootMessageId)}`);
     expect(runRow?.promptText).toContain('我在 thread 里回复你');
     expect(runRow?.promptText).not.toContain('Call check_messages to read unread messages');
   });
@@ -2464,7 +2507,7 @@ describe('REST API', () => {
     upsertTargetParticipant(db, {
       agentId: staleOwner.agentId,
       channelId: channel.channelId,
-      threadRootId: rootMessageId.slice(0, 8),
+      threadRootId: buildThreadShortId(rootMessageId),
       role: 'owner',
       lastActiveAt: now - TARGET_PARTICIPANT_ACTIVE_WINDOW_MS - 1_000,
     });
@@ -2475,13 +2518,13 @@ describe('REST API', () => {
       body: JSON.stringify({
         content: '这个 done task 还需要补充一个结论',
         senderName: 'User',
-        replyTo: rootMessageId.slice(0, 8),
+        replyTo: buildThreadShortId(rootMessageId),
       }),
     });
 
     expect(response.status).toBe(201);
 
-    const rootConv = manager.openAgentChannelThread(rootAuthor.agentId, channel.channelId, rootMessageId.slice(0, 8));
+    const rootConv = manager.openAgentChannelThread(rootAuthor.agentId, channel.channelId, buildThreadShortId(rootMessageId));
     expect(rootConv).not.toBeNull();
     if (!rootConv) throw new Error('missing root author conversation');
 
@@ -2490,7 +2533,7 @@ describe('REST API', () => {
        FROM runs r
        JOIN conversations c ON c.session_key = r.session_key
        WHERE c.agent_id = ? AND c.channel_id = ? AND c.thread_root_id = ?`,
-    ).get(staleOwner.agentId, channel.channelId, rootMessageId.slice(0, 8)) as { count: number };
+    ).get(staleOwner.agentId, channel.channelId, buildThreadShortId(rootMessageId)) as { count: number };
     expect(staleConvCount.count).toBe(0);
 
     const rootDebug = await waitForRunDebug(rootConv.id);
@@ -2522,6 +2565,7 @@ describe('REST API', () => {
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
        VALUES('prmpt208-0000-0000-0000-000000000000', 'default', 'system', 'system', 'system', '#default', 'Investigate rollout regression', ?, ?, 'task')`,
     ).run(rootSeq, now);
+    const promptThreadRootId = buildThreadShortId('prmpt208-0000-0000-0000-000000000000');
     db.prepare(
       `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
        VALUES('task-prompt-thread', 'default', 208, 'Investigate rollout regression', 'Goal: confirm prompt context exposes task ownership, reviewer presence, and the thread root. Done when both owner and reviewer get identical collaboration context.', 'in_progress', ?, ?, 'prmpt208-0000-0000-0000-000000000000', ?, ?)`,
@@ -2535,7 +2579,7 @@ describe('REST API', () => {
     upsertTargetParticipant(db, {
       agentId: reviewer.agentId,
       channelId: 'default',
-      threadRootId: 'prmpt208',
+      threadRootId: promptThreadRootId,
       role: 'participant',
       lastActiveAt: now,
     });
@@ -2546,14 +2590,14 @@ describe('REST API', () => {
       body: JSON.stringify({
         content: '请同步下这个 task thread 的当前分工',
         senderName: 'User',
-        replyTo: 'prmpt208',
+        replyTo: promptThreadRootId,
       }),
     });
 
     expect(response.status).toBe(201);
 
-    const ownerConv = manager.openAgentChannelThread(owner.agentId, 'default', 'prmpt208');
-    const reviewerConv = manager.openAgentChannelThread(reviewer.agentId, 'default', 'prmpt208');
+    const ownerConv = manager.openAgentChannelThread(owner.agentId, 'default', promptThreadRootId);
+    const reviewerConv = manager.openAgentChannelThread(reviewer.agentId, 'default', promptThreadRootId);
     expect(ownerConv).not.toBeNull();
     expect(reviewerConv).not.toBeNull();
 
@@ -2616,7 +2660,7 @@ describe('REST API', () => {
     manager.joinChannel(mentioned.agentId, channel.channelId);
 
     const rootMessageId = 'mixa1u00-0000-0000-0000-000000000000';
-    const threadRootId = rootMessageId.slice(0, 8);
+    const threadRootId = buildThreadShortId(rootMessageId);
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
        VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?)`,
@@ -2742,14 +2786,14 @@ describe('REST API', () => {
     upsertTargetParticipant(db, {
       agentId: alice.agentId,
       channelId: channel.channelId,
-      threadRootId: rootMessageId.slice(0, 8),
+      threadRootId: buildThreadShortId(rootMessageId),
       role: 'participant',
       lastActiveAt: now,
     });
     upsertTargetParticipant(db, {
       agentId: bob.agentId,
       channelId: channel.channelId,
-      threadRootId: rootMessageId.slice(0, 8),
+      threadRootId: buildThreadShortId(rootMessageId),
       role: 'participant',
       lastActiveAt: now,
     });
@@ -2760,14 +2804,14 @@ describe('REST API', () => {
       body: JSON.stringify({
         content: '请继续这个 human owned task thread',
         senderName: 'User',
-        replyTo: rootMessageId.slice(0, 8),
+        replyTo: buildThreadShortId(rootMessageId),
       }),
     });
 
     expect(response.status).toBe(201);
 
-    const aliceConv = manager.openAgentChannelThread(alice.agentId, channel.channelId, rootMessageId.slice(0, 8));
-    const bobConv = manager.openAgentChannelThread(bob.agentId, channel.channelId, rootMessageId.slice(0, 8));
+    const aliceConv = manager.openAgentChannelThread(alice.agentId, channel.channelId, buildThreadShortId(rootMessageId));
+    const bobConv = manager.openAgentChannelThread(bob.agentId, channel.channelId, buildThreadShortId(rootMessageId));
     expect(aliceConv).not.toBeNull();
     expect(bobConv).not.toBeNull();
 
@@ -2930,7 +2974,7 @@ describe('REST API', () => {
     upsertTargetParticipant(db, {
       agentId: agent.agentId,
       channelId: 'default',
-      threadRootId: 'donebeef',
+      threadRootId: buildThreadShortId('donebeef-0000-0000-0000-000000000000'),
       role: 'owner',
       lastActiveAt: now,
     });
@@ -3333,14 +3377,14 @@ describe('REST API', () => {
     upsertTargetParticipant(db, {
       agentId: agent.agentId,
       channelId: 'default',
-      threadRootId: 'deadbeef',
+      threadRootId: buildThreadShortId('deadbeef-0000-0000-0000-000000000000'),
       role: 'owner',
       lastActiveAt: now,
     });
     db.prepare(
       `INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq)
-       VALUES(?, 'default', 'deadbeef', 3)`,
-    ).run(agent.agentId);
+       VALUES(?, 'default', ?, 3)`,
+    ).run(agent.agentId, buildThreadShortId('deadbeef-0000-0000-0000-000000000000'));
 
     const { status, body } = await fetchJson('/api/channels/default/tasks/197', {
       method: 'DELETE',
@@ -3350,11 +3394,11 @@ describe('REST API', () => {
     expect(body.ok).toBe(true);
 
     const participantsCount = db.prepare(
-      `SELECT count(*) as count FROM target_participants WHERE channel_id = 'default' AND thread_root_id = 'deadbeef'`,
-    ).get() as { count: number };
+      `SELECT count(*) as count FROM target_participants WHERE channel_id = 'default' AND thread_root_id = ?`,
+    ).get(buildThreadShortId('deadbeef-0000-0000-0000-000000000000')) as { count: number };
     const checkpointsCount = db.prepare(
-      `SELECT count(*) as count FROM agent_message_checkpoints WHERE channel_id = 'default' AND thread_root_id = 'deadbeef'`,
-    ).get() as { count: number };
+      `SELECT count(*) as count FROM agent_message_checkpoints WHERE channel_id = 'default' AND thread_root_id = ?`,
+    ).get(buildThreadShortId('deadbeef-0000-0000-0000-000000000000')) as { count: number };
     expect(participantsCount.count).toBe(0);
     expect(checkpointsCount.count).toBe(0);
   });

@@ -3,8 +3,9 @@ import { buildDirectActivationContextText } from '../web/directActivationPrompt.
 
 describe('directActivationPrompt', () => {
   it('DM task-thread context text 应包含 thread root 和 Context from DM snapshot', () => {
+    const threadRootId = 'deadbead00000000';
     const text = buildDirectActivationContextText({
-      target: 'dm:@oldpan:deadbead',
+      target: `dm:@oldpan:${threadRootId}`,
       rootMessage: {
         messageId: 'deadbead-0000-0000-0000-000000000000',
         seq: 9,
@@ -18,7 +19,7 @@ describe('directActivationPrompt', () => {
         {
           messageId: 'thread-reply-1',
           seq: 10,
-          target: 'dm:@oldpan:deadbead',
+          target: `dm:@oldpan:${threadRootId}`,
           senderName: 'Kimi',
           senderType: 'agent',
           content: '这是 thread 内的执行更新。',
@@ -56,7 +57,7 @@ describe('directActivationPrompt', () => {
           title: '检查显存使用情况',
           status: 'in_progress',
           claimedByName: 'Kimi',
-          threadTarget: 'dm:@oldpan:deadbead',
+          threadTarget: `dm:@oldpan:${threadRootId}`,
         },
       ],
     });
@@ -68,7 +69,7 @@ describe('directActivationPrompt', () => {
     expect(text).toContain('[Context from DM]');
     expect(text).toContain('@oldpan [Trigger]: 请帮我检查一下当前系统显存占用。');
     expect(text).toContain('[Active DM task threads]');
-    expect(text).toContain('#4 [in_progress] @Kimi -> dm:@oldpan:deadbead — 检查显存使用情况');
+    expect(text).toContain(`#4 [in_progress] @Kimi -> dm:@oldpan:${threadRootId} — 检查显存使用情况`);
     expect(text).not.toContain('msg: ');
   });
 });

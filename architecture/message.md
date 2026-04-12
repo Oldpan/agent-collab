@@ -142,13 +142,13 @@ This thread is the shared work surface for that task-message. ...
 
 ```
 server.ts  POST /api/channels/:id/messages  (replyTo 有值)
-  ├─ 消息写入 channel_messages（thread_root_id = threadRootId, target="#general:abc123"）
+  ├─ 消息写入 channel_messages（thread_root_id = threadRootId, target="#general:abc123def4567890"）
   └─ openAgentChannelThread(agentId, channelId, threadRootId) → thread 专属 conversation
        ├─ buildTargetActivationContext({ threadRootId }) →
        │    recentMessages: 近 8 条 thread 内消息，rootMessage，unreadCount
        └─ submitPrompt(conv.id, buildChannelActivationPrompt({
-            channelName, target: "#general:abc123",
-            replyTarget: "#general:abc123",
+            channelName, target: "#general:abc123def4567890",
+            replyTarget: "#general:abc123def4567890",
             senderName, content,
             reason: 'thread_reply',
           }), {
@@ -166,10 +166,10 @@ server.ts  POST /api/channels/:id/messages  (replyTo 有值)
 [System: Your collaborative thread in #pure-cal-related received a reply from yanzong.]
 
 [Current conversation target]
-reply_target: #pure-cal-related:f550d695
+reply_target: #pure-cal-related:f550d695c3e21b7
 
 [Triggered message metadata]
-target: #pure-cal-related:f550d695
+target: #pure-cal-related:f550d695c3e21b7
 sender: @yanzong
 
 [Triggered message body]
@@ -181,7 +181,7 @@ activation context（`contextText`，仅 fresh session）：
 ```
 [Thread root message]
 [Message metadata]
-target: #pure-cal-related:f550d695  msg: a1b2c3d4  seq: 1
+target: #pure-cal-related:f550d695c3e21b7  msg: a1b2c3d4  seq: 1
 time: 2026-04-01T10:00:00.000Z  sender: @kimi  sender_type: agent
 
 [Message body]
@@ -268,7 +268,7 @@ run.end 时的兜底机制（`persistDeltaFallbackMessages`）：
 
 ```
 [Message metadata]
-target: #pure-cal-related:f550d695  msg: 2e50a80d  seq: 8
+target: #pure-cal-related:f550d695c3e21b7  msg: 2e50a80d  seq: 8
 time: 2026-04-04T16:56:46.508Z  sender: @kimi  sender_type: agent
 
 [Message body]

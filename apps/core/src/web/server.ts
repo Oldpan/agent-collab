@@ -12,7 +12,6 @@ import fastifyMultipart from '@fastify/multipart';
 import type { Db } from '@agent-collab/runtime-acp';
 import { log, finishRun } from '@agent-collab/runtime-acp';
 import {
-  buildLegacyThreadShortId,
   buildThreadShortId,
   type ConversationStatus,
   type CreateConversationRequest,
@@ -697,6 +696,8 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     assigneeId: string | null;
     assigneeName: string | null;
     messageId: string | null;
+    messageTarget?: string | null;
+    messageKind?: string | null;
     createdAt: number;
     updatedAt: number;
     channelName: string | null;
@@ -1478,6 +1479,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
 
       if (conv.threadKind === 'direct' && !conv.isPrimaryThread && conv.threadRootId) {
         const baseTarget = directTarget.replace(/:[^:]+$/, '');
+        const rootMessageId = findThreadRootMessageId(db, dmChannelId, conv.threadRootId);
         const rows = db.prepare(
           `SELECT cm.message_id as id,
                   cm.sender_name as senderName,
@@ -1485,12 +1487,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
                   cm.content as content,
                   cm.created_at as createdAt,
                   cm.seq as seq,
-                  COALESCE(CASE WHEN cm.thread_root_id IS NULL THEN (
-                    SELECT COUNT(*)
-                    FROM channel_messages replies
-                    WHERE replies.channel_id = cm.channel_id
-                      AND replies.thread_root_id = SUBSTR(cm.message_id, 1, 8)
-                  ) ELSE 0 END, 0) as replyCount,
+                  0 as replyCount,
                   cm.message_source as messageSource,
                   cm.attachment_ids as attachmentIds,
                   t.task_number as taskNumber,
@@ -1500,20 +1497,19 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
            LEFT JOIN tasks t ON t.message_id = cm.message_id
            WHERE cm.channel_id = ?
              AND (
-               (cm.message_id LIKE ? AND cm.thread_root_id IS NULL AND cm.target = ?)
+               (cm.message_id = ? AND cm.thread_root_id IS NULL AND cm.target = ?)
                OR (cm.thread_root_id IS NULL AND cm.target = ?)
                OR cm.thread_root_id = ?
              )
            ORDER BY cm.seq ASC LIMIT ?`,
         ).all(
           dmChannelId,
-          `${conv.threadRootId}%`,
+          rootMessageId,
           baseTarget,
           directTarget,
           conv.threadRootId,
           limit,
         ) as PublicChannelRow[];
-        const rootMessageId = rows.find((row) => row.id.startsWith(conv.threadRootId!))?.id;
         const contextSnapshot = rootMessageId
           ? ensureDmThreadContextSnapshot(db, {
               channelId: dmChannelId,
@@ -1551,40 +1547,33 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
                 cm.content as content,
                 cm.created_at as createdAt,
                 cm.seq as seq,
-                COUNT(replies.message_id) as replyCount,
+                0 as replyCount,
                 cm.message_source as messageSource,
                 cm.attachment_ids as attachmentIds,
                 t.task_number as taskNumber,
                 t.status as taskStatus,
-                t.claimed_by_name as taskAssigneeName
+                t.claimed_by_name as taskAssigneeName,
+                cm.target as target,
+                cm.message_kind as messageKind
          FROM channel_messages cm
-         LEFT JOIN channel_messages replies
-           ON replies.channel_id = cm.channel_id
-           AND replies.thread_root_id = SUBSTR(cm.message_id, 1, 8)
          LEFT JOIN tasks t ON t.message_id = cm.message_id
          WHERE cm.channel_id = ?
            AND (
              cm.target = ?
-             OR (
-               cm.message_kind = 'task'
-               AND cm.target = ?
-               AND EXISTS(
-                 SELECT 1
-                 FROM channel_messages thread_msgs
-                 WHERE thread_msgs.channel_id = cm.channel_id
-                   AND thread_msgs.thread_root_id = SUBSTR(cm.message_id, 1, 8)
-                   AND thread_msgs.target LIKE ?
-                 LIMIT 1
-               )
-             )
+             OR (cm.message_kind = 'task' AND cm.target = ?)
            )
            AND cm.thread_root_id IS NULL
-         GROUP BY cm.message_id
          ORDER BY cm.seq DESC LIMIT ?`,
-      ).all(dmChannelId, directTarget, brokenDmTaskTarget, directThreadPrefix, limit) as PublicChannelRow[];
+      ).all(dmChannelId, directTarget, brokenDmTaskTarget, limit) as PublicChannelRow[];
 
       return {
-        messages: hydratePublicChannelReplyCounts(dmChannelId, rows).reverse().map(mapPublicChannelMessage),
+        messages: hydratePublicChannelReplyCounts(
+          dmChannelId,
+          rows.filter((row) =>
+            row.target === directTarget
+            || (row.messageKind === 'task' && row.target === brokenDmTaskTarget && hasThreadMessagesForTarget(dmChannelId, row.id, directThreadPrefix)),
+          ),
+        ).reverse().map(mapPublicChannelMessage),
       };
     },
   );
@@ -1640,6 +1629,8 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
                     t.claimed_by_agent_id as assigneeId,
                     t.claimed_by_name as assigneeName,
                     t.message_id as messageId,
+                    cm.target as messageTarget,
+                    cm.message_kind as messageKind,
                     t.created_at as createdAt,
                     t.updated_at as updatedAt,
                     c.name as channelName
@@ -1648,23 +1639,9 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
              LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
              WHERE ${whereParts.join(' AND ')}
                AND t.channel_id = ?
-               AND (
-                 cm.target = ?
-                 OR (
-                   cm.message_kind = 'task'
-                   AND cm.target = ?
-                   AND EXISTS(
-                     SELECT 1
-                     FROM channel_messages thread_msgs
-                     WHERE thread_msgs.channel_id = t.channel_id
-                       AND thread_msgs.thread_root_id = SUBSTR(t.message_id, 1, 8)
-                       AND thread_msgs.target LIKE ?
-                     LIMIT 1
-                   )
-                 )
-               )
+               AND (cm.target = ? OR (cm.message_kind = 'task' AND cm.target = ?))
              ORDER BY t.updated_at DESC`,
-          ).all(...params, dmChannelId, directTarget, `#${dmChannelId}`, `${directTarget}:%`)
+          ).all(...params, dmChannelId, directTarget, `#${dmChannelId}`)
         : db.prepare(
             `SELECT t.task_id as taskId,
                     t.channel_id as channelId,
@@ -1675,6 +1652,8 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
                     t.claimed_by_agent_id as assigneeId,
                     t.claimed_by_name as assigneeName,
                     t.message_id as messageId,
+                    cm.target as messageTarget,
+                    cm.message_kind as messageKind,
                     t.created_at as createdAt,
                     t.updated_at as updatedAt,
                     c.name as channelName
@@ -1685,25 +1664,20 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
                AND (
                  t.channel_id != ?
                  OR cm.target = ?
-                 OR (
-                   cm.message_kind = 'task'
-                   AND cm.target = ?
-                   AND EXISTS(
-                     SELECT 1
-                     FROM channel_messages thread_msgs
-                     WHERE thread_msgs.channel_id = t.channel_id
-                       AND thread_msgs.thread_root_id = SUBSTR(t.message_id, 1, 8)
-                       AND thread_msgs.target LIKE ?
-                     LIMIT 1
-                   )
-                 )
+                 OR (cm.message_kind = 'task' AND cm.target = ?)
                )
              ORDER BY t.updated_at DESC`,
-          ).all(...params, dmChannelId, directTarget, `#${dmChannelId}`, `${directTarget}:%`)
+          ).all(...params, dmChannelId, directTarget, `#${dmChannelId}`)
       ) as AgentTaskListRow[];
 
       return {
         tasks: rows
+          .filter((row) =>
+            row.channelId !== dmChannelId
+            || row.messageId == null
+            || row.messageTarget === directTarget
+            || (row.messageKind === 'task' && row.messageTarget === `#${dmChannelId}` && hasThreadMessagesForTarget(dmChannelId, row.messageId, `${directTarget}:%`)),
+          )
           .filter((row) => row.channelId === dmChannelId || user.isAdmin || hasChannelAccess(user, row.channelId))
           .map((row) => mapAgentTaskRow(row, dmChannelId)),
       };
@@ -2146,6 +2120,8 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     taskNumber: number | null;
     taskStatus: string | null;
     taskAssigneeName: string | null;
+    target?: string;
+    messageKind?: string | null;
   };
 
   type PublicThreadRow = {
@@ -2184,13 +2160,37 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     ...(row.attachmentIds ? { attachmentIds: JSON.parse(row.attachmentIds) as string[] } : {}),
   });
 
+  const hasThreadMessagesForTarget = (
+    channelId: string,
+    rootMessageId: string | null | undefined,
+    targetLike: string,
+  ): boolean => {
+    if (!rootMessageId) return false;
+    return !!db.prepare(
+      `SELECT 1
+       FROM channel_messages
+       WHERE channel_id = ?
+         AND thread_root_id = ?
+         AND target LIKE ?
+       LIMIT 1`,
+    ).get(channelId, buildThreadShortId(rootMessageId), targetLike);
+  };
+
+  const resolveExistingChannelThreadRootId = (
+    channelId: string,
+    requestedThreadRootId: string | null | undefined,
+  ): string | null => {
+    const rootMessageId = findThreadRootMessageId(db, channelId, requestedThreadRootId);
+    return rootMessageId ? buildThreadShortId(rootMessageId) : null;
+  };
+
   const hydratePublicChannelReplyCounts = (
     channelId: string,
     rows: PublicChannelRow[],
   ): PublicChannelRow[] => {
     if (rows.length === 0) return rows;
     const threadRootIds = Array.from(new Set(
-      rows.flatMap((row) => [buildLegacyThreadShortId(row.id), buildThreadShortId(row.id)]),
+      rows.map((row) => buildThreadShortId(row.id)),
     ));
     if (threadRootIds.length === 0) return rows;
     const placeholders = threadRootIds.map(() => '?').join(', ');
@@ -2204,9 +2204,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     const countByThreadRootId = new Map(counts.map((row) => [row.threadRootId, row.count]));
     return rows.map((row) => ({
       ...row,
-      replyCount:
-        (countByThreadRootId.get(buildLegacyThreadShortId(row.id)) ?? 0)
-        + (countByThreadRootId.get(buildThreadShortId(row.id)) ?? 0),
+      replyCount: countByThreadRootId.get(buildThreadShortId(row.id)) ?? 0,
     }));
   };
 
@@ -2366,9 +2364,16 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         return { error: 'Agent is not a member of this channel.' };
       }
 
-      const threadRootId = typeof req.body?.threadRootId === 'string' && req.body.threadRootId.trim().length > 0
+      const requestedThreadRootId = typeof req.body?.threadRootId === 'string' && req.body.threadRootId.trim().length > 0
         ? req.body.threadRootId.trim()
         : null;
+      const threadRootId = requestedThreadRootId
+        ? resolveExistingChannelThreadRootId(req.params.id, requestedThreadRootId)
+        : null;
+      if (requestedThreadRootId && !threadRootId) {
+        reply.code(404);
+        return { error: 'Thread not found' };
+      }
       const conversation = conversationManager.openAgentChannelThread(req.params.agentId, req.params.id, threadRootId);
       if (!conversation) {
         reply.code(404);
@@ -2517,16 +2522,12 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         `SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
                 cm.content, cm.created_at as createdAt, cm.seq, cm.message_source as messageSource,
                 cm.attachment_ids as attachmentIds,
-                COUNT(replies.message_id) as replyCount,
+                0 as replyCount,
                 t.task_number as taskNumber, t.status as taskStatus,
                 t.claimed_by_name as taskAssigneeName
          FROM channel_messages cm
-         LEFT JOIN channel_messages replies
-           ON replies.channel_id = cm.channel_id
-           AND replies.thread_root_id = SUBSTR(cm.message_id, 1, 8)
          LEFT JOIN tasks t ON t.message_id = cm.message_id
          WHERE cm.channel_id = ? AND cm.thread_root_id IS NULL${extraWhere}
-         GROUP BY cm.message_id
          ORDER BY ${orderBy} LIMIT ?`,
       ).all(req.params.id, ...extraParams, rowLimit) as PublicChannelRow[];
 
@@ -2576,32 +2577,24 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
             `SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
                     cm.content, cm.created_at as createdAt, cm.seq, cm.message_source as messageSource,
                     cm.attachment_ids as attachmentIds,
-                    COUNT(replies.message_id) as replyCount,
+                    0 as replyCount,
                     t.task_number as taskNumber, t.status as taskStatus,
                     t.claimed_by_name as taskAssigneeName
              FROM channel_messages cm
-             LEFT JOIN channel_messages replies
-               ON replies.channel_id = cm.channel_id
-               AND replies.thread_root_id = SUBSTR(cm.message_id, 1, 8)
              LEFT JOIN tasks t ON t.message_id = cm.message_id
              WHERE cm.channel_id = ? AND cm.thread_root_id IS NULL AND cm.seq < ?
-             GROUP BY cm.message_id
              ORDER BY cm.seq DESC LIMIT ?`,
           ).all(req.params.id, before, limit)
         : db.prepare(
             `SELECT cm.message_id as id, cm.sender_name as senderName, cm.sender_type as senderType,
                     cm.content, cm.created_at as createdAt, cm.seq, cm.message_source as messageSource,
                     cm.attachment_ids as attachmentIds,
-                    COUNT(replies.message_id) as replyCount,
+                    0 as replyCount,
                     t.task_number as taskNumber, t.status as taskStatus,
                     t.claimed_by_name as taskAssigneeName
              FROM channel_messages cm
-             LEFT JOIN channel_messages replies
-               ON replies.channel_id = cm.channel_id
-               AND replies.thread_root_id = SUBSTR(cm.message_id, 1, 8)
              LEFT JOIN tasks t ON t.message_id = cm.message_id
              WHERE cm.channel_id = ? AND cm.thread_root_id IS NULL
-             GROUP BY cm.message_id
              ORDER BY cm.seq DESC LIMIT ?`,
           ).all(req.params.id, limit)
       ) as Array<{ id: string; senderName: string; senderType: string; content: string; createdAt: number; seq: number; replyCount: number; messageSource: string | null; attachmentIds: string | null; taskNumber: number | null; taskStatus: string | null; taskAssigneeName: string | null }>;

@@ -124,7 +124,7 @@ When a direct message, channel mention, or thread reply triggers this run, the t
 
 ### Threads
 
-- Thread targets have a colon and short ID suffix: \`#general:a1b2c3d4\` or \`dm:@richard:x9y8z7a0\`.
+- Thread targets have a colon and 16-character short ID suffix: \`#general:a1b2c3d4e5f60718\` or \`dm:@richard:x9y8z7a0b1c2d3e4\`.
 - If the incoming target already has a thread suffix, keep replying in that same thread.
 - For a normal main-channel message (target like \`#general\` with no thread suffix), reply in the main channel by default.
 - Threads cannot be nested — you cannot start a thread inside a thread.

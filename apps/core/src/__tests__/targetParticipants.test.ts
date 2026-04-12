@@ -8,6 +8,7 @@ describe('targetParticipants', () => {
     const db = createTestDb();
     const manager = new ConversationManager({ db, config: createTestConfig() });
     manager.start();
+    const threadRootId = 'abcd1234ef567890';
 
     const alice = manager.createAgent({
       name: 'AliceTP',
@@ -25,21 +26,21 @@ describe('targetParticipants', () => {
     upsertTargetParticipant(db, {
       agentId: bob.agentId,
       channelId: 'default',
-      threadRootId: 'abcd1234',
+      threadRootId,
       role: 'participant',
       lastActiveAt: 10,
     });
     upsertTargetParticipant(db, {
       agentId: alice.agentId,
       channelId: 'default',
-      threadRootId: 'abcd1234',
+      threadRootId,
       role: 'owner',
       lastActiveAt: 5,
     });
 
     const participants = listTargetParticipants(db, {
       channelId: 'default',
-      threadRootId: 'abcd1234',
+      threadRootId,
     });
 
     expect(participants.map((participant) => participant.name)).toEqual(['AliceTP', 'BobTP']);

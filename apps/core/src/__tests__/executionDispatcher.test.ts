@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { finishRun } from '@agent-collab/runtime-acp';
-import type { CoreToNode } from '@agent-collab/protocol';
+import { buildThreadShortId, type CoreToNode } from '@agent-collab/protocol';
 import type { Db } from '@agent-collab/runtime-acp';
 import { createTestConfig, createTestDb } from './helpers.js';
 import { ConversationManager } from '../web/conversationManager.js';
@@ -649,10 +649,10 @@ describe('ExecutionDispatcher', () => {
       '[System: Your collaborative thread in #default received a reply from oldpan.]',
       '',
       '[Current conversation target]',
-      'reply_target: #default:abcd1234',
+      'reply_target: #default:abcd1234ef567890',
       '',
       '[Triggered message metadata]',
-      'target: #default:abcd1234',
+      'target: #default:abcd1234ef567890',
       'sender: @oldpan',
       '',
       '[Triggered message body]',
@@ -713,18 +713,19 @@ describe('ExecutionDispatcher', () => {
       channelId: channel.channelId,
     });
     manager.joinChannel(agent.agentId, channel.channelId);
-    const conv = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'f550d695');
+    const rootMessageId = 'f550d695-root';
+    const threadRootId = buildThreadShortId(rootMessageId);
+    const conv = manager.openAgentChannelThread(agent.agentId, channel.channelId, threadRootId);
     if (!conv) throw new Error('missing thread conversation');
 
     const channelId = channel.channelId;
-    const threadRootId = 'f550d695';
-    const target = '#pure-cal-related:f550d695';
+    const target = `#pure-cal-related:${threadRootId}`;
     const baseTime = Date.now();
 
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
        VALUES(?, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`,
-    ).run('f550d695-root', channelId, agent.agentId, agent.name, '#pure-cal-related', '你好！我是kimi，有什么可以帮你的吗？', 6, baseTime, threadRootId);
+    ).run(rootMessageId, channelId, agent.agentId, agent.name, '#pure-cal-related', '你好！我是kimi，有什么可以帮你的吗？', 6, baseTime, threadRootId);
 
     const sessionRow = db.prepare(
       'SELECT session_key as sessionKey FROM conversations WHERE id = ?',
@@ -840,7 +841,7 @@ describe('ExecutionDispatcher', () => {
         activationContextText: buildChannelActivationContextText({
           target,
           rootMessage: {
-            messageId: 'f550d695-root',
+            messageId: rootMessageId,
             seq: 6,
             target: '#pure-cal-related',
             senderName: 'kimi',
@@ -1131,7 +1132,7 @@ describe('ExecutionDispatcher', () => {
     ).run('oldpan', 'oldpan', 'hash', now, now);
 
     const dmChannelId = `dm:${agent.agentId}`;
-    const threadRootId = 'deadbead';
+    const threadRootId = buildThreadShortId('deadbead-0000-0000-0000-000000000000');
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, message_kind)
        VALUES(?, ?, 'user', 'oldpan', 'user', 'dm:@oldpan', '请处理这个任务线程', ?, ?, NULL, 'task')`,
@@ -1202,7 +1203,7 @@ describe('ExecutionDispatcher', () => {
         {
           messageId: 'recent-1',
           seq: 1,
-          target: '#default:abcd1234',
+          target: '#default:abcd1234ef567890',
           senderName: 'Queued Bob',
           senderType: 'agent',
           content: 'hello root',

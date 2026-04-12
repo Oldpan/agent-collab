@@ -37,8 +37,9 @@ describe('buildChannelActivationContextText', () => {
   });
 
   it('应在 bound task 上下注入任务 brief', () => {
+    const threadRootId = 'deadbeef00000000';
     const text = buildChannelActivationContextText({
-      target: '#default:deadbeef',
+      target: `#default:${threadRootId}`,
       boundTask: {
         taskNumber: 4,
         title: 'Clarify the rollout',

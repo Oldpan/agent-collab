@@ -1,6 +1,6 @@
 import type { TaskInfo } from '@agent-collab/protocol';
 import type { Db } from '@agent-collab/runtime-acp';
-import { buildLegacyThreadShortId, buildThreadShortId } from '@agent-collab/protocol';
+import { buildThreadShortId } from '@agent-collab/protocol';
 import {
   listRecentTargetParticipants,
   setTargetOwner,
@@ -50,10 +50,7 @@ function normalizeThreadRootId(threadRootId?: string | null): string {
 
 function getTaskThreadRootIds(messageId?: string | null): string[] {
   if (!messageId) return [];
-  return Array.from(new Set([
-    buildThreadShortId(messageId),
-    buildLegacyThreadShortId(messageId),
-  ]));
+  return [buildThreadShortId(messageId)];
 }
 
 export function getTaskThreadRootId(messageId?: string | null): string | null {

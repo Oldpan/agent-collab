@@ -64,7 +64,6 @@ export function listRuntimeDrivers(): RuntimeDriverDefinition[] {
   return Object.values(RUNTIME_DRIVERS);
 }
 
-export const LEGACY_THREAD_SHORT_ID_LENGTH = 8;
 export const THREAD_SHORT_ID_LENGTH = 16;
 
 export function normalizeThreadShortIdInput(threadRootId: string | null | undefined): string | null {
@@ -79,20 +78,9 @@ export function normalizeMessageIdForThreadShortId(messageId: string): string {
   return alnumOnly || trimmed.replace(/[^a-z0-9]/g, '') || trimmed;
 }
 
-export function buildLegacyThreadShortId(messageId: string): string {
-  return messageId.trim().slice(0, LEGACY_THREAD_SHORT_ID_LENGTH).toLowerCase();
-}
-
 export function buildThreadShortId(messageId: string): string {
   const normalized = normalizeMessageIdForThreadShortId(messageId);
   return normalized.slice(0, THREAD_SHORT_ID_LENGTH);
-}
-
-export function matchesThreadShortId(messageId: string, threadRootId: string | null | undefined): boolean {
-  const normalizedCandidate = normalizeThreadShortIdInput(threadRootId);
-  if (!normalizedCandidate) return false;
-  return normalizedCandidate === buildThreadShortId(messageId)
-    || normalizedCandidate === buildLegacyThreadShortId(messageId);
 }
 
 export type ConversationStatusEvent = {

@@ -75,13 +75,13 @@ content:
 [target=#general msg=a1b2c3d4 time=2026-03-15 01:00:00] @richard: hello everyone
 [target=#general msg=e5f6a7b8 time=2026-03-15 01:00:01 type=agent] @Alice: hi there
 [target=dm:@richard msg=c9d0e1f2 time=2026-03-15 01:00:02] @richard: hey, can you help?
-[target=#general:a1b2c3d4 msg=f3a4b5c6 time=2026-03-15 01:00:03] @richard: thread reply
-[target=dm:@richard:x9y8z7a0 msg=d7e8f9a0 time=2026-03-15 01:00:04] @richard: DM thread reply
+[target=#general:a1b2c3d4e5f60718 msg=f3a4b5c6 time=2026-03-15 01:00:03] @richard: thread reply
+[target=dm:@richard:x9y8z7a0b1c2d3e4 msg=d7e8f9a0 time=2026-03-15 01:00:04] @richard: DM thread reply
 ```
 
 Header fields:
 - `target=` — where the message came from. Reuse as the `target` parameter when replying.
-- `msg=` — message short ID (first 8 chars of UUID). Use as thread suffix to start/reply in a thread.
+- `msg=` — message short ID (first 8 chars of UUID). Useful for referencing a message; it does not imply a thread target by itself.
 - `time=` — timestamp.
 - `type=agent` — present only if the sender is an agent.
 
@@ -100,13 +100,12 @@ Header fields:
 Threads are sub-conversations attached to a specific message. They let you discuss a topic without
 cluttering the main channel.
 
-- **Thread targets** have a colon and short ID suffix: `#general:a1b2c3d4` (thread in #general) or
-  `dm:@richard:x9y8z7a0` (thread in a DM).
+- **Thread targets** have a colon and 16-character short ID suffix: `#general:a1b2c3d4e5f60718` (thread in #general) or
+  `dm:@richard:x9y8z7a0b1c2d3e4` (thread in a DM).
 - When you receive a message from a thread (the target has a `:shortid` suffix), **always reply using
   that same target** to keep the conversation in the thread.
-- **Start a new thread**: Use the `msg=` field from the header as the thread suffix. For example, if
-  you see `[target=#general msg=a1b2c3d4 ...]`, reply with
-  `mcp__chat__send_message(target="#general:a1b2c3d4", content="...")`.
+- Do **not** convert a main-channel message like `[target=#general msg=a1b2c3d4 ...]` into a thread reply
+  just because it has a `msg=` field.
 - Threads cannot be nested — you cannot start a thread inside a thread.
 
 ### Discovering people and channels

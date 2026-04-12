@@ -98,6 +98,71 @@ describe('nodeWsHandler', () => {
     });
   });
 
+  it('branch conversation 的状态变化应同步转发到 channel stream', () => {
+    const channel = manager.createChannel({ name: 'ops' });
+    const agent = manager.createAgent({
+      name: 'Channel Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/channel-bob',
+    });
+    manager.joinChannel(agent.agentId, channel.channelId);
+    const threadRootId = 'deadbeef00000000';
+    const conv = manager.openAgentChannelThread(agent.agentId, channel.channelId, threadRootId);
+    if (!conv) throw new Error('missing branch conversation');
+
+    const socket = new FakeSocket();
+    const channelEvents: any[] = [];
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(
+      socket as any,
+      registry as any,
+      () => {},
+      db,
+      manager,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (channelId, event) => {
+        channelEvents.push({ channelId, event });
+      },
+    );
+
+    socket.emit('message', JSON.stringify({
+      type: 'run.event',
+      runId: 'run-1',
+      conversationId: conv.id,
+      event: {
+        type: 'conversation.status',
+        conversationId: conv.id,
+        status: 'recovering',
+      },
+    }));
+
+    expect(channelEvents).toHaveLength(1);
+    expect(channelEvents[0]).toMatchObject({
+      channelId: channel.channelId,
+      event: {
+        type: 'channel.conversation.status',
+        channelId: channel.channelId,
+        conversation: {
+          id: conv.id,
+          channelId: channel.channelId,
+          threadKind: 'branch',
+          threadRootId,
+          status: 'recovering',
+          agentId: agent.agentId,
+        },
+      },
+    });
+  });
+
   it('node.register 在未显式传 NODE_ID 时应按 machine name 接管 pending machine', () => {
     const machine = manager.createMachine({
       name: 'gpu-box-01',
@@ -860,7 +925,7 @@ describe('nodeWsHandler', () => {
       JSON.stringify({
         status: 'started',
         primaryTarget: 'dm:@oldpan',
-        threadTarget: 'dm:@oldpan:abc12345',
+        threadTarget: 'dm:@oldpan:abc1234500000000',
         taskNumber: 7,
       }),
       Date.now(),

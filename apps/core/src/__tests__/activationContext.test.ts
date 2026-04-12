@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { buildThreadShortId } from '@agent-collab/protocol';
 import { createTestDb } from './helpers.js';
 import { buildTargetActivationContext, ensureDmThreadContextSnapshot } from '../web/activationContext.js';
 import { buildChannelActivationContextText } from '../web/channelActivationPrompt.js';
@@ -68,8 +69,8 @@ describe('activationContext', () => {
   it('task thread prompt context 应同时包含 root、recent history、participants 和 task brief，并抑制 task board summary', () => {
     const db = createTestDb();
     const now = Date.now();
-    const threadRootId = 'feedbeef';
     const rootMessageId = 'feedbeef-0000-0000-0000-000000000000';
+    const threadRootId = buildThreadShortId(rootMessageId);
 
     db.prepare(
       `INSERT INTO agents(agent_id, name, agent_type, channel_id, created_at, updated_at)
@@ -82,9 +83,9 @@ describe('activationContext', () => {
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
        VALUES
        (?, 'default', 'agent-owner', 'TaskOwner', 'agent', '#default', 'Root task kickoff', 1, ?, NULL),
-       ('thread-msg-1', 'default', 'user', 'User', 'user', '#default:feedbeef', 'Can you both take a look?', 2, ?, 'feedbeef'),
-       ('thread-msg-2', 'default', 'agent-helper', 'TaskHelper', 'agent', '#default:feedbeef', 'I checked the failing branch already.', 3, ?, 'feedbeef')`,
-    ).run(rootMessageId, now, now + 1, now + 2);
+       ('thread-msg-1', 'default', 'user', 'User', 'user', ?, 'Can you both take a look?', 2, ?, ?),
+       ('thread-msg-2', 'default', 'agent-helper', 'TaskHelper', 'agent', ?, 'I checked the failing branch already.', 3, ?, ?)`,
+    ).run(rootMessageId, now, `#default:${threadRootId}`, now + 1, threadRootId, `#default:${threadRootId}`, now + 2, threadRootId);
 
     db.prepare(
       `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, claimed_by_agent_id, claimed_by_name, message_id, created_at, updated_at)
@@ -109,12 +110,12 @@ describe('activationContext', () => {
     const context = buildTargetActivationContext(db, {
       agentId: 'agent-owner',
       channelId: 'default',
-      replyTarget: '#default:feedbeef',
+      replyTarget: `#default:${threadRootId}`,
       triggerSeq: 4,
       threadRootId,
     });
     const text = buildChannelActivationContextText({
-      target: '#default:feedbeef',
+      target: `#default:${threadRootId}`,
       recentMessages: context.recentMessages,
       rootMessage: context.rootMessage,
       unreadCount: context.unreadCount,
@@ -144,6 +145,8 @@ describe('activationContext', () => {
     const db = createTestDb();
     const now = Date.now();
     vi.spyOn(Date, 'now').mockReturnValue(now);
+    const rootMessageId = 'userbeef-0000-0000-0000-000000000000';
+    const threadRootId = buildThreadShortId(rootMessageId);
 
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
@@ -157,12 +160,12 @@ describe('activationContext', () => {
     const context = buildTargetActivationContext(db, {
       agentId: 'agent-reader',
       channelId: 'default',
-      replyTarget: '#default:userbeef',
+      replyTarget: `#default:${threadRootId}`,
       triggerSeq: 2,
-      threadRootId: 'userbeef',
+      threadRootId,
     });
     const text = buildChannelActivationContextText({
-      target: '#default:userbeef',
+      target: `#default:${threadRootId}`,
       recentMessages: context.recentMessages,
       rootMessage: context.rootMessage,
       unreadCount: context.unreadCount,
@@ -242,6 +245,7 @@ describe('activationContext', () => {
     const db = createTestDb();
     const now = Date.now();
     const rootMessageId = 'deadbeef-0000-0000-0000-000000000000';
+    const threadRootId = buildThreadShortId(rootMessageId);
 
     db.prepare(
       `INSERT INTO agents(agent_id, name, agent_type, channel_id, created_at, updated_at)
@@ -258,7 +262,7 @@ describe('activationContext', () => {
     upsertTargetParticipant(db, {
       agentId: 'agent-owner',
       channelId: 'default',
-      threadRootId: 'deadbeef',
+      threadRootId,
       role: 'owner',
       lastActiveAt: now,
     });
@@ -266,12 +270,12 @@ describe('activationContext', () => {
     const context = buildTargetActivationContext(db, {
       agentId: 'agent-owner',
       channelId: 'default',
-      replyTarget: '#default:deadbeef',
+      replyTarget: `#default:${threadRootId}`,
       triggerSeq: 2,
-      threadRootId: 'deadbeef',
+      threadRootId,
     });
     const text = buildChannelActivationContextText({
-      target: '#default:deadbeef',
+      target: `#default:${threadRootId}`,
       recentMessages: context.recentMessages,
       rootMessage: context.rootMessage,
       unreadCount: context.unreadCount,
@@ -302,8 +306,8 @@ describe('activationContext', () => {
     const agentId = 'agent-kimi';
     const channelId = `dm:${agentId}`;
     const directTarget = 'dm:@oldpan';
-    const threadRootId = 'deadbead';
-    const rootMessageId = `${threadRootId}-0000-0000-0000-000000000000`;
+    const rootMessageId = 'deadbead-0000-0000-0000-000000000000';
+    const threadRootId = buildThreadShortId(rootMessageId);
 
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, message_kind)
@@ -370,9 +374,9 @@ describe('activationContext', () => {
     const agentId = 'agent-kimi';
     const channelId = `dm:${agentId}`;
     const directTarget = 'dm:@oldpan';
-    const threadRootId = 'deadbead';
+    const rootMessageId = 'deadbead-0000-0000-0000-000000000000';
+    const threadRootId = buildThreadShortId(rootMessageId);
     const threadTarget = `${directTarget}:${threadRootId}`;
-    const rootMessageId = `${threadRootId}-0000-0000-0000-000000000000`;
 
     db.prepare(
       `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, message_kind)

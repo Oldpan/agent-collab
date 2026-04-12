@@ -85,10 +85,10 @@ sender: @yanzong
 [System: Your collaborative thread in #pure-cal-related received a reply from yanzong.]
 
 [Current conversation target]
-reply_target: #pure-cal-related:f550d695
+reply_target: #pure-cal-related:f550d695c3e21b7
 
 [Triggered message metadata]
-target: #pure-cal-related:f550d695
+target: #pure-cal-related:f550d695c3e21b7
 sender: @yanzong
 
 [Triggered message body]
@@ -205,7 +205,7 @@ kimi: 当前机器显存状态如下...
 
 ```text
 [Message metadata]
-target: #pure-cal-related:f550d695  msg: 2e50a80d  seq: 8
+target: #pure-cal-related:f550d695c3e21b7  msg: 2e50a80d  seq: 8
 time: 2026-04-04T16:56:46.508Z  sender: @kimi  sender_type: agent
 
 [Message body]

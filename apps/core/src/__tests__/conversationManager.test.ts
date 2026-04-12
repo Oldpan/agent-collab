@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { buildThreadShortId } from '@agent-collab/protocol';
 import { createTestDb, createTestConfig } from './helpers.js';
 import { ConversationManager } from '../web/conversationManager.js';
 import { listTargetParticipants, upsertTargetParticipant } from '../web/targetParticipants.js';
@@ -139,10 +140,11 @@ describe('ConversationManager', () => {
       });
 
       const channelConv = manager.openAgentChannelThread(agent.agentId, 'default', null);
-      const threadConv = manager.openAgentChannelThread(agent.agentId, 'default', 'abcd1234');
+      const threadRootId = 'abcd1234ef567890';
+      const threadConv = manager.openAgentChannelThread(agent.agentId, 'default', threadRootId);
 
       expect(channelConv?.replyTarget).toBe('#default');
-      expect(threadConv?.replyTarget).toBe('#default:abcd1234');
+      expect(threadConv?.replyTarget).toBe(`#default:${threadRootId}`);
     });
   });
 
@@ -201,17 +203,17 @@ describe('ConversationManager', () => {
       upsertTargetParticipant(db, {
         agentId: agent.agentId,
         channelId: channel.channelId,
-        threadRootId: 'abcd1234',
+        threadRootId: 'abcd1234ef567890',
         role: 'owner',
       });
 
       expect(listTargetParticipants(db, { channelId: channel.channelId, threadRootId: null })).toHaveLength(1);
-      expect(listTargetParticipants(db, { channelId: channel.channelId, threadRootId: 'abcd1234' })).toHaveLength(1);
+      expect(listTargetParticipants(db, { channelId: channel.channelId, threadRootId: 'abcd1234ef567890' })).toHaveLength(1);
 
       manager.leaveChannel(agent.agentId, channel.channelId);
 
       expect(listTargetParticipants(db, { channelId: channel.channelId, threadRootId: null })).toHaveLength(0);
-      expect(listTargetParticipants(db, { channelId: channel.channelId, threadRootId: 'abcd1234' })).toHaveLength(0);
+      expect(listTargetParticipants(db, { channelId: channel.channelId, threadRootId: 'abcd1234ef567890' })).toHaveLength(0);
     });
   });
 
@@ -617,7 +619,7 @@ describe('ConversationManager', () => {
       ).run('msg-default-1', Date.now());
       db.prepare(
         `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id)
-         VALUES(?, 'default', 'user', 'User', 'user', '#default:abc12345', 'thread hello', 2, ?, 'abc12345')`,
+         VALUES(?, 'default', 'user', 'User', 'user', '#default:abc1234500000000', 'thread hello', 2, ?, 'abc1234500000000')`,
       ).run('msg-default-2', Date.now());
       db.prepare(
         `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, message_kind)
@@ -636,7 +638,7 @@ describe('ConversationManager', () => {
         `INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq) VALUES(?, 'default', '', 2)`,
       ).run(agent.agentId);
       db.prepare(
-        `INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq) VALUES(?, 'default', 'taskroot1', 3)`,
+        `INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq) VALUES(?, 'default', 'taskroot10000000', 3)`,
       ).run(agent.agentId);
       db.prepare(
         `INSERT INTO agent_message_checkpoints(agent_id, channel_id, thread_root_id, last_seq) VALUES(?, ?, '', 1)`,
@@ -660,7 +662,7 @@ describe('ConversationManager', () => {
       ).run(Date.now(), Date.now());
       db.prepare(
         `INSERT INTO thread_task_bindings(channel_id, thread_root_id, task_id, bound_at)
-         VALUES('default', 'taskroot1', 'task-clear-chat', ?)`,
+         VALUES('default', 'taskroot10000000', 'task-clear-chat', ?)`,
       ).run(Date.now());
 
       db.prepare(
@@ -889,9 +891,9 @@ describe('ConversationManager', () => {
       });
       manager.joinChannel(agent.agentId, channel.channelId);
 
-      const first = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'abcd1234');
-      const second = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'abcd1234');
-      const third = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'efgh5678');
+      const first = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'abcd1234ef567890');
+      const second = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'abcd1234ef567890');
+      const third = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'efgh5678ijkl9012');
 
       expect(first).not.toBeNull();
       expect(second).not.toBeNull();
@@ -901,8 +903,8 @@ describe('ConversationManager', () => {
       expect(first?.threadKind).toBe('branch');
       expect(first?.isPrimaryThread).toBe(false);
       expect(first?.channelId).toBe(channel.channelId);
-      expect(first?.threadRootId).toBe('abcd1234');
-      expect(third?.threadRootId).toBe('efgh5678');
+      expect(first?.threadRootId).toBe('abcd1234ef567890');
+      expect(third?.threadRootId).toBe('efgh5678ijkl9012');
     });
 
     it('openAgentChannelThread 传入完整 message id 时应归一化到 short threadRootId', () => {
@@ -915,14 +917,16 @@ describe('ConversationManager', () => {
       });
       manager.joinChannel(agent.agentId, channel.channelId);
 
-      const fromShort = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'abcd1234');
-      const fromFull = manager.openAgentChannelThread(agent.agentId, channel.channelId, 'abcd1234-dead-beef-cafe-0123456789ab');
+      const fullMessageId = 'abcd1234-dead-beef-cafe-0123456789ab';
+      const canonicalThreadRootId = buildThreadShortId(fullMessageId);
+      const fromShort = manager.openAgentChannelThread(agent.agentId, channel.channelId, canonicalThreadRootId);
+      const fromFull = manager.openAgentChannelThread(agent.agentId, channel.channelId, fullMessageId);
 
       expect(fromShort).not.toBeNull();
       expect(fromFull).not.toBeNull();
       expect(fromShort?.id).toBe(fromFull?.id);
-      expect(fromFull?.threadRootId).toBe('abcd1234');
-      expect(fromFull?.replyTarget).toBe('#eng-thread-normalized:abcd1234');
+      expect(fromFull?.threadRootId).toBe(canonicalThreadRootId);
+      expect(fromFull?.replyTarget).toBe(`#eng-thread-normalized:${canonicalThreadRootId}`);
     });
 
     it('openAgentChannelThread 在无 threadRootId 时应复用同一个 channel root branch', () => {

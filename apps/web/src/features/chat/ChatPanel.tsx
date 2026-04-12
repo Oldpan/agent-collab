@@ -984,9 +984,9 @@ function StatusDot({ status }: { status: string }) {
             "size-2 rounded-full shrink-0 cursor-default",
             status === "idle" && "bg-success",
             status === "unavailable" && "bg-zinc-400",
-            status === "queued" && "bg-blue-500",
-            status === "active" && "bg-warning",
-            status === "recovering" && "bg-sky-500",
+            status === "queued" && "bg-blue-400",
+            status === "active" && "bg-orange-400",
+            status === "recovering" && "bg-sky-400",
             status === "awaiting_approval" && "bg-amber-500",
             status === "failed" && "bg-destructive",
           )}

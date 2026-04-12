@@ -3056,11 +3056,7 @@ function normalizeTargetForConversation(db: Db, conversationId: string, target: 
       const [, targetChannel, targetThreadRootId] = sameChannelThread;
       if (
         (targetChannel === channelName || targetChannel === row.channelId)
-        && (
-          targetThreadRootId === row.threadRootId
-          || targetThreadRootId.startsWith(row.threadRootId)
-          || row.threadRootId.startsWith(targetThreadRootId)
-        )
+        && targetThreadRootId === row.threadRootId
       ) {
         return canonicalThreadTarget;
       }
