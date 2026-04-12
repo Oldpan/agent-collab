@@ -3184,6 +3184,383 @@ describe('internalAgentRouter', () => {
     ).get(agent.agentId) as { role: string } | undefined;
     expect(participant?.role).toBe('owner');
   });
+
+  // ── 回归测试：DM peer 隔离 ──
+
+  it('DM claim_tasks 应拒绝不属于当前 DM peer 的 task', async () => {
+    const now = Date.now();
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-peerA', 'peerA', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-peerB', 'peerB', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+
+    const agent = manager.createAgent({
+      name: 'PeerIsoBot',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/peer-iso-bot',
+    });
+    const dmChannelId = `dm:${agent.agentId}`;
+
+    // peerB 的消息和 task
+    const seqB = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('peerbmsg-0000-0000-0000-000000000000', ?, 'user-peerB', 'peerB', 'user', 'dm:@peerB', 'PeerB request', ?, ?, 'task')`,
+    ).run(dmChannelId, seqB, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, created_at, updated_at)
+       VALUES('peerbTask-0000', ?, 1, 'PeerB task', 'desc', 'todo', 'peerbmsg-0000-0000-0000-000000000000', ?, ?)`,
+    ).run(dmChannelId, now, now);
+
+    // agent 在 peerA 的 primary DM conversation 里操作
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    // 设置 replyTarget 为 peerA
+    db.prepare('UPDATE conversations SET reply_target = ? WHERE id = ?').run('dm:@peerA', conv.id);
+
+    const claimRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: 'dm:@peerA',
+        task_numbers: [1],
+        conversationId: conv.id,
+      }),
+    });
+    expect(claimRes.status).toBe(200);
+    const claimBody = await claimRes.json() as { results: Array<{ success: boolean; reason?: string }> };
+    expect(claimBody.results[0].success).toBe(false);
+    expect(claimBody.results[0].reason).toContain('does not belong to the current DM context');
+  });
+
+  it('DM update-status 应拒绝不属于当前 DM peer 的 task', async () => {
+    const now = Date.now();
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-peerC', 'peerC', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-peerD', 'peerD', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+
+    const agent = manager.createAgent({
+      name: 'StatusIsoBot',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/status-iso-bot',
+    });
+    const dmChannelId = `dm:${agent.agentId}`;
+
+    const seqD = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('peerdmsg-0000-0000-0000-000000000000', ?, 'user-peerD', 'peerD', 'user', 'dm:@peerD', 'PeerD request', ?, ?, 'task')`,
+    ).run(dmChannelId, seqD, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, claimed_by_agent_id, claimed_by_name, created_at, updated_at)
+       VALUES('peerdTask-0000', ?, 1, 'PeerD task', 'desc', 'in_progress', 'peerdmsg-0000-0000-0000-000000000000', ?, 'StatusIsoBot', ?, ?)`,
+    ).run(dmChannelId, agent.agentId, now, now);
+
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    db.prepare('UPDATE conversations SET reply_target = ? WHERE id = ?').run('dm:@peerC', conv.id);
+
+    const statusRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/update-status`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: 'dm:@peerC',
+        task_number: 1,
+        status: 'in_review',
+        conversationId: conv.id,
+      }),
+    });
+    expect(statusRes.status).toBe(403);
+    expect(await statusRes.json()).toEqual({ error: 'Task does not belong to the current DM context' });
+  });
+
+  it('DM unclaim 应拒绝不属于当前 DM peer 的 task', async () => {
+    const now = Date.now();
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-peerE', 'peerE', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-peerF', 'peerF', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+
+    const agent = manager.createAgent({
+      name: 'UnclaimIsoBot',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/unclaim-iso-bot',
+    });
+    const dmChannelId = `dm:${agent.agentId}`;
+
+    const seqF = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES('peerfmsg-0000-0000-0000-000000000000', ?, 'user-peerF', 'peerF', 'user', 'dm:@peerF', 'PeerF request', ?, ?, 'task')`,
+    ).run(dmChannelId, seqF, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, claimed_by_agent_id, claimed_by_name, created_at, updated_at)
+       VALUES('peerfTask-0000', ?, 1, 'PeerF task', 'desc', 'in_progress', 'peerfmsg-0000-0000-0000-000000000000', ?, 'UnclaimIsoBot', ?, ?)`,
+    ).run(dmChannelId, agent.agentId, now, now);
+
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    db.prepare('UPDATE conversations SET reply_target = ? WHERE id = ?').run('dm:@peerE', conv.id);
+
+    const unclaimRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/unclaim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: 'dm:@peerE',
+        task_number: 1,
+        conversationId: conv.id,
+      }),
+    });
+    expect(unclaimRes.status).toBe(403);
+    expect(await unclaimRes.json()).toEqual({ error: 'Task does not belong to the current DM context' });
+  });
+
+  it('DM task-thread 中 claim_tasks 应拒绝不属于当前 DM peer 的 task', async () => {
+    const now = Date.now();
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-peer-thread-a', 'peerThreadA', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-peer-thread-b', 'peerThreadB', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+
+    const agent = manager.createAgent({
+      name: 'ThreadClaimIsoBot',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/thread-claim-iso-bot',
+    });
+    const dmChannelId = `dm:${agent.agentId}`;
+
+    const peerAMessageId = 'peer-thr-a-msg-0000-0000-0000-000000000000';
+    const peerASeq = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES(?, ?, 'user-peer-thread-a', 'peerThreadA', 'user', 'dm:@peerThreadA', 'Peer A task', ?, ?, 'task')`,
+    ).run(peerAMessageId, dmChannelId, peerASeq, now);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, created_at, updated_at)
+       VALUES('peer-thread-a-task', ?, 1, 'Peer A task', 'desc', 'todo', ?, ?, ?)`,
+    ).run(dmChannelId, peerAMessageId, now, now);
+
+    const peerBMessageId = 'peer-thr-b-msg-0000-0000-0000-000000000000';
+    const peerBSeq = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, message_kind)
+       VALUES(?, ?, 'user-peer-thread-b', 'peerThreadB', 'user', 'dm:@peerThreadB', 'Peer B task', ?, ?, 'task')`,
+    ).run(peerBMessageId, dmChannelId, peerBSeq, now + 1);
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, created_at, updated_at)
+       VALUES('peer-thread-b-task', ?, 2, 'Peer B task', 'desc', 'todo', ?, ?, ?)`,
+    ).run(dmChannelId, peerBMessageId, now + 1, now + 1);
+
+    const threadConv = manager.openAgentDirectThread(agent.agentId, 'user-peer-thread-a', buildThreadShortId(peerAMessageId));
+    if (!threadConv) throw new Error('missing thread conversation');
+
+    const claimRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: 'dm:@peerThreadA',
+        task_numbers: [2],
+        conversationId: threadConv.id,
+      }),
+    });
+    expect(claimRes.status).toBe(200);
+    const claimBody = await claimRes.json() as { results: Array<{ success: boolean; reason?: string }> };
+    expect(claimBody.results[0].success).toBe(false);
+    expect(claimBody.results[0].reason).toContain('does not belong to the current DM context');
+  });
+
+  it('DM task-thread 中 claim-message 应拒绝不属于当前 DM peer 的 message', async () => {
+    const now = Date.now();
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-peer-thread-msg-a', 'peerThreadMsgA', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-peer-thread-msg-b', 'peerThreadMsgB', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+
+    const agent = manager.createAgent({
+      name: 'ThreadClaimMsgIsoBot',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/thread-claim-msg-iso-bot',
+    });
+    const dmChannelId = `dm:${agent.agentId}`;
+
+    const peerAMessageId = 'peer-thr-msg-a-0000-0000-0000-000000000000';
+    const peerASeq = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES(?, ?, 'user-peer-thread-msg-a', 'peerThreadMsgA', 'user', 'dm:@peerThreadMsgA', 'Peer A root', ?, ?)`,
+    ).run(peerAMessageId, dmChannelId, peerASeq, now);
+
+    const peerBMessageId = 'peer-thr-msg-b-0000-0000-0000-000000000000';
+    const peerBSeq = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES(?, ?, 'user-peer-thread-msg-b', 'peerThreadMsgB', 'user', 'dm:@peerThreadMsgB', 'Peer B root', ?, ?)`,
+    ).run(peerBMessageId, dmChannelId, peerBSeq, now + 1);
+
+    const threadConv = manager.openAgentDirectThread(agent.agentId, 'user-peer-thread-msg-a', buildThreadShortId(peerAMessageId));
+    if (!threadConv) throw new Error('missing thread conversation');
+
+    const claimRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim-message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: 'dm:@peerThreadMsgA',
+        message_ids: [peerBMessageId],
+        description: 'should be rejected across DM peers',
+        conversationId: threadConv.id,
+      }),
+    });
+    expect(claimRes.status).toBe(201);
+    const claimBody = await claimRes.json() as { results: Array<{ success: boolean; reason?: string }> };
+    expect(claimBody.results[0].success).toBe(false);
+    expect(claimBody.results[0].reason).toContain('does not belong to the current DM context');
+  });
+
+  // ── 回归测试：trigger message 时间锁定 ──
+
+  it('"current" claim 应绑定 run 的 trigger message 而非同毫秒最新消息', async () => {
+    const now = Date.now();
+    db.prepare(
+      `INSERT OR IGNORE INTO users(id, username, password_hash, is_admin, created_at, updated_at)
+       VALUES('user-trig', 'trigUser', 'hash', 0, ?, ?)`,
+    ).run(now, now);
+
+    const agent = manager.createAgent({
+      name: 'TrigMsgBot',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/trig-msg-bot',
+    });
+    const dmChannelId = `dm:${agent.agentId}`;
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    db.prepare('UPDATE conversations SET reply_target = ? WHERE id = ?').run('dm:@trigUser', conv.id);
+
+    // 消息 A: 真正触发当前 run 的消息
+    const seqA = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('trigmsgA-0000-0000-0000-000000000000', ?, 'user-trig', 'trigUser', 'user', 'dm:@trigUser', 'Message A (trigger)', ?, ?)`,
+    ).run(dmChannelId, seqA, now);
+
+    // run 与消息落在同一毫秒，不能再靠 started_at 截断猜 trigger
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    const runId = `run-trig-msg-${Date.now()}`;
+    db.prepare(
+      `INSERT INTO runs(run_id, session_key, prompt_text, started_at)
+       VALUES(?, ?, 'process message A', ?)`,
+    ).run(runId, sessionRow.sessionKey, now);
+    db.prepare(
+      `INSERT INTO run_debug_inputs(
+         run_id, conversation_id, session_key, dispatch_mode, reply_target,
+         system_prompt_text, context_text, prompt_text, dispatched_prompt_text, activation_metadata_json,
+         created_at, updated_at
+       )
+       VALUES(?, ?, ?, 'resume', 'dm:@trigUser', NULL, NULL, 'process message A', 'process message A', ?, ?, ?)`,
+    ).run(
+      runId,
+      conv.id,
+      sessionRow.sessionKey,
+      JSON.stringify({
+        triggerMessage: {
+          messageId: 'trigmsgA-0000-0000-0000-000000000000',
+          seq: seqA,
+          target: 'dm:@trigUser',
+        },
+      }),
+      now,
+      now,
+    );
+
+    // 消息 B: 同毫秒进入，但 seq 更大；旧实现会误绑定到它
+    const seqB = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('trigmsgB-0000-0000-0000-000000000000', ?, 'user-trig', 'trigUser', 'user', 'dm:@trigUser', 'Message B (newer)', ?, ?)`,
+    ).run(dmChannelId, seqB, now);
+
+    // "current" 应该绑定到 metadata 指向的消息 A，而不是同毫秒但 seq 更大的消息 B
+    const claimRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: 'dm:@trigUser',
+        message_ids: ['current'],
+        description: 'Claim the trigger message',
+        conversationId: conv.id,
+      }),
+    });
+    expect(claimRes.status).toBe(200);
+    const claimBody = await claimRes.json() as { results: Array<{ success: boolean; messageId?: string }> };
+    expect(claimBody.results[0].success).toBe(true);
+    expect(claimBody.results[0].messageId).toBe('trigmsgA-0000-0000-0000-000000000000');
+  });
+
+  // ── 回归测试：ambiguous prefix ──
+
+  it('claim-message 应拒绝歧义前缀', async () => {
+    const agent = manager.createAgent({
+      name: 'AmbigBot',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/ambig-bot',
+    });
+    const dmChannelId = `dm:${agent.agentId}`;
+    const now = Date.now();
+
+    // 插入两条 message_id 共享同一个前缀 "ambig"
+    const seq1 = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('ambig001-0000-0000-0000-000000000000', ?, 'user', 'u', 'user', 'dm:@u', 'msg1', ?, ?)`,
+    ).run(dmChannelId, seq1, now);
+    const seq2 = allocateNextChannelMessageSeq(db, dmChannelId);
+    db.prepare(
+      `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at)
+       VALUES('ambig002-0000-0000-0000-000000000000', ?, 'user', 'u', 'user', 'dm:@u', 'msg2', ?, ?)`,
+    ).run(dmChannelId, seq2, now);
+
+    const res = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/tasks/claim-message`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        channel: 'dm:@u',
+        message_ids: ['ambig'],
+        description: 'ambiguous prefix test',
+      }),
+    });
+    expect(res.status).toBe(201);
+    const body = await res.json() as { results: Array<{ success: boolean; reason?: string }> };
+    expect(body.results[0].success).toBe(false);
+    expect(body.results[0].reason).toContain('Ambiguous message ID prefix');
+  });
 });
 
 async function expectDispatchCount(expected: number): Promise<void> {

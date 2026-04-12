@@ -136,6 +136,11 @@ type RunActivationMetadata = {
     triggerSeq: number;
     peerMentionedAgentIds: string[];
   };
+  triggerMessage?: {
+    messageId: string;
+    seq: number;
+    target: string;
+  };
 };
 
 function parseBoundedPositiveInt(value: string | undefined, fallback: number, max: number): number {
@@ -219,35 +224,81 @@ function getRunActivationMetadata(db: Db, runId: string | null): RunActivationMe
   if (!row?.activationMetadataJson) return null;
   try {
     const parsed = JSON.parse(row.activationMetadataJson) as RunActivationMetadata;
+    const result: RunActivationMetadata = {};
     const mentionSuppression = parsed?.mentionSuppression;
-    if (!mentionSuppression) return null;
     if (
-      mentionSuppression.mode !== 'root_user_multi_mention'
-      || !Number.isFinite(mentionSuppression.triggerSeq)
-      || !Array.isArray(mentionSuppression.peerMentionedAgentIds)
+      mentionSuppression?.mode === 'root_user_multi_mention'
+      && Number.isFinite(mentionSuppression.triggerSeq)
+      && Array.isArray(mentionSuppression.peerMentionedAgentIds)
     ) {
-      return null;
+      const peerMentionedAgentIds = mentionSuppression.peerMentionedAgentIds
+        .filter((agentId): agentId is string => typeof agentId === 'string' && agentId.trim().length > 0);
+      if (peerMentionedAgentIds.length > 0) {
+        result.mentionSuppression = {
+          mode: 'root_user_multi_mention',
+          triggerSeq: mentionSuppression.triggerSeq,
+          peerMentionedAgentIds,
+        };
+      }
     }
-    const peerMentionedAgentIds = mentionSuppression.peerMentionedAgentIds
-      .filter((agentId): agentId is string => typeof agentId === 'string' && agentId.trim().length > 0);
-    if (peerMentionedAgentIds.length === 0) return null;
-    return {
-      mentionSuppression: {
-        mode: 'root_user_multi_mention',
-        triggerSeq: mentionSuppression.triggerSeq,
-        peerMentionedAgentIds,
-      },
-    };
+    const triggerMessage = parsed?.triggerMessage;
+    if (
+      triggerMessage
+      && typeof triggerMessage.messageId === 'string'
+      && triggerMessage.messageId.trim()
+      && Number.isFinite(triggerMessage.seq)
+      && typeof triggerMessage.target === 'string'
+      && triggerMessage.target.trim()
+    ) {
+      result.triggerMessage = {
+        messageId: triggerMessage.messageId.trim(),
+        seq: triggerMessage.seq,
+        target: triggerMessage.target.trim(),
+      };
+    }
+    return result.mentionSuppression || result.triggerMessage ? result : null;
   } catch {
     return null;
   }
+}
+
+function fetchClaimableMessageById(
+  db: Db,
+  channelId: string,
+  messageId: string,
+): ClaimableMessageRow | null {
+  const row = db.prepare(
+    `SELECT message_id as messageId, content, thread_root_id as threadRootId, sender_type as senderType, sender_name as senderName,
+            target, seq, created_at as createdAt, attachment_ids as attachmentIds
+     FROM channel_messages
+     WHERE channel_id = ? AND message_id = ?
+     LIMIT 1`,
+  ).get(channelId, messageId) as ClaimableMessageRow | undefined;
+  return row ?? null;
 }
 
 function fetchLatestTopLevelUserMessageForTarget(
   db: Db,
   channelId: string,
   target: string,
+  beforeTimestamp?: number,
 ): ClaimableMessageRow | null {
+  // 当指定 beforeTimestamp 时，只查找该时间点之前的消息（用于定位触发当前 run 的消息）
+  if (beforeTimestamp != null) {
+    const row = db.prepare(
+      `SELECT message_id as messageId, content, thread_root_id as threadRootId, sender_type as senderType, sender_name as senderName,
+              target, seq, created_at as createdAt, attachment_ids as attachmentIds
+       FROM channel_messages
+       WHERE channel_id = ?
+         AND target = ?
+         AND thread_root_id IS NULL
+         AND sender_type = 'user'
+         AND created_at <= ?
+       ORDER BY seq DESC
+       LIMIT 1`,
+    ).get(channelId, target, beforeTimestamp) as ClaimableMessageRow | undefined;
+    return row ?? null;
+  }
   const row = db.prepare(
     `SELECT message_id as messageId, content, thread_root_id as threadRootId, sender_type as senderType, sender_name as senderName,
             target, seq, created_at as createdAt, attachment_ids as attachmentIds
@@ -260,6 +311,29 @@ function fetchLatestTopLevelUserMessageForTarget(
      LIMIT 1`,
   ).get(channelId, target) as ClaimableMessageRow | undefined;
   return row ?? null;
+}
+
+function getRunStartedAt(db: Db, runId: string): number | null {
+  const row = db.prepare('SELECT started_at FROM runs WHERE run_id = ?').get(runId) as { started_at: number } | undefined;
+  return row?.started_at ?? null;
+}
+
+function resolveRunTriggerMessage(
+  db: Db,
+  runId: string | null,
+  channelId: string,
+  target: string,
+): ClaimableMessageRow | null {
+  const activationMetadata = getRunActivationMetadata(db, runId);
+  const triggerMessageId = activationMetadata?.triggerMessage?.messageId;
+  if (triggerMessageId) {
+    const row = fetchClaimableMessageById(db, channelId, triggerMessageId);
+    if (row && row.target === target && row.threadRootId === null && row.senderType === 'user') {
+      return row;
+    }
+  }
+  const runStartedAt = runId ? getRunStartedAt(db, runId) : null;
+  return fetchLatestTopLevelUserMessageForTarget(db, channelId, target, runStartedAt ?? undefined);
 }
 
 function isKnownDmTargetPeer(db: Db, target: string): boolean {
@@ -299,6 +373,26 @@ export function registerInternalAgentRoutes(
   const runBoundTaskFinalReplySent = new Set<string>();
 
   const buildDmTaskThreadTarget = (primaryTarget: string, messageId: string) => `${primaryTarget}:${buildThreadShortId(messageId)}`;
+
+  // 从任意 DM 会话（primary 或 task-thread）提取 canonical peer（如 dm:@userName）
+  const resolveDmConversationPeer = (
+    agentIdParam: string,
+    channelId: string,
+    conversationId: string | undefined,
+  ): string => {
+    const conv = typeof conversationId === 'string' && conversationId.trim()
+      ? conversationManager.getConversation(conversationId.trim())
+      : null;
+    if (!conv) return '';
+    if (conv.agentId !== agentIdParam) return '';
+    if (conv.threadKind !== 'direct') return '';
+    if (channelId !== `dm:${agentIdParam}`) return '';
+    const replyTarget = (conv.replyTarget ?? resolveDefaultReplyTarget(db, conv.id, humanUserName) ?? '').trim();
+    if (!replyTarget) return '';
+    // dm:@peerName 或 dm:@peerName:threadShortId → 提取 dm:@peerName
+    const peerMatch = replyTarget.match(/^dm:@[^:]+/);
+    return peerMatch ? peerMatch[0] : replyTarget;
+  };
 
   const nextSyntheticRunEventSeq = (runId: string): number => {
     const row = db.prepare(
@@ -2028,7 +2122,7 @@ export function registerInternalAgentRoutes(
     })();
 
     if (currentPrimaryDmTarget) {
-      const triggerMessage = fetchLatestTopLevelUserMessageForTarget(db, channelId, currentPrimaryDmTarget);
+      const triggerMessage = resolveRunTriggerMessage(db, currentConversationRunId, channelId, currentPrimaryDmTarget);
       for (const task of created) {
         const handoff = await startDmTaskHandoff({
           agentId,
@@ -2083,6 +2177,7 @@ export function registerInternalAgentRoutes(
     const currentConversation = typeof conversationId === 'string' && conversationId.trim()
       ? conversationManager.getConversation(conversationId.trim())
       : null;
+    const dmConversationPeer = resolveDmConversationPeer(agentId, channelId, conversationId);
     const currentPrimaryDmTarget = currentConversation
       && currentConversation.agentId === agentId
       && currentConversation.threadKind === 'direct'
@@ -2118,7 +2213,8 @@ export function registerInternalAgentRoutes(
     let changed = false;
 
     for (const msgShortId of message_ids) {
-      const msg = db.prepare(
+      // Fix 7: 使用 .all() 检测前缀歧义
+      const msgMatches = db.prepare(
         `SELECT message_id as messageId,
                 content,
                 thread_root_id as threadRootId,
@@ -2130,10 +2226,20 @@ export function registerInternalAgentRoutes(
                 attachment_ids as attachmentIds
          FROM channel_messages
          WHERE message_id LIKE ? AND channel_id = ?`,
-      ).get(`${msgShortId}%`, channelId) as ClaimableMessageRow | undefined;
+      ).all(`${msgShortId}%`, channelId) as ClaimableMessageRow[];
 
-      if (!msg) {
+      if (msgMatches.length === 0) {
         results.push({ messageId: msgShortId, success: false, reason: 'Message not found' });
+        continue;
+      }
+      if (msgMatches.length > 1) {
+        results.push({ messageId: msgShortId, success: false, reason: 'Ambiguous message ID prefix — matches multiple messages' });
+        continue;
+      }
+      const msg = msgMatches[0];
+      // 覆盖 primary DM 和 DM task-thread 的 peer 隔离
+      if (dmConversationPeer && msg.target !== dmConversationPeer) {
+        results.push({ messageId: msg.messageId, success: false, reason: 'Message does not belong to the current DM context' });
         continue;
       }
       if (currentPrimaryDmTarget && msg.senderType !== 'user') {
@@ -2298,7 +2404,8 @@ export function registerInternalAgentRoutes(
       `SELECT t.task_id as taskId,
               t.message_id as messageId,
               t.created_at as taskCreatedAt,
-              cm.created_at as messageCreatedAt
+              cm.created_at as messageCreatedAt,
+              cm.target as messageTarget
        FROM tasks t
        LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
        WHERE t.channel_id = ? AND t.task_number = ?`,
@@ -2307,11 +2414,19 @@ export function registerInternalAgentRoutes(
       messageId: string | null;
       taskCreatedAt: number;
       messageCreatedAt: number | null;
+      messageTarget: string | null;
     } | undefined;
 
     if (!row) {
       reply.code(404);
       return { error: 'Task not found' };
+    }
+
+    // DM 上下文隔离（覆盖 primary DM 和 task-thread）
+    const dmPeerDetails = resolveDmConversationPeer(agentId, channelId, conversationId);
+    if (dmPeerDetails && row.messageTarget && row.messageTarget !== dmPeerDetails) {
+      reply.code(403);
+      return { error: 'Task does not belong to the current DM context' };
     }
 
     const now = Date.now();
@@ -2380,6 +2495,7 @@ export function registerInternalAgentRoutes(
     const currentConversation = typeof conversationId === 'string' && conversationId.trim()
       ? conversationManager.getConversation(conversationId.trim())
       : null;
+    const dmConversationPeer = resolveDmConversationPeer(agentId, channelId, conversationId);
     const currentPrimaryDmTarget = currentConversation
       && currentConversation.agentId === agentId
       && currentConversation.threadKind === 'direct'
@@ -2410,31 +2526,29 @@ export function registerInternalAgentRoutes(
         if (!currentPrimaryDmTarget) {
           return { reason: '"current" is only available in the current primary DM conversation' } as const;
         }
-        const row = db.prepare(
-          `SELECT message_id as messageId, content, thread_root_id as threadRootId, sender_type as senderType, sender_name as senderName,
-                  target, seq, created_at as createdAt, attachment_ids as attachmentIds
-           FROM channel_messages
-           WHERE channel_id = ?
-             AND target = ?
-             AND thread_root_id IS NULL
-             AND sender_type = 'user'
-           ORDER BY seq DESC
-           LIMIT 1`,
-        ).get(channelId, currentPrimaryDmTarget) as ClaimableMessageRow | undefined;
+        const row = resolveRunTriggerMessage(db, currentConversationRunId, channelId, currentPrimaryDmTarget);
         if (!row) {
           return { reason: 'No current user DM message is available to claim' } as const;
         }
         return { row } as const;
       }
 
-      const row = db.prepare(
+      // Fix 7: 使用 .all() 检测前缀歧义
+      const matches = db.prepare(
         `SELECT message_id as messageId, content, thread_root_id as threadRootId, sender_type as senderType, sender_name as senderName,
                 target, seq, created_at as createdAt, attachment_ids as attachmentIds
          FROM channel_messages
          WHERE message_id LIKE ? AND channel_id = ?`,
-      ).get(`${normalizedPrefix}%`, channelId) as ClaimableMessageRow | undefined;
-      if (!row) {
+      ).all(`${normalizedPrefix}%`, channelId) as ClaimableMessageRow[];
+      if (matches.length === 0) {
         return { reason: 'Message not found' } as const;
+      }
+      if (matches.length > 1) {
+        return { reason: 'Ambiguous message ID prefix — matches multiple messages' } as const;
+      }
+      const row = matches[0];
+      if (dmConversationPeer && row.target !== dmConversationPeer) {
+        return { reason: 'Message does not belong to the current DM context' } as const;
       }
       return { row } as const;
     };
@@ -2492,6 +2606,10 @@ export function registerInternalAgentRoutes(
           messageId: row.messageId ?? null,
           reason: buildBoundTaskThreadReclaimError(boundTaskThreadContext.boundTask),
         });
+        continue;
+      }
+      if (dmConversationPeer && row.messageTarget && row.messageTarget !== dmConversationPeer) {
+        results.push({ taskNumber, agentTaskRef: row.agentTaskRef ?? undefined, success: false, reason: 'Task does not belong to the current DM context' });
         continue;
       }
       if (row.claimedByAgentId && row.claimedByAgentId !== agentId) {
@@ -2762,14 +2880,29 @@ export function registerInternalAgentRoutes(
 
     const row = db
       .prepare(
-        `SELECT task_id as taskId, claimed_by_agent_id as claimedByAgentId, status
-         FROM tasks WHERE channel_id = ? AND task_number = ?`,
+        `SELECT t.task_id as taskId, t.claimed_by_agent_id as claimedByAgentId, t.status,
+                t.message_id as messageId, cm.target as messageTarget
+         FROM tasks t
+         LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
+         WHERE t.channel_id = ? AND t.task_number = ?`,
       )
-      .get(channelId, task_number) as { taskId: string; claimedByAgentId: string | null; status: 'todo' | 'in_progress' | 'in_review' | 'done' } | undefined;
+      .get(channelId, task_number) as {
+        taskId: string;
+        claimedByAgentId: string | null;
+        status: 'todo' | 'in_progress' | 'in_review' | 'done';
+        messageId: string | null;
+        messageTarget: string | null;
+      } | undefined;
 
     if (!row) {
       reply.code(404);
       return { error: 'Task not found' };
+    }
+    // DM 上下文隔离（覆盖 primary DM 和 task-thread）
+    const dmPeerUnclaim = resolveDmConversationPeer(agentId, channelId, conversationId);
+    if (dmPeerUnclaim && row.messageTarget && row.messageTarget !== dmPeerUnclaim) {
+      reply.code(403);
+      return { error: 'Task does not belong to the current DM context' };
     }
     if (row.claimedByAgentId !== agentId) {
       reply.code(403);
@@ -2780,7 +2913,7 @@ export function registerInternalAgentRoutes(
     const now = Date.now();
     db.transaction(() => {
       db.prepare(
-        `UPDATE tasks SET claimed_by_agent_id = NULL, claimed_by_name = NULL, status = ?, updated_at = ?
+        `UPDATE tasks SET claimed_by_agent_id = NULL, claimed_by_name = NULL, assigned_by_user = NULL, status = ?, updated_at = ?
          WHERE task_id = ?`,
       ).run(newStatus, now, row.taskId);
 
@@ -2792,6 +2925,18 @@ export function registerInternalAgentRoutes(
     })();
 
     broadcastChannelTasksChanged(channelId);
+
+    // Fix 8: unclaim 时向主 DM 广播 task root 状态更新
+    if (channelId.startsWith('dm:') && row.messageId && row.messageTarget) {
+      broadcastDmTaskRootUpdate({
+        agentId,
+        primaryTarget: row.messageTarget,
+        messageId: row.messageId,
+        taskNumber: task_number,
+        taskStatus: newStatus,
+        taskAssigneeName: null,
+      });
+    }
 
     return { ok: true };
   });
@@ -2862,6 +3007,12 @@ export function registerInternalAgentRoutes(
     if (!row) {
       reply.code(404);
       return { error: 'Task not found' };
+    }
+    // DM 上下文隔离（覆盖 primary DM 和 task-thread）
+    const dmPeerStatus = resolveDmConversationPeer(agentId, channelId, conversationId);
+    if (dmPeerStatus && row.messageTarget && row.messageTarget !== dmPeerStatus) {
+      reply.code(403);
+      return { error: 'Task does not belong to the current DM context' };
     }
     if (!isValidTransition(row.currentStatus, nextStatus)) {
       reply.code(400);

@@ -38,6 +38,11 @@ export type PromptActivationMetadata = {
     triggerSeq: number;
     peerMentionedAgentIds: string[];
   };
+  triggerMessage?: {
+    messageId: string;
+    seq: number;
+    target: string;
+  };
   expectedTermination?: {
     kind: 'dm_handoff_bootstrap';
     stopReason: 'handoff_bootstrap';
@@ -113,6 +118,9 @@ export class ExecutionDispatcher {
     let agentEnvVars: Record<string, string> | undefined;
     let disabledToolKinds: AgentInfo['disabledToolKinds'];
     let dmActivationCheckpoint: { channelId: string; seq: number } | undefined;
+    let activationMetadata = options?.activationMetadata
+      ? { ...options.activationMetadata }
+      : undefined;
     if (row.agentId) {
       const agent = this.getAgentById(row.agentId);
       if (agent) {
@@ -145,11 +153,12 @@ export class ExecutionDispatcher {
             ? [...promptText.slice(attachNoteIdx).matchAll(/^ID: ([a-f0-9-]{36})$/gm)].map((m) => m[1])
             : [];
           const dmThreadRootId = row.threadKind === 'direct' ? row.threadRootId ?? null : null;
+          const persistedMessageId = options?.clientMessageId ?? randomUUID();
           this.db.prepare(
             `INSERT INTO channel_messages(message_id, channel_id, sender_id, sender_name, sender_type, target, content, seq, created_at, thread_root_id, attachment_ids)
              VALUES(?, ?, 'user', ?, 'user', ?, ?, ?, ?, ?, ?)`,
           ).run(
-            options?.clientMessageId ?? randomUUID(),
+            persistedMessageId,
             dmChannelId,
             humanUserName,
             dmReplyTarget,
@@ -159,6 +168,14 @@ export class ExecutionDispatcher {
             dmThreadRootId,
             parsedAttachIds.length ? JSON.stringify(parsedAttachIds) : null,
           );
+          activationMetadata = {
+            ...(activationMetadata ?? {}),
+            triggerMessage: {
+              messageId: persistedMessageId,
+              seq: msgSeq,
+              target: dmReplyTarget,
+            },
+          };
 
           // Checkpoint will be bumped after confirmed delivery to avoid silent message
           // loss if the node is offline or the send fails.
@@ -227,7 +244,7 @@ export class ExecutionDispatcher {
       contextText: contextText || null,
       promptText,
       dispatchedPromptText: dispatchedPrompt,
-      activationMetadataJson: serializePromptActivationMetadata(options?.activationMetadata),
+      activationMetadataJson: serializePromptActivationMetadata(activationMetadata),
     });
 
     const node = this.nodeRegistry?.getNode(row.nodeId);
@@ -860,6 +877,20 @@ function serializePromptActivationMetadata(metadata: PromptActivationMetadata | 
     }
   }
   if (
+    metadata.triggerMessage
+    && typeof metadata.triggerMessage.messageId === 'string'
+    && metadata.triggerMessage.messageId.trim()
+    && Number.isFinite(metadata.triggerMessage.seq)
+    && typeof metadata.triggerMessage.target === 'string'
+    && metadata.triggerMessage.target.trim()
+  ) {
+    payload.triggerMessage = {
+      messageId: metadata.triggerMessage.messageId.trim(),
+      seq: metadata.triggerMessage.seq,
+      target: metadata.triggerMessage.target.trim(),
+    };
+  }
+  if (
     metadata.expectedTermination?.kind === 'dm_handoff_bootstrap'
     && metadata.expectedTermination.stopReason === 'handoff_bootstrap'
   ) {
@@ -868,7 +899,7 @@ function serializePromptActivationMetadata(metadata: PromptActivationMetadata | 
       stopReason: 'handoff_bootstrap',
     };
   }
-  if (!payload.mentionSuppression && !payload.expectedTermination) return null;
+  if (!payload.mentionSuppression && !payload.triggerMessage && !payload.expectedTermination) return null;
   return JSON.stringify(payload);
 }
 
@@ -890,6 +921,21 @@ function parsePromptActivationMetadata(value: string | null | undefined): Prompt
         };
       }
     }
+    const triggerMessage = parsed?.triggerMessage;
+    if (
+      triggerMessage
+      && typeof triggerMessage.messageId === 'string'
+      && triggerMessage.messageId.trim()
+      && Number.isFinite(triggerMessage.seq)
+      && typeof triggerMessage.target === 'string'
+      && triggerMessage.target.trim()
+    ) {
+      result.triggerMessage = {
+        messageId: triggerMessage.messageId.trim(),
+        seq: triggerMessage.seq,
+        target: triggerMessage.target.trim(),
+      };
+    }
     if (
       parsed?.expectedTermination?.kind === 'dm_handoff_bootstrap'
       && parsed.expectedTermination.stopReason === 'handoff_bootstrap'
@@ -899,7 +945,7 @@ function parsePromptActivationMetadata(value: string | null | undefined): Prompt
         stopReason: 'handoff_bootstrap',
       };
     }
-    return result.mentionSuppression || result.expectedTermination ? result : undefined;
+    return result.mentionSuppression || result.triggerMessage || result.expectedTermination ? result : undefined;
   } catch {
     return undefined;
   }

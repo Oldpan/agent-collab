@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 58;
+const LATEST_VERSION = 59;
 
 function buildCanonicalThreadShortIdSql(column: string): string {
   return `SUBSTR(REPLACE(CASE
@@ -1330,5 +1330,16 @@ export function migrate(db: Db): void {
   const v58Row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
   if (v58Row.version < 58) {
     db.exec(`UPDATE schema_version SET version = 58;`);
+  }
+
+  // v59: track which user assigned an agent to a task (for unclaim permission checks)
+  const taskColsV59 = db.prepare("PRAGMA table_info('tasks')").all() as Array<{ name: string }>;
+  if (!taskColsV59.some((c) => c.name === 'assigned_by_user')) {
+    db.exec(`ALTER TABLE tasks ADD COLUMN assigned_by_user TEXT;`);
+  }
+
+  const v59Row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
+  if (v59Row.version < 59) {
+    db.exec(`UPDATE schema_version SET version = 59;`);
   }
 }

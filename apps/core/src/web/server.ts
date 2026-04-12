@@ -2960,11 +2960,13 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       if (!messageId) { reply.code(400); return { error: 'messageId is required' }; }
       const normalizedDescription = normalizeRequiredText(description);
       if (!normalizedDescription) { reply.code(400); return { error: 'description is required' }; }
-      // Check message exists and belongs to this channel
-      const msg = db.prepare(
+      // Fix 7: 检测前缀歧义
+      const msgMatches = db.prepare(
         `SELECT message_id, content, thread_root_id FROM channel_messages WHERE message_id LIKE ? AND channel_id = ?`,
-      ).get(`${messageId}%`, req.params.id) as { message_id: string; content: string; thread_root_id: string | null } | undefined;
-      if (!msg) { reply.code(404); return { error: 'Message not found' }; }
+      ).all(`${messageId}%`, req.params.id) as Array<{ message_id: string; content: string; thread_root_id: string | null }>;
+      if (msgMatches.length === 0) { reply.code(404); return { error: 'Message not found' }; }
+      if (msgMatches.length > 1) { reply.code(409); return { error: 'Ambiguous message ID prefix — matches multiple messages' }; }
+      const msg = msgMatches[0];
       if (msg.thread_root_id) { reply.code(400); return { error: 'Cannot promote a thread reply to task' }; }
       // Check not already a task
       const existing = db.prepare(`SELECT task_id FROM tasks WHERE message_id = ?`).get(msg.message_id) as { task_id: string } | undefined;
@@ -3113,7 +3115,10 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         : null;
 
       const now = Date.now();
-      const nextStatus = current.currentStatus === 'todo' ? 'in_progress' : current.currentStatus;
+      // Fix 6: agent 分配时始终设为 in_progress；用户自领时保留原有逻辑
+      const nextStatus = requestedAgentId
+        ? 'in_progress' as const
+        : (current.currentStatus === 'todo' ? 'in_progress' : current.currentStatus);
       if (requestedAgentId) {
         const agent = conversationManager.getAgent(requestedAgentId);
         if (!agent) {
@@ -3138,13 +3143,22 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
           reply.code(409);
           return { error: 'Task is already claimed by another user' };
         }
+        // Fix 4: 与 agent 内部 claim 路径一致——拒绝已被其他 agent claim 的 task
+        if (current.claimedByAgentId && current.claimedByAgentId !== requestedAgentId) {
+          reply.code(409);
+          return { error: 'Task is already claimed by another agent' };
+        }
+        // Fix 5: 幂等——已经分配给同一个 agent 时直接返回
+        if (current.claimedByAgentId === requestedAgentId) {
+          return getChannelTaskByNumber(db, { channelId: req.params.id, taskNumber });
+        }
 
         db.transaction(() => {
           db.prepare(
             `UPDATE tasks
-             SET claimed_by_agent_id = ?, claimed_by_name = ?, status = ?, updated_at = ?
+             SET claimed_by_agent_id = ?, claimed_by_name = ?, status = ?, assigned_by_user = ?, updated_at = ?
              WHERE task_id = ?`,
-          ).run(requestedAgentId, agent.name, nextStatus, now, current.taskId);
+          ).run(requestedAgentId, agent.name, nextStatus, chanUser.username, now, current.taskId);
           upsertAgentTaskLink(db, {
             agentId: requestedAgentId,
             taskId: current.taskId,
@@ -3220,7 +3234,8 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         `SELECT task_id as taskId,
                 status as currentStatus,
                 claimed_by_agent_id as claimedByAgentId,
-                claimed_by_name as claimedByName
+                claimed_by_name as claimedByName,
+                assigned_by_user as assignedByUser
          FROM tasks
          WHERE channel_id = ? AND task_number = ?`,
       ).get(req.params.id, taskNumber) as {
@@ -3228,13 +3243,21 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         currentStatus: 'todo' | 'in_progress' | 'in_review' | 'done';
         claimedByAgentId: string | null;
         claimedByName: string | null;
+        assignedByUser: string | null;
       } | undefined;
       if (!current) {
         reply.code(404);
         return { error: 'Task not found' };
       }
-      const canUnclaimAgentTask = !!current.claimedByAgentId;
-      if (!canUnclaimAgentTask && !isTaskClaimedByUser(current, chanUser)) {
+      // Agent-assigned tasks may only be released by the assigning user.
+      // Legacy rows and agent-self-claimed tasks have no assigned_by_user marker,
+      // so keep the historical behavior and allow a channel user to release them.
+      if (current.claimedByAgentId) {
+        if (current.assignedByUser && current.assignedByUser !== chanUser.username) {
+          reply.code(403);
+          return { error: 'Only the user who assigned this task can unclaim it' };
+        }
+      } else if (!isTaskClaimedByUser(current, chanUser)) {
         reply.code(403);
         return { error: 'You must be the task assignee to unclaim it' };
       }
@@ -3244,7 +3267,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       db.transaction(() => {
         db.prepare(
           `UPDATE tasks
-           SET claimed_by_agent_id = NULL, claimed_by_name = NULL, status = ?, updated_at = ?
+           SET claimed_by_agent_id = NULL, claimed_by_name = NULL, assigned_by_user = NULL, status = ?, updated_at = ?
            WHERE task_id = ?`,
         ).run(nextStatus, now, current.taskId);
         syncTaskThreadOwner(db, {

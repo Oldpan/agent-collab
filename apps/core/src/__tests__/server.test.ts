@@ -3290,6 +3290,42 @@ describe('REST API', () => {
     expect(released.body.assigneeName).toBeNull();
   });
 
+  it('POST /api/channels/:id/tasks/:num/unclaim 应拒绝非分配者释放明确指派给 agent 的 task', async () => {
+    const now = Date.now();
+    const agent = manager.createAgent({
+      name: 'AssignedReleaseMe',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/assigned-release-me',
+      channelId: 'default',
+    });
+    manager.joinChannel(agent.agentId, 'default');
+    db.prepare(
+      `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status,
+                         claimed_by_agent_id, claimed_by_name, assigned_by_user, created_at, updated_at)
+       VALUES('task-release-assigned-agent', 'default', 197, 'Assigned release task', 'Goal: only the assigning user can release this task.', 'in_progress',
+              ?, ?, 'Alice', ?, ?)`,
+    ).run(agent.agentId, agent.name, now, now);
+
+    const denied = await fetchJson('/api/channels/default/tasks/197/unclaim', {
+      method: 'POST',
+      headers: { 'x-user-name': 'Bob' },
+    });
+
+    expect(denied.status).toBe(403);
+    expect(denied.body.error).toBe('Only the user who assigned this task can unclaim it');
+
+    const allowed = await fetchJson('/api/channels/default/tasks/197/unclaim', {
+      method: 'POST',
+      headers: { 'x-user-name': 'Alice' },
+    });
+
+    expect(allowed.status).toBe(200);
+    expect(allowed.body.status).toBe('todo');
+    expect(allowed.body.assigneeId).toBeNull();
+    expect(allowed.body.assigneeName).toBeNull();
+  });
+
   it('PATCH /api/channels/:id/tasks/:num/status 应限制非 assignee 推进状态，但允许 review 决策', async () => {
     const now = Date.now();
     db.prepare(

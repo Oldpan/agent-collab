@@ -29,7 +29,7 @@ describe('migrations', () => {
   it('schema_version 应为最新版本', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBeGreaterThanOrEqual(54);
+    expect(row.version).toBeGreaterThanOrEqual(59);
     db.close();
   });
 
