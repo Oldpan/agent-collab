@@ -502,7 +502,7 @@ server.tool(
         .join('\n') ?? '';
       const hint = threadHints ? `\n\nTo follow up in each task's thread:\n${threadHints}` : '';
       const handoffNote = hasHandoff
-        ? '\n\nPrimary DM handoff started automatically. Stop this run now. Do not manually send any follow-up in the main DM; the platform will mirror task status there while detailed work continues in the task thread.'
+        ? '\n\nPrimary DM handoff started automatically. End this main-DM turn here. Detailed work continues in the task thread. This is an expected phase transition, not a failure or interruption. Do not manually send any follow-up in the main DM; the platform will mirror task status there.'
         : '';
       return toText(`Created ${d.tasks?.length ?? 0} task(s) in ${channel}:\n${created}${hint}${handoffNote}`);
     } catch (err: unknown) {
@@ -574,7 +574,7 @@ server.tool(
         .join('\n');
       const hint = threadHints ? `\n\nFollow up in each task's thread:\n${threadHints}` : '';
       const handoffNote = hasHandoff
-        ? '\n\nPrimary DM handoff started automatically. Stop this run now. Do not manually send any follow-up in the main DM; the platform will mirror task status there while detailed work continues in the task thread.'
+        ? '\n\nPrimary DM handoff started automatically. End this main-DM turn here. Detailed work continues in the task thread. This is an expected phase transition, not a failure or interruption. Do not manually send any follow-up in the main DM; the platform will mirror task status there.'
         : '';
       return toText(`Claim results (${summary}):\n${lines.join('\n')}${contextSection}${hint}${handoffNote}`);
     } catch (err: unknown) {
@@ -674,7 +674,7 @@ Thread messages cannot be claimed or converted into tasks. If a task is in "todo
         .join('\n');
       const hint = threadHints ? `\n\nFollow up in each task's thread:\n${threadHints}` : '';
       const handoffNote = hasHandoff
-        ? '\n\nPrimary DM handoff started automatically. Stop this run now. Do not manually send any follow-up in the main DM; the platform will mirror task status there while detailed work continues in the task thread.'
+        ? '\n\nPrimary DM handoff started automatically. End this main-DM turn here. Detailed work continues in the task thread. This is an expected phase transition, not a failure or interruption. Do not manually send any follow-up in the main DM; the platform will mirror task status there.'
         : '';
       return toText(`Claim results (${summary}):\n${lines.join('\n')}${contextSection}${hint}${handoffNote}`);
     } catch (err: unknown) {

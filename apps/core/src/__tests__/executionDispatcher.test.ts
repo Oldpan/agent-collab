@@ -486,6 +486,35 @@ describe('ExecutionDispatcher', () => {
     expect(secondDispatch.contextText ?? '').not.toContain('[stop_reason] handoff');
   });
 
+  it('resume replay 应忽略 handoff_bootstrap，但保留普通 cancelled', async () => {
+    const agent = manager.createAgent({
+      name: 'Replay Bootstrap Bob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/replay-bootstrap-bob',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+
+    await manager.submitPrompt(conv.id, '第一个问题');
+    const firstDispatch = sent[0]?.msg;
+    if (!firstDispatch || firstDispatch.type !== 'run.dispatch') throw new Error('missing first dispatch');
+    finishRun(db, { runId: firstDispatch.runId, stopReason: 'handoff_bootstrap' });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', conv.id);
+
+    await manager.submitPrompt(conv.id, '第二个问题');
+    const secondDispatch = sent[1]?.msg;
+    if (!secondDispatch || secondDispatch.type !== 'run.dispatch') throw new Error('missing second dispatch');
+    expect(secondDispatch.contextText ?? '').not.toContain('[stop_reason] handoff_bootstrap');
+    finishRun(db, { runId: secondDispatch.runId, stopReason: 'cancelled' });
+    db.prepare('UPDATE conversations SET status = ? WHERE id = ?').run('idle', conv.id);
+
+    await manager.submitPrompt(conv.id, '第三个问题');
+    const thirdDispatch = sent[2]?.msg;
+    if (!thirdDispatch || thirdDispatch.type !== 'run.dispatch') throw new Error('missing third dispatch');
+    expect(thirdDispatch.contextText ?? '').toContain('[stop_reason] cancelled');
+  });
+
   it('resume replay 应优先使用真实 agent 回复，不应回放空响应 delta 噪音', async () => {
     manager.close();
     db.close();

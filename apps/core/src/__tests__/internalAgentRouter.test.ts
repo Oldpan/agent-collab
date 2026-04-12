@@ -397,15 +397,22 @@ describe('internalAgentRouter', () => {
     expect(threadRun?.promptText).toContain('Inspect current memory usage and summarize the result in the task thread.');
     const threadDebug = db.prepare(
       `SELECT context_text as contextText
+              , activation_metadata_json as activationMetadataJson
        FROM run_debug_inputs
        WHERE conversation_id = ?
        ORDER BY created_at DESC
        LIMIT 1`,
-    ).get(claimBody.results[0].threadConversationId) as { contextText: string | null } | undefined;
+    ).get(claimBody.results[0].threadConversationId) as {
+      contextText: string | null;
+      activationMetadataJson: string | null;
+    } | undefined;
     expect(threadDebug?.contextText).toContain('[Context from DM]');
     expect(threadDebug?.contextText).toContain('@oldpan: 你好');
     expect(threadDebug?.contextText).toContain(`@${agent.name}: 你好！我是 Kimi。`);
     expect(threadDebug?.contextText).toContain('@oldpan [Trigger]: Check memory usage and treat it as a task');
+    expect(threadDebug?.activationMetadataJson).toContain('"expectedTermination"');
+    expect(threadDebug?.activationMetadataJson).toContain('"kind":"dm_handoff_bootstrap"');
+    expect(threadDebug?.activationMetadataJson).toContain('"stopReason":"handoff_bootstrap"');
 
     const blockedRes = await fetch(`${baseUrl}/api/internal/agent/${agent.agentId}/send`, {
       method: 'POST',

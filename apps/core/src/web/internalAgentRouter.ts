@@ -567,7 +567,7 @@ export function registerInternalAgentRoutes(
   }): string => {
     const lines = [
       '[DM Task Thread Handoff]',
-      'A task was just created or claimed from the main DM and has been handed off to this task thread.',
+      'A task was just created or claimed from the main DM. Execution now continues in this task thread as the expected next phase.',
       '',
       '[Current conversation target]',
       `reply_target: ${params.threadTarget}`,
@@ -709,6 +709,12 @@ export function registerInternalAgentRoutes(
                 dmContextSnapshot: threadActivationContext.dmContextSnapshot,
               })
             : undefined,
+          activationMetadata: {
+            expectedTermination: {
+              kind: 'dm_handoff_bootstrap',
+              stopReason: 'handoff_bootstrap',
+            },
+          },
         },
       );
       if (result.queued) {

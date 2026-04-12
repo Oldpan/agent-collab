@@ -59,7 +59,7 @@ export function buildReplayContextFromRecentRuns(
       ? assistantText.trim()
       : run.error
         ? `[error] ${run.error}`
-        : run.stopReason
+        : run.stopReason && run.stopReason !== 'handoff_bootstrap'
           ? `[stop_reason] ${run.stopReason}`
           : '';
 

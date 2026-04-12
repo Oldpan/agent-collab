@@ -41,6 +41,7 @@ function formatDurationMs(ms: number): string {
 function formatStopReason(reason?: string): string | null {
   if (!reason) return null;
   if (reason === "end_turn") return "completed";
+  if (reason === "handoff_bootstrap") return "phase transition";
   return reason.replaceAll("_", " ");
 }
 

@@ -77,6 +77,7 @@ const REPLAY_EVENT_TYPES = new Set([
   'task.update',
 ]);
 const DM_TASK_HANDOFF_EVENT_METHOD = 'platform/handoff';
+const DM_HANDOFF_BOOTSTRAP_STOP_REASON = 'handoff_bootstrap';
 const TASK_STATUS_REMINDER_EVENT_METHOD = 'platform/task-status-reminder';
 const TASK_STATUS_REMINDER_PROMPT_PREFIX = '[Platform task status reminder]';
 
@@ -158,7 +159,11 @@ function maybeQueueTaskStatusReminder(params: {
   error?: string;
 }): void {
   if (params.error) return;
-  if (params.stopReason === 'handoff' || isCancelStopReason(params.stopReason)) return;
+  if (
+    params.stopReason === 'handoff'
+    || params.stopReason === DM_HANDOFF_BOOTSTRAP_STOP_REASON
+    || isCancelStopReason(params.stopReason)
+  ) return;
   if (hasRunTaskStatusReminder(params.db, params.runId) || isTaskStatusReminderRun(params.db, params.runId)) return;
 
   const conversation = params.db.prepare(
@@ -566,10 +571,11 @@ function getRunEndError(
   conversationId: string,
   runId: string,
   wasHandedOff = false,
+  expectedBootstrapStopReason?: string | null,
 ): string | null {
   if (msg.error) return msg.error;
   if (isCancelStopReason(msg.stopReason)) {
-    if (wasHandedOff) return null;
+    if (wasHandedOff || expectedBootstrapStopReason === DM_HANDOFF_BOOTSTRAP_STOP_REASON) return null;
     if (hasRunFinalReplyMessage(db, runId)) return null;
     if (requiresMcpReplyContract(db, conversationId)) {
       return 'Agent run was cancelled before sending a final reply';
@@ -587,6 +593,30 @@ function wasRunHandedOff(db: Db, runId: string): boolean {
        AND method = ?
      LIMIT 1`,
   ).get(runId, DM_TASK_HANDOFF_EVENT_METHOD));
+}
+
+function getExpectedBootstrapStopReason(db: Db, runId: string): string | null {
+  const row = db.prepare(
+    `SELECT activation_metadata_json as activationMetadataJson
+     FROM run_debug_inputs
+     WHERE run_id = ?
+     LIMIT 1`,
+  ).get(runId) as { activationMetadataJson: string | null } | undefined;
+  if (!row?.activationMetadataJson) return null;
+  try {
+    const parsed = JSON.parse(row.activationMetadataJson) as {
+      expectedTermination?: { kind?: unknown; stopReason?: unknown };
+    };
+    if (
+      parsed?.expectedTermination?.kind === 'dm_handoff_bootstrap'
+      && parsed.expectedTermination.stopReason === DM_HANDOFF_BOOTSTRAP_STOP_REASON
+    ) {
+      return DM_HANDOFF_BOOTSTRAP_STOP_REASON;
+    }
+  } catch {
+    // ignore malformed metadata
+  }
+  return null;
 }
 
 function updateConversationStatus(
@@ -824,7 +854,17 @@ export function handleNodeWebSocket(
           break;
         }
         const handedOff = isCancelStopReason(msg.stopReason) && wasRunHandedOff(db, msg.runId);
-        const runEndError = getRunEndError(msg, db, msg.conversationId, msg.runId, handedOff);
+        const expectedBootstrapStopReason = isCancelStopReason(msg.stopReason)
+          ? getExpectedBootstrapStopReason(db, msg.runId)
+          : null;
+        const runEndError = getRunEndError(
+          msg,
+          db,
+          msg.conversationId,
+          msg.runId,
+          handedOff,
+          expectedBootstrapStopReason,
+        );
         if (!msg.error && !isCancelStopReason(msg.stopReason)) {
           const fallbackCount = persistDeltaFallbackMessages({
             db,
@@ -848,7 +888,7 @@ export function handleNodeWebSocket(
           manager,
           conversationId: msg.conversationId,
           runId: msg.runId,
-          stopReason: handedOff ? 'handoff' : msg.stopReason,
+          stopReason: handedOff ? 'handoff' : (expectedBootstrapStopReason ?? msg.stopReason),
           error: runEndError ?? undefined,
         });
         break;

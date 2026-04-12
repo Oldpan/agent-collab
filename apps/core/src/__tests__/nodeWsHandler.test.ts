@@ -954,6 +954,85 @@ describe('nodeWsHandler', () => {
     expect(events.some((event) => event.type === 'error')).toBe(false);
   });
 
+  it('DM task-thread bootstrap run 在 cancel 后应按 handoff_bootstrap 收口且不报错', () => {
+    const agent = manager.createAgent({
+      name: 'BootstrapHandoffBob',
+      agentType: 'claude_acp',
+      nodeId: 'node-1',
+      workspacePath: '/tmp/bootstrap-handoff-bob-contract',
+    });
+    const conv = manager.openAgentThread(agent.agentId);
+    if (!conv) throw new Error('missing conversation');
+    const socket = new FakeSocket();
+    const events: any[] = [];
+    const registry = {
+      register() {},
+      unregister() {},
+      heartbeat() {},
+    };
+
+    handleNodeWebSocket(socket as any, registry as any, (_conversationId, event) => {
+      events.push(event);
+    }, db, manager);
+
+    const sessionRow = db.prepare('SELECT session_key as sessionKey FROM conversations WHERE id = ?')
+      .get(conv.id) as { sessionKey: string };
+    createRun(db, {
+      runId: 'run-cancel-bootstrap-1',
+      sessionKey: sessionRow.sessionKey,
+      promptText: '[DM Task Thread Handoff]',
+    });
+    const now = Date.now();
+    db.prepare(
+      `INSERT INTO run_debug_inputs(
+         run_id, conversation_id, session_key, dispatch_mode, reply_target,
+         prompt_text, dispatched_prompt_text, activation_metadata_json, created_at, updated_at
+       )
+       VALUES(?, ?, ?, 'resume', ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      'run-cancel-bootstrap-1',
+      conv.id,
+      sessionRow.sessionKey,
+      'dm:@oldpan:abc1234500000000',
+      '[DM Task Thread Handoff]',
+      '[DM Task Thread Handoff]',
+      JSON.stringify({
+        expectedTermination: {
+          kind: 'dm_handoff_bootstrap',
+          stopReason: 'handoff_bootstrap',
+        },
+      }),
+      now,
+      now,
+    );
+
+    socket.emit('message', JSON.stringify({
+      type: 'run.end',
+      runId: 'run-cancel-bootstrap-1',
+      conversationId: conv.id,
+      stopReason: 'cancelled',
+    }));
+
+    const runRow = db.prepare('SELECT error, stop_reason as stopReason FROM runs WHERE run_id = ?')
+      .get('run-cancel-bootstrap-1') as { error: string | null; stopReason: string | null };
+    expect(runRow).toEqual({
+      error: null,
+      stopReason: 'handoff_bootstrap',
+    });
+    expect(events).toContainEqual({
+      type: 'turn.end',
+      turnId: 'run-cancel-bootstrap-1',
+      stopReason: 'handoff_bootstrap',
+      endedAt: expect.any(Number),
+      error: undefined,
+    });
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    const queuedReminderCount = db.prepare(
+      'SELECT COUNT(*) as count FROM conversation_prompt_queue WHERE conversation_id = ?',
+    ).get(conv.id) as { count: number };
+    expect(queuedReminderCount.count).toBe(0);
+  });
+
   it('仅发送 progress 消息且后续仍有大量输出时应追加 delta_fallback 消息并正常收口', () => {
     const agent = manager.createAgent({
       name: 'Charlie',

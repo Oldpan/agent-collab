@@ -38,6 +38,10 @@ export type PromptActivationMetadata = {
     triggerSeq: number;
     peerMentionedAgentIds: string[];
   };
+  expectedTermination?: {
+    kind: 'dm_handoff_bootstrap';
+    stopReason: 'handoff_bootstrap';
+  };
 };
 
 type PromptSubmitOptions = {
@@ -459,7 +463,8 @@ export class ExecutionDispatcher {
 
   private isIgnorableReplayAssistantText(text: string): boolean {
     return text.includes(`Empty response: {'content':`)
-      || text.trim() === '[stop_reason] handoff';
+      || text.trim() === '[stop_reason] handoff'
+      || text.trim() === '[stop_reason] handoff_bootstrap';
   }
 
   private getDispatchMode(sessionKey: string): RuntimeDispatchMode {
@@ -551,7 +556,7 @@ export class ExecutionDispatcher {
           ? cleanedAssistantText
           : run.error
             ? `[error] ${run.error}`
-            : run.stopReason
+            : run.stopReason && !this.isIgnorableReplayAssistantText(`[stop_reason] ${run.stopReason}`)
               ? `[stop_reason] ${run.stopReason}`
               : '';
       }
@@ -841,39 +846,60 @@ function upsertPendingRunDebugInput(
 
 function serializePromptActivationMetadata(metadata: PromptActivationMetadata | undefined): string | null {
   if (!metadata) return null;
-  if (!metadata.mentionSuppression) return null;
-  const peerMentionedAgentIds = metadata.mentionSuppression.peerMentionedAgentIds
-    .map((agentId) => agentId.trim())
-    .filter(Boolean);
-  if (peerMentionedAgentIds.length === 0) return null;
-  return JSON.stringify({
-    mentionSuppression: {
-      mode: metadata.mentionSuppression.mode,
-      triggerSeq: metadata.mentionSuppression.triggerSeq,
-      peerMentionedAgentIds,
-    },
-  });
+  const payload: PromptActivationMetadata = {};
+  if (metadata.mentionSuppression) {
+    const peerMentionedAgentIds = metadata.mentionSuppression.peerMentionedAgentIds
+      .map((agentId) => agentId.trim())
+      .filter(Boolean);
+    if (peerMentionedAgentIds.length > 0) {
+      payload.mentionSuppression = {
+        mode: metadata.mentionSuppression.mode,
+        triggerSeq: metadata.mentionSuppression.triggerSeq,
+        peerMentionedAgentIds,
+      };
+    }
+  }
+  if (
+    metadata.expectedTermination?.kind === 'dm_handoff_bootstrap'
+    && metadata.expectedTermination.stopReason === 'handoff_bootstrap'
+  ) {
+    payload.expectedTermination = {
+      kind: 'dm_handoff_bootstrap',
+      stopReason: 'handoff_bootstrap',
+    };
+  }
+  if (!payload.mentionSuppression && !payload.expectedTermination) return null;
+  return JSON.stringify(payload);
 }
 
 function parsePromptActivationMetadata(value: string | null | undefined): PromptActivationMetadata | undefined {
   if (!value) return undefined;
   try {
     const parsed = JSON.parse(value) as PromptActivationMetadata;
+    const result: PromptActivationMetadata = {};
     const mentionSuppression = parsed?.mentionSuppression;
-    if (!mentionSuppression) return undefined;
-    const peerMentionedAgentIds = Array.isArray(mentionSuppression.peerMentionedAgentIds)
-      ? mentionSuppression.peerMentionedAgentIds.filter((agentId): agentId is string => typeof agentId === 'string' && agentId.trim().length > 0)
-      : [];
-    if (mentionSuppression.mode !== 'root_user_multi_mention' || !Number.isFinite(mentionSuppression.triggerSeq) || peerMentionedAgentIds.length === 0) {
-      return undefined;
+    if (mentionSuppression) {
+      const peerMentionedAgentIds = Array.isArray(mentionSuppression.peerMentionedAgentIds)
+        ? mentionSuppression.peerMentionedAgentIds.filter((agentId): agentId is string => typeof agentId === 'string' && agentId.trim().length > 0)
+        : [];
+      if (mentionSuppression.mode === 'root_user_multi_mention' && Number.isFinite(mentionSuppression.triggerSeq) && peerMentionedAgentIds.length > 0) {
+        result.mentionSuppression = {
+          mode: 'root_user_multi_mention',
+          triggerSeq: mentionSuppression.triggerSeq,
+          peerMentionedAgentIds,
+        };
+      }
     }
-    return {
-      mentionSuppression: {
-        mode: 'root_user_multi_mention',
-        triggerSeq: mentionSuppression.triggerSeq,
-        peerMentionedAgentIds,
-      },
-    };
+    if (
+      parsed?.expectedTermination?.kind === 'dm_handoff_bootstrap'
+      && parsed.expectedTermination.stopReason === 'handoff_bootstrap'
+    ) {
+      result.expectedTermination = {
+        kind: 'dm_handoff_bootstrap',
+        stopReason: 'handoff_bootstrap',
+      };
+    }
+    return result.mentionSuppression || result.expectedTermination ? result : undefined;
   } catch {
     return undefined;
   }
