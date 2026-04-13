@@ -14,9 +14,13 @@ import { resolveConversationReplyTarget } from '../web/directReplyTargets.js';
 import { allocateNextChannelMessageSeq } from '../web/channelMessageSequences.js';
 import { buildTargetActivationContext, type ActivationContextMessage } from '../web/activationContext.js';
 import { sanitizePromptHistoryContent } from '../web/promptHistorySanitizer.js';
+import {
+  buildWorkspaceMemoryHints,
+  buildWorkspaceMemoryReminder,
+  shouldIncludeDmContextSnapshot,
+} from '../web/workspaceMemoryHints.js';
 
 const TURN_REPLY_CONTRACT = [
-  '\n',
   '[Reply contract]',
   'Reply only via mcp__chat__send_message(...). Do not output user-visible text directly.',
   'Use mcp__chat__send_message(..., kind="progress") only while work is still ongoing.',
@@ -52,6 +56,7 @@ export type PromptActivationMetadata = {
 type PromptSubmitOptions = {
   recordAsUserMessage?: boolean;
   activationContextText?: string;
+  resumeContextText?: string;
   replayOverlapRecentMessages?: ActivationContextMessage[];
   senderName?: string;
   clientMessageId?: string;
@@ -114,6 +119,7 @@ export class ExecutionDispatcher {
     createRun(this.db, { runId, sessionKey: row.sessionKey, promptText });
 
     let contextText = '';
+    let resumeContextText = '';
     let systemPromptText = '';
     let agentEnvVars: Record<string, string> | undefined;
     let disabledToolKinds: AgentInfo['disabledToolKinds'];
@@ -176,6 +182,12 @@ export class ExecutionDispatcher {
               target: dmReplyTarget,
             },
           };
+          const directPromptContent = promptText;
+          let directMemoryHints = buildWorkspaceMemoryHints({
+            includeTaskNotes: Boolean(row.threadRootId),
+            includeWorkLog: Boolean(row.threadRootId),
+            includeChannelNote: false,
+          });
 
           // Checkpoint will be bumped after confirmed delivery to avoid silent message
           // loss if the node is offline or the send fails.
@@ -185,7 +197,8 @@ export class ExecutionDispatcher {
             agentName: agent.name,
             senderName: humanUserName,
             replyTarget: dmReplyTarget,
-            content: promptText,
+            content: directPromptContent,
+            memoryHints: directMemoryHints,
           });
 
           if (dispatchMode !== 'cold_start') {
@@ -196,6 +209,19 @@ export class ExecutionDispatcher {
               triggerSeq: msgSeq,
             });
             replayOverlapMessages = dmActivationContext.recentMessages;
+            directMemoryHints = buildWorkspaceMemoryHints({
+              includeTaskNotes: Boolean(row.threadRootId) || (dmActivationContext.dmActiveTaskThreads?.length ?? 0) > 0,
+              includeWorkLog: Boolean(row.threadRootId) || (dmActivationContext.dmActiveTaskThreads?.length ?? 0) > 0,
+              includeChannelNote: false,
+            });
+            promptText = buildDirectActivationPrompt({
+              agentName: agent.name,
+              senderName: humanUserName,
+              replyTarget: dmReplyTarget,
+              content: directPromptContent,
+              memoryHints: directMemoryHints,
+            });
+            const includeDmSnapshot = shouldIncludeDmContextSnapshot({ target: dmReplyTarget });
             dmActivationContextText = buildDirectActivationContextText({
               target: dmReplyTarget,
               recentMessages: dmActivationContext.recentMessages,
@@ -204,7 +230,23 @@ export class ExecutionDispatcher {
               rootMessage: dmActivationContext.rootMessage,
               dmContextSnapshot: dmActivationContext.dmContextSnapshot,
               dmActiveTaskThreads: dmActivationContext.dmActiveTaskThreads,
+            }, {
+              includeDmContextSnapshot: includeDmSnapshot,
             });
+            resumeContextText = joinContextBlocks([
+              `[Workspace memory reminder]\n${buildWorkspaceMemoryReminder(directMemoryHints)}`,
+              buildDirectActivationContextText({
+                target: dmReplyTarget,
+                recentMessages: dmActivationContext.recentMessages.slice(-2),
+                unreadCount: dmActivationContext.unreadCount,
+                oldestVisibleSeq: dmActivationContext.oldestVisibleSeq,
+                rootMessage: dmActivationContext.rootMessage,
+                dmContextSnapshot: includeDmSnapshot ? dmActivationContext.dmContextSnapshot : undefined,
+                dmActiveTaskThreads: dmActivationContext.dmActiveTaskThreads?.slice(0, 3),
+              }, {
+                includeDmContextSnapshot: includeDmSnapshot,
+              }),
+            ]);
           }
         }
 
@@ -215,15 +257,19 @@ export class ExecutionDispatcher {
             runId,
             replayOverlapMessages,
           );
-          if (replayText) contextText += '\n\n' + replayText;
+          contextText = joinContextBlocks([contextText, replayText]);
         }
 
         if (dmActivationContextText) {
-          contextText += '\n\n' + dmActivationContextText;
+          contextText = joinContextBlocks([contextText, dmActivationContextText]);
         }
 
         if (options?.activationContextText?.trim()) {
-          contextText += '\n\n' + options.activationContextText;
+          contextText = joinContextBlocks([contextText, options.activationContextText]);
+        }
+
+        if (options?.resumeContextText?.trim()) {
+          resumeContextText = joinContextBlocks([resumeContextText, options.resumeContextText]);
         }
 
       }
@@ -297,6 +343,7 @@ export class ExecutionDispatcher {
       dispatchMode,
       systemPromptText: systemPromptText || undefined,
       contextText: contextText || undefined,
+      resumeContextText: resumeContextText || undefined,
       channelBridgeConfig,
     });
 
@@ -414,6 +461,7 @@ export class ExecutionDispatcher {
       `SELECT queue_id as queueId, agent_id as agentId, conversation_id as conversationId,
               prompt_text as promptText, record_as_user_message as recordAsUserMessage,
               activation_context_text as activationContextText,
+              resume_context_text as resumeContextText,
               replay_overlap_recent_messages_json as replayOverlapRecentMessagesJson,
               activation_metadata_json as activationMetadataJson,
               sender_name as senderName,
@@ -429,6 +477,7 @@ export class ExecutionDispatcher {
       promptText: string;
       recordAsUserMessage: number;
       activationContextText: string | null;
+      resumeContextText: string | null;
       replayOverlapRecentMessagesJson: string | null;
       activationMetadataJson: string | null;
       senderName: string | null;
@@ -442,6 +491,7 @@ export class ExecutionDispatcher {
       await this.dispatchPrompt(next.conversationId, next.promptText, {
         recordAsUserMessage: next.recordAsUserMessage !== 0,
         activationContextText: next.activationContextText ?? undefined,
+        resumeContextText: next.resumeContextText ?? undefined,
         replayOverlapRecentMessages: parseReplayOverlapRecentMessages(next.replayOverlapRecentMessagesJson),
         activationMetadata: parsePromptActivationMetadata(next.activationMetadataJson),
         senderName: next.senderName ?? undefined,
@@ -636,15 +686,16 @@ export class ExecutionDispatcher {
     const now = Date.now();
     this.db.prepare(
       `INSERT INTO conversation_prompt_queue(
-         agent_id, conversation_id, prompt_text, record_as_user_message, activation_context_text, replay_overlap_recent_messages_json, activation_metadata_json, sender_name, client_message_id, created_at, updated_at
+         agent_id, conversation_id, prompt_text, record_as_user_message, activation_context_text, resume_context_text, replay_overlap_recent_messages_json, activation_metadata_json, sender_name, client_message_id, created_at, updated_at
        )
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     ).run(
       agentId,
       conversationId,
       promptText,
       (options?.recordAsUserMessage ?? true) ? 1 : 0,
       options?.activationContextText?.trim() || null,
+      options?.resumeContextText?.trim() || null,
       serializeReplayOverlapRecentMessages(options?.replayOverlapRecentMessages),
       serializePromptActivationMetadata(options?.activationMetadata),
       options?.senderName ?? null,
@@ -704,10 +755,18 @@ function parseEnvVars(raw: string | null): Record<string, string> | undefined {
   return undefined;
 }
 
+function joinContextBlocks(parts: Array<string | null | undefined>): string {
+  const visibleParts = parts
+    .map((part) => part?.trim() ?? '')
+    .filter(Boolean);
+  return visibleParts.join('\n\n');
+}
+
 function stripReplyContract(promptText: string): string {
-  if (!promptText.startsWith('[Reply contract]')) return promptText;
-  const splitIndex = promptText.indexOf('\n\n');
-  return splitIndex >= 0 ? promptText.slice(splitIndex + 2) : promptText;
+  const normalized = promptText.trimStart();
+  if (!normalized.startsWith('[Reply contract]')) return promptText;
+  const splitIndex = normalized.indexOf('\n\n');
+  return splitIndex >= 0 ? normalized.slice(splitIndex + 2) : normalized;
 }
 
 function extractTriggeredMessageBody(promptText: string): string | null {

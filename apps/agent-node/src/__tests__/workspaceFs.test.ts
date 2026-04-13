@@ -45,7 +45,18 @@ describe('workspaceFs', () => {
     expect(result.content).toContain('## Key Knowledge');
     expect(result.content).toContain('## Active Context');
     expect(result.content).toContain('notes/channels/');
+    expect(result.content).toContain('notes/tasks.md');
     expect(result.content).toContain('notes/domain.md');
+  });
+
+  it('应默认创建 tasks 和 work-log notes scaffold', () => {
+    const root = createWorkspace();
+
+    const taskNotes = readWorkspaceFile(root, 'notes/tasks.md');
+    const workLog = readWorkspaceFile(root, 'notes/work-log.md');
+
+    expect(taskNotes.content).toContain('# Task Notes');
+    expect(workLog.content).toContain('# Work Log');
   });
 
   it('应支持读取常见图片预览并返回 data url', () => {

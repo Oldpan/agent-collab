@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 59;
+const LATEST_VERSION = 61;
 
 function buildCanonicalThreadShortIdSql(column: string): string {
   return `SUBSTR(REPLACE(CASE
@@ -1408,5 +1408,15 @@ export function migrate(db: Db): void {
     if (v60Row.version < 60) {
       db.exec(`UPDATE schema_version SET version = 60;`);
     }
+  }
+
+  const queueColsV61 = db.prepare("PRAGMA table_info('conversation_prompt_queue')").all() as Array<{ name: string }>;
+  if (!queueColsV61.some((c) => c.name === 'resume_context_text')) {
+    db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN resume_context_text TEXT;`);
+  }
+
+  const v61Row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
+  if (v61Row.version < 61) {
+    db.exec(`UPDATE schema_version SET version = 61;`);
   }
 }

@@ -224,6 +224,7 @@ export class AgentHost {
 
     try {
       const uiMode: UiMode = getUiMode(this.db, `node:${conversationId}:-:node_user`) ?? 'summary';
+      const shouldInjectResumeContext = msg.dispatchMode === 'resume' && this.lastWakeAt == null;
       const result = await this.runtime.prompt({
         runId,
         promptText: prompt,
@@ -231,6 +232,7 @@ export class AgentHost {
         uiMode,
         systemPromptText: msg.systemPromptText,
         contextText: msg.contextText,
+        resumeContextText: shouldInjectResumeContext ? msg.resumeContextText : undefined,
         actorUserId: 'node_user',
         onPrepared: async (prepared) => {
           this.send({

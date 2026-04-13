@@ -85,6 +85,7 @@ describe('ExecutionDispatcher', () => {
     const second = sent[1]?.msg;
     if (!second || second.type !== 'run.dispatch') throw new Error('missing second dispatch');
     expect(second.dispatchMode).toBe('resume');
+    expect(second.prompt.startsWith('[Reply contract]')).toBe(true);
     expect(second.prompt).toContain('[Reply contract]');
     expect(second.envVars?.CLAUDE_CODE_DISABLE_AUTO_MEMORY).toBe('1');
   });

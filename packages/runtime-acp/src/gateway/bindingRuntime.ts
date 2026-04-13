@@ -607,6 +607,7 @@ export class BindingRuntime {
     uiMode: UiMode;
     systemPromptText?: string;
     contextText?: string;
+    resumeContextText?: string;
     actorUserId?: string;
     onPrepared?: (prepared: {
       sessionId: string;
@@ -622,7 +623,7 @@ export class BindingRuntime {
       : this.sessionSystemPromptText?.trim() || undefined;
     const effectiveContextText = isFreshSession
       ? params.contextText?.trim() || undefined
-      : undefined;
+      : params.resumeContextText?.trim() || undefined;
 
     const run = {
       runId: params.runId,
@@ -634,6 +635,8 @@ export class BindingRuntime {
 
     if (isFreshSession && params.contextText?.trim()) {
       blocks.push({ type: 'text', text: params.contextText });
+    } else if (!isFreshSession && params.resumeContextText?.trim()) {
+      blocks.push({ type: 'text', text: params.resumeContextText });
     }
 
     if (params.promptText.trim()) {
@@ -684,6 +687,7 @@ export class BindingRuntime {
     uiMode: UiMode;
     systemPromptText?: string;
     contextText?: string;
+    resumeContextText?: string;
     actorUserId?: string;
     onPrepared?: (prepared: {
       sessionId: string;

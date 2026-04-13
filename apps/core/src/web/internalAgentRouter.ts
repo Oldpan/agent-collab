@@ -2,9 +2,10 @@ import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { join, extname } from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import type { Db } from '@agent-collab/runtime-acp';
-import { buildThreadShortId, type ConversationStatus, type ServerEvent } from '@agent-collab/protocol';
+import { log, type Db } from '@agent-collab/runtime-acp';
+import { buildThreadShortId, type AgentInfo, type ConversationStatus, type ServerEvent } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
+import type { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import type { AgentSkillsService } from '../services/agentSkillsService.js';
 import { AgentSkillsServiceError } from '../services/agentSkillsService.js';
 import {
@@ -36,6 +37,16 @@ import { isValidTransition } from './taskStatusTransitions.js';
 import { upsertAgentTaskLink } from './agentTaskLinks.js';
 import { findThreadRootMessageId } from './threadRoots.js';
 import { appendTaskEvent, buildTaskEventThreadTarget } from './taskEvents.js';
+import { syncTaskDurableNotesForAgent } from './taskMemoryNotes.js';
+import {
+  buildWorkspaceMemoryHints,
+  buildWorkspaceMemoryReminder,
+  combinePromptSections,
+  isThreadTarget,
+  shouldIncludeDmContextSnapshot,
+  shouldIncludeOpenTaskBoardSummary,
+  shouldIncludeParticipantsInActivationContext,
+} from './workspaceMemoryHints.js';
 
 const AGENT_MENTION_COOLDOWN_MS = 60_000;
 const DM_TASK_HANDOFF_EVENT_METHOD = 'platform/handoff';
@@ -381,12 +392,28 @@ export function registerInternalAgentRoutes(
   broadcastConversationStatus: (conversationId: string, status: ConversationStatus) => void,
   humanUserName: string,
   skillsService?: AgentSkillsService,
+  workspaceBroker?: AgentWorkspaceBroker,
   internalAuthToken?: string,
   attachmentsDir?: string,
 ): void {
   const runThreadSendOverrides = new Map<string, string>();
   const runDmTaskHandoffs = new Map<string, DmTaskHandoffState>();
   const runBoundTaskFinalReplySent = new Set<string>();
+  const queueTaskDurableNoteSync = (agent: AgentInfo | null | undefined, taskId: string): void => {
+    if (!workspaceBroker || !agent?.nodeId || !agent.workspacePath) return;
+    void syncTaskDurableNotesForAgent({
+      db,
+      broker: workspaceBroker,
+      agent,
+      taskId,
+    }).catch((error) => {
+      log.warn('[task-memory] failed to sync durable notes', {
+        agentId: agent.agentId,
+        taskId,
+        error: String((error as Error)?.message ?? error),
+      });
+    });
+  };
 
   const buildDmTaskThreadTarget = (primaryTarget: string, messageId: string) => `${primaryTarget}:${buildThreadShortId(messageId)}`;
 
@@ -812,6 +839,39 @@ export function registerInternalAgentRoutes(
         })
       : null;
     try {
+      const dmMemoryHints = buildWorkspaceMemoryHints({
+        includeTaskNotes: true,
+        includeWorkLog: true,
+        includeChannelNote: false,
+      });
+      const includeDmSnapshot = shouldIncludeDmContextSnapshot({ target: threadTarget });
+      const activationContextText = threadActivationContext
+        ? buildDirectActivationContextText({
+            target: threadTarget,
+            recentMessages: threadActivationContext.recentMessages,
+            unreadCount: threadActivationContext.unreadCount,
+            oldestVisibleSeq: threadActivationContext.oldestVisibleSeq,
+            rootMessage: threadActivationContext.rootMessage,
+            dmContextSnapshot: threadActivationContext.dmContextSnapshot,
+          }, {
+            includeDmContextSnapshot: includeDmSnapshot,
+          })
+        : undefined;
+      const resumeContextText = threadActivationContext
+        ? combinePromptSections([
+            `[Workspace memory reminder]\n${buildWorkspaceMemoryReminder(dmMemoryHints)}`,
+            buildDirectActivationContextText({
+              target: threadTarget,
+              recentMessages: threadActivationContext.recentMessages.slice(-2),
+              unreadCount: threadActivationContext.unreadCount,
+              oldestVisibleSeq: threadActivationContext.oldestVisibleSeq,
+              rootMessage: threadActivationContext.rootMessage,
+              dmContextSnapshot: includeDmSnapshot ? threadActivationContext.dmContextSnapshot : undefined,
+            }, {
+              includeDmContextSnapshot: includeDmSnapshot,
+            }),
+          ])
+        : undefined;
       const result = await conversationManager.submitPrompt(
         threadConversationId,
         buildDmTaskHandoffPrompt({
@@ -824,16 +884,8 @@ export function registerInternalAgentRoutes(
         }),
         {
           recordAsUserMessage: false,
-          activationContextText: threadActivationContext
-            ? buildDirectActivationContextText({
-                target: threadTarget,
-                recentMessages: threadActivationContext.recentMessages,
-                unreadCount: threadActivationContext.unreadCount,
-                oldestVisibleSeq: threadActivationContext.oldestVisibleSeq,
-                rootMessage: threadActivationContext.rootMessage,
-                dmContextSnapshot: threadActivationContext.dmContextSnapshot,
-              })
-            : undefined,
+          activationContextText,
+          resumeContextText,
           activationMetadata: {
             expectedTermination: {
               kind: 'dm_handoff_bootstrap',
@@ -1246,6 +1298,52 @@ export function registerInternalAgentRoutes(
           triggerSeq: seq,
           threadRootId,
         });
+        const channelMemoryHints = buildWorkspaceMemoryHints({
+          channelName: channel.name,
+          includeTaskNotes: Boolean(activationContext.boundTask),
+          includeWorkLog: Boolean(activationContext.boundTask) || isThreadTarget(resolvedTarget),
+        });
+        const includeParticipants = shouldIncludeParticipantsInActivationContext({
+          target: resolvedTarget,
+          participantsCount: activationContext.participants.length,
+          hasBoundTask: Boolean(activationContext.boundTask),
+          reason,
+        });
+        const includeOpenTasks = shouldIncludeOpenTaskBoardSummary({
+          target: resolvedTarget,
+          hasBoundTask: Boolean(activationContext.boundTask),
+        });
+        const activationContextText = buildChannelActivationContextText({
+          target: resolvedTarget,
+          recentMessages: activationContext.recentMessages,
+          rootMessage: activationContext.rootMessage,
+          unreadCount: activationContext.unreadCount,
+          oldestVisibleSeq: activationContext.oldestVisibleSeq,
+          participants: activationContext.participants,
+          boundTask: activationContext.boundTask,
+          openTasks: activationContext.openTasks,
+        }, {
+          includeParticipants,
+          includeOpenTasks,
+          maxOpenTasks: 3,
+        }) || undefined;
+        const resumeContextText = combinePromptSections([
+          `[Workspace memory reminder]\n${buildWorkspaceMemoryReminder(channelMemoryHints)}`,
+          buildChannelActivationContextText({
+            target: resolvedTarget,
+            recentMessages: activationContext.recentMessages.slice(-2),
+            rootMessage: activationContext.rootMessage,
+            unreadCount: activationContext.unreadCount,
+            oldestVisibleSeq: activationContext.oldestVisibleSeq,
+            participants: activationContext.participants,
+            boundTask: activationContext.boundTask,
+            openTasks: activationContext.openTasks,
+          }, {
+            includeParticipants,
+            includeOpenTasks,
+            maxOpenTasks: 3,
+          }),
+        ]) || undefined;
 
         if (reason === 'agent_mention') {
           recordAgentMentionNotification(db, {
@@ -1277,19 +1375,12 @@ export function registerInternalAgentRoutes(
             senderName: agent.name,
             content: normalizedContent,
             reason,
+            memoryHints: channelMemoryHints,
           }),
           {
             recordAsUserMessage: false,
-            activationContextText: buildChannelActivationContextText({
-              target: resolvedTarget,
-              recentMessages: activationContext.recentMessages,
-              rootMessage: activationContext.rootMessage,
-              unreadCount: activationContext.unreadCount,
-              oldestVisibleSeq: activationContext.oldestVisibleSeq,
-              participants: activationContext.participants,
-              boundTask: activationContext.boundTask,
-              openTasks: activationContext.openTasks,
-            }) || undefined,
+            activationContextText,
+            resumeContextText,
             replayOverlapRecentMessages: activationContext.recentMessages,
           },
         ).then((result) => {
@@ -3410,6 +3501,9 @@ export function registerInternalAgentRoutes(
       }
     }
 
+    if (nextStatus === 'in_review') {
+      queueTaskDurableNoteSync(agent, row.taskId);
+    }
     return { ok: true, taskNumber: task_number, status: nextStatus };
   });
 }

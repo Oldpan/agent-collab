@@ -736,6 +736,7 @@ export type RunDispatchMsg = {
   dispatchMode: RuntimeDispatchMode;
   systemPromptText?: string;
   contextText?: string;
+  resumeContextText?: string;
   channelBridgeConfig?: {
     agentId: string;
     conversationId: string;

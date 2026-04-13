@@ -5,12 +5,14 @@ import type {
 } from './activationContext.js';
 import { buildAttachmentReferenceContextText, buildExactTargetHistoryContextText } from './channelActivationPrompt.js';
 import { sanitizePromptHistoryContent } from './promptHistorySanitizer.js';
+import { buildWorkspaceMemoryHintSection } from './workspaceMemoryHints.js';
 
 type DirectActivationPromptParams = {
   agentName: string;
   senderName: string;
   content: string;
   replyTarget?: string;
+  memoryHints?: string[];
 };
 
 type DirectActivationContextParams = {
@@ -23,14 +25,20 @@ type DirectActivationContextParams = {
   dmActiveTaskThreads?: DmActiveTaskThreadSummary[];
 };
 
+type DirectActivationContextOptions = {
+  includeDmContextSnapshot?: boolean;
+};
+
 export function buildDirectActivationPrompt(params: DirectActivationPromptParams): string {
   const replyTarget = params.replyTarget ?? `dm:@${params.senderName}`;
+  const memoryHintSection = buildWorkspaceMemoryHintSection(params.memoryHints);
   const lines = [
     `[System: ${params.senderName} sent you a direct message.]`,
     '',
     '[Current conversation target]',
     `reply_target: ${replyTarget}`,
     '',
+    ...(memoryHintSection ? [memoryHintSection, ''] : []),
   ];
 
   lines.push(
@@ -45,7 +53,10 @@ export function buildDirectActivationPrompt(params: DirectActivationPromptParams
   return lines.join('\n');
 }
 
-export function buildDirectActivationContextText(params: DirectActivationContextParams): string {
+export function buildDirectActivationContextText(
+  params: DirectActivationContextParams,
+  options?: DirectActivationContextOptions,
+): string {
   const sections: string[] = [];
   if (params.rootMessage) {
     const triggerTag = params.dmContextSnapshot?.triggerMessageId === params.rootMessage.messageId ? ' [Trigger]' : '';
@@ -70,7 +81,7 @@ export function buildDirectActivationContextText(params: DirectActivationContext
     sections.push(exactHistory);
   }
 
-  if (params.dmContextSnapshot?.messages.length) {
+  if (options?.includeDmContextSnapshot !== false && params.dmContextSnapshot?.messages.length) {
     const visibleDmMessages = params.dmContextSnapshot.messages
       .map((message) => {
         const content = sanitizePromptHistoryContent(message.content, message.senderType);

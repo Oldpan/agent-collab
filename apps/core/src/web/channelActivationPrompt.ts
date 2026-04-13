@@ -2,6 +2,10 @@ import { formatBeijingPromptTimestamp } from '@agent-collab/protocol';
 import type { ActivationContextMessage } from './activationContext.js';
 import type { TargetParticipant } from './targetParticipants.js';
 import { sanitizePromptHistoryContent } from './promptHistorySanitizer.js';
+import {
+  buildWorkspaceMemoryHintSection,
+  type ActivationReason,
+} from './workspaceMemoryHints.js';
 
 const MESSAGE_SEPARATOR = '\n\n---\n\n';
 
@@ -11,7 +15,8 @@ type ChannelActivationPromptParams = {
   replyTarget?: string;
   senderName: string;
   content: string;
-  reason: 'mention' | 'agent_mention' | 'thread_reply' | 'channel_activity';
+  reason: ActivationReason;
+  memoryHints?: string[];
 };
 
 type ChannelActivationContextParams = {
@@ -31,6 +36,12 @@ type ChannelActivationContextParams = {
   openTasks?: Array<{ taskNumber: number; title: string; status: string; claimedByName: string | null }>;
 };
 
+type ChannelActivationContextOptions = {
+  includeParticipants?: boolean;
+  includeOpenTasks?: boolean;
+  maxOpenTasks?: number;
+};
+
 type ExactTargetHistoryContextParams = {
   target: string;
   recentMessages?: ActivationContextMessage[];
@@ -48,12 +59,14 @@ export function buildChannelActivationPrompt(params: ChannelActivationPromptPara
       : `There is new channel activity in #${params.channelName} from ${params.senderName}.`;
 
   const replyTarget = params.replyTarget ?? params.target;
+  const memoryHintSection = buildWorkspaceMemoryHintSection(params.memoryHints);
   const lines = [
     `[System: ${reasonText}]`,
     '',
     '[Current conversation target]',
     `reply_target: ${replyTarget}`,
     '',
+    ...(memoryHintSection ? [memoryHintSection, ''] : []),
     '[Triggered message metadata]',
     `target: ${params.target}`,
     `sender: @${params.senderName}`,
@@ -70,7 +83,10 @@ export function buildChannelActivationPrompt(params: ChannelActivationPromptPara
  * injected as part of contextText — only on fresh ACP sessions, not on every turn.
  * Returns an empty string if there is nothing to include.
  */
-export function buildChannelActivationContextText(params: ChannelActivationContextParams): string {
+export function buildChannelActivationContextText(
+  params: ChannelActivationContextParams,
+  options?: ChannelActivationContextOptions,
+): string {
   const parts: string[] = [];
 
   if (params.rootMessage) {
@@ -80,7 +96,7 @@ export function buildChannelActivationContextText(params: ChannelActivationConte
   const historyContextText = buildExactTargetHistoryContextText(params);
   if (historyContextText) parts.push(historyContextText);
 
-  if (params.participants && params.participants.length > 0) {
+  if (options?.includeParticipants !== false && params.participants && params.participants.length > 0) {
     parts.push(
       `[Active participants on this target]\n${params.participants.map((participant) => {
         const role = participant.role === 'owner' ? 'owner' : 'participant';
@@ -99,9 +115,13 @@ export function buildChannelActivationContextText(params: ChannelActivationConte
     );
   }
 
-  if (params.openTasks && params.openTasks.length > 0) {
+  const visibleOpenTasks = options?.includeOpenTasks === false
+    ? []
+    : (params.openTasks ?? []).slice(0, Math.max(1, options?.maxOpenTasks ?? params.openTasks?.length ?? 1));
+
+  if (visibleOpenTasks.length > 0) {
     parts.push(
-      `[Task-message board summary]\n${params.openTasks.map((task) => {
+      `[Task-message board summary]\n${visibleOpenTasks.map((task) => {
         const assignee = task.claimedByName ? ` @${task.claimedByName}` : ' unassigned';
         return `#${task.taskNumber} [${task.status}]${assignee} — ${task.title}`;
       }).join('\n')}`,
@@ -129,7 +149,7 @@ export function buildExactTargetHistoryContextText(params: ExactTargetHistoryCon
   }
 
   if (params.oldestVisibleSeq != null) {
-    parts.push(`[History cursor]\noldest_visible_seq: ${params.oldestVisibleSeq}`);
+    parts.push(`[History cursor]\noldest_visible_seq: ${params.oldestVisibleSeq}\n`);
   }
 
   if ((params.unreadCount ?? 0) > 0) {

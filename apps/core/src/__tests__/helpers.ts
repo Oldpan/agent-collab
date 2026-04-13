@@ -31,6 +31,7 @@ export function createTestDb(): Db {
       prompt_text      TEXT NOT NULL,
       record_as_user_message INTEGER NOT NULL DEFAULT 1,
       activation_context_text TEXT,
+      resume_context_text TEXT,
       replay_overlap_recent_messages_json TEXT,
       activation_metadata_json TEXT,
       client_message_id TEXT,
@@ -44,6 +45,9 @@ export function createTestDb(): Db {
   }
   if (!queueCols.some((col) => col.name === 'activation_context_text')) {
     db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN activation_context_text TEXT;`);
+  }
+  if (!queueCols.some((col) => col.name === 'resume_context_text')) {
+    db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN resume_context_text TEXT;`);
   }
   if (!queueCols.some((col) => col.name === 'replay_overlap_recent_messages_json')) {
     db.exec(`ALTER TABLE conversation_prompt_queue ADD COLUMN replay_overlap_recent_messages_json TEXT;`);

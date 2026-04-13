@@ -67,6 +67,16 @@ import { isValidTransition } from './taskStatusTransitions.js';
 import { upsertAgentTaskLink } from './agentTaskLinks.js';
 import { findThreadRootMessageId } from './threadRoots.js';
 import { appendTaskEvent, buildTaskEventThreadTarget, deleteTaskEventsForTask } from './taskEvents.js';
+import { syncTaskDurableNotesForAgent } from './taskMemoryNotes.js';
+import {
+  buildWorkspaceMemoryHints,
+  buildWorkspaceMemoryReminder,
+  combinePromptSections,
+  isThreadTarget,
+  shouldIncludeDmContextSnapshot,
+  shouldIncludeOpenTaskBoardSummary,
+  shouldIncludeParticipantsInActivationContext,
+} from './workspaceMemoryHints.js';
 import type { User } from '../services/auth.js';
 import {
   hasAdminUser,
@@ -119,6 +129,23 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     getAgentById: (agentId) => conversationManager.getAgent(agentId),
     broker: skillsBroker,
   });
+  const queueTaskDurableNoteSync = (agentId: string | null | undefined, taskId: string): void => {
+    if (!agentId) return;
+    const agent = conversationManager.getAgent(agentId);
+    if (!agent?.nodeId || !agent.workspacePath) return;
+    void syncTaskDurableNotesForAgent({
+      db,
+      broker: workspaceBroker,
+      agent,
+      taskId,
+    }).catch((error) => {
+      log.warn('[task-memory] failed to sync durable notes', {
+        agentId,
+        taskId,
+        error: String((error as Error)?.message ?? error),
+      });
+    });
+  };
   const codexTranscriptService = new CodexTranscriptService({
     db,
     broker: codexTranscriptBroker,
@@ -506,6 +533,52 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
           triggerSeq: seq,
           threadRootId: threadRootId ?? null,
         });
+        const channelMemoryHints = buildWorkspaceMemoryHints({
+          channelName: channel.name,
+          includeTaskNotes: Boolean(activationContext.boundTask),
+          includeWorkLog: Boolean(activationContext.boundTask) || isThreadTarget(historyTarget),
+        });
+        const includeParticipants = shouldIncludeParticipantsInActivationContext({
+          target: historyTarget,
+          participantsCount: activationContext.participants.length,
+          hasBoundTask: Boolean(activationContext.boundTask),
+          reason,
+        });
+        const includeOpenTasks = shouldIncludeOpenTaskBoardSummary({
+          target: historyTarget,
+          hasBoundTask: Boolean(activationContext.boundTask),
+        });
+        const activationContextText = buildChannelActivationContextText({
+          target: historyTarget,
+          recentMessages: activationContext.recentMessages,
+          rootMessage: activationContext.rootMessage,
+          unreadCount: activationContext.unreadCount,
+          oldestVisibleSeq: activationContext.oldestVisibleSeq,
+          participants: activationContext.participants,
+          boundTask: activationContext.boundTask,
+          openTasks: activationContext.openTasks,
+        }, {
+          includeParticipants,
+          includeOpenTasks,
+          maxOpenTasks: 3,
+        }) || undefined;
+        const resumeContextText = combinePromptSections([
+          `[Workspace memory reminder]\n${buildWorkspaceMemoryReminder(channelMemoryHints)}`,
+          buildChannelActivationContextText({
+            target: historyTarget,
+            recentMessages: activationContext.recentMessages.slice(-2),
+            rootMessage: activationContext.rootMessage,
+            unreadCount: activationContext.unreadCount,
+            oldestVisibleSeq: activationContext.oldestVisibleSeq,
+            participants: activationContext.participants,
+            boundTask: activationContext.boundTask,
+            openTasks: activationContext.openTasks,
+          }, {
+            includeParticipants,
+            includeOpenTasks,
+            maxOpenTasks: 3,
+          }),
+        ]) || undefined;
 
         if (reason === 'mention') {
           broadcastToChannel(params.channelId, {
@@ -542,19 +615,12 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
             senderName: params.senderName,
             content: params.content,
             reason,
+            memoryHints: channelMemoryHints,
           }),
           {
             recordAsUserMessage: false,
-            activationContextText: buildChannelActivationContextText({
-              target: historyTarget,
-              recentMessages: activationContext.recentMessages,
-              rootMessage: activationContext.rootMessage,
-              unreadCount: activationContext.unreadCount,
-              oldestVisibleSeq: activationContext.oldestVisibleSeq,
-              participants: activationContext.participants,
-              boundTask: activationContext.boundTask,
-              openTasks: activationContext.openTasks,
-            }) || undefined,
+            activationContextText,
+            resumeContextText,
             replayOverlapRecentMessages: activationContext.recentMessages,
             activationMetadata,
           },
@@ -1198,6 +1264,9 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
           });
         }
       }
+      if (nextStatus === 'in_review' || nextStatus === 'done') {
+        queueTaskDurableNoteSync(req.params.id, current.taskId);
+      }
       return mapAgentTaskRow(updated, dmChannelId);
     },
   );
@@ -1674,6 +1743,35 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         });
 
         try {
+          const dmMemoryHints = buildWorkspaceMemoryHints({
+            includeTaskNotes: true,
+            includeWorkLog: true,
+            includeChannelNote: false,
+          });
+          const includeDmSnapshot = shouldIncludeDmContextSnapshot({ target: threadTarget });
+          const activationContextText = buildDirectActivationContextText({
+            target: threadTarget,
+            recentMessages: threadActivationContext.recentMessages,
+            unreadCount: threadActivationContext.unreadCount,
+            oldestVisibleSeq: threadActivationContext.oldestVisibleSeq,
+            rootMessage: threadActivationContext.rootMessage,
+            dmContextSnapshot: threadActivationContext.dmContextSnapshot,
+          }, {
+            includeDmContextSnapshot: includeDmSnapshot,
+          }) || undefined;
+          const resumeContextText = combinePromptSections([
+            `[Workspace memory reminder]\n${buildWorkspaceMemoryReminder(dmMemoryHints)}`,
+            buildDirectActivationContextText({
+              target: threadTarget,
+              recentMessages: threadActivationContext.recentMessages.slice(-2),
+              unreadCount: threadActivationContext.unreadCount,
+              oldestVisibleSeq: threadActivationContext.oldestVisibleSeq,
+              rootMessage: threadActivationContext.rootMessage,
+              dmContextSnapshot: includeDmSnapshot ? threadActivationContext.dmContextSnapshot : undefined,
+            }, {
+              includeDmContextSnapshot: includeDmSnapshot,
+            }),
+          ]) || undefined;
           const result = await conversationManager.submitPrompt(
             threadConversation.id,
             buildDmTaskHandoffPrompt({
@@ -1689,14 +1787,8 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
             }),
             {
               recordAsUserMessage: false,
-              activationContextText: buildDirectActivationContextText({
-                target: threadTarget,
-                recentMessages: threadActivationContext.recentMessages,
-                unreadCount: threadActivationContext.unreadCount,
-                oldestVisibleSeq: threadActivationContext.oldestVisibleSeq,
-                rootMessage: threadActivationContext.rootMessage,
-                dmContextSnapshot: threadActivationContext.dmContextSnapshot,
-              }) || undefined,
+              activationContextText,
+              resumeContextText,
               activationMetadata: {
                 expectedTermination: {
                   kind: 'dm_handoff_bootstrap',
@@ -3388,6 +3480,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     broadcastConversationStatus,
     config.humanUserName,
     skillsService,
+    workspaceBroker,
     config.internalAgentAuthToken,
     attachmentsDir,
   );
@@ -3438,7 +3531,8 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
   app.post<{ Params: { id: string }; Body: { title: string; description?: string } }>(
     '/api/channels/:id/tasks',
     async (req, reply) => {
-      if (!requireChannelAccess(req, reply, req.params.id)) return { error: 'Access denied' };
+      const chanUser = requireChannelAccess(req, reply, req.params.id);
+      if (!chanUser) return { error: 'Access denied' };
       const channel = conversationManager.getChannel(req.params.id);
       if (!channel) { reply.code(404); return { error: 'Channel not found' }; }
       const { title, description } = req.body ?? {};
@@ -3980,6 +4074,9 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         taskNumber,
       });
       broadcastChannelTasksChanged(req.params.id);
+      if (nextStatus === 'in_review' || nextStatus === 'done') {
+        queueTaskDurableNoteSync(current.claimedByAgentId, current.taskId);
+      }
       return row;
     },
   );

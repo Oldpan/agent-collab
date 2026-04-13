@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildDirectActivationContextText } from '../web/directActivationPrompt.js';
+import { buildDirectActivationContextText, buildDirectActivationPrompt } from '../web/directActivationPrompt.js';
 
 describe('directActivationPrompt', () => {
   it('DM task-thread context text 应包含 thread root 和 Context from DM snapshot', () => {
@@ -75,5 +75,44 @@ describe('directActivationPrompt', () => {
     expect(text).toContain('[Active DM task threads]');
     expect(text).toContain(`#4 [in_progress] @Kimi -> dm:@oldpan:${threadRootId} — 检查显存使用情况`);
     expect(text).not.toContain('msg: ');
+  });
+
+  it('DM activation prompt 应显式列出优先检查的 workspace memory 文件', () => {
+    const text = buildDirectActivationPrompt({
+      agentName: 'Kimi',
+      senderName: 'oldpan',
+      content: '请继续刚才的任务。',
+      replyTarget: 'dm:@oldpan',
+      memoryHints: ['MEMORY.md', 'notes/tasks.md', 'notes/work-log.md'],
+    });
+
+    expect(text).toContain('[Workspace memory to check first]');
+    expect(text).toContain('MEMORY.md');
+    expect(text).toContain('notes/tasks.md');
+    expect(text).toContain('notes/work-log.md');
+  });
+
+  it('普通 DM 上下文应允许隐藏 DM snapshot', () => {
+    const text = buildDirectActivationContextText({
+      target: 'dm:@oldpan',
+      dmContextSnapshot: {
+        triggerMessageId: 'trigger-msg-1',
+        messages: [
+          {
+            messageId: 'trigger-msg-1',
+            seq: 1,
+            target: 'dm:@oldpan',
+            senderName: 'oldpan',
+            senderType: 'user',
+            content: '先别继续读旧上下文。',
+            createdAt: 1,
+          },
+        ],
+      },
+    }, {
+      includeDmContextSnapshot: false,
+    });
+
+    expect(text).not.toContain('[Context from DM]');
   });
 });

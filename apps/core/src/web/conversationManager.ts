@@ -885,6 +885,7 @@ export class ConversationManager {
     options?: {
       recordAsUserMessage?: boolean;
       activationContextText?: string;
+      resumeContextText?: string;
       replayOverlapRecentMessages?: ActivationContextMessage[];
       senderName?: string;
       clientMessageId?: string;

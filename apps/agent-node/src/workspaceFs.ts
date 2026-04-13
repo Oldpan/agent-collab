@@ -176,6 +176,34 @@ function ensureWorkspaceScaffold(workspaceRoot: string): void {
   fs.mkdirSync(path.join(workspaceRoot, 'notes'), { recursive: true });
   fs.mkdirSync(path.join(workspaceRoot, 'notes', 'channels'), { recursive: true });
 
+  const taskNotesPath = path.join(workspaceRoot, 'notes', 'tasks.md');
+  if (!fs.existsSync(taskNotesPath)) {
+    fs.writeFileSync(
+      taskNotesPath,
+      [
+        '# Task Notes',
+        '',
+        'Durable summaries for task goals, latest outcomes, and residual risks.',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+  }
+
+  const workLogPath = path.join(workspaceRoot, 'notes', 'work-log.md');
+  if (!fs.existsSync(workLogPath)) {
+    fs.writeFileSync(
+      workLogPath,
+      [
+        '# Work Log',
+        '',
+        'Append important completed work, decisions, and follow-ups here.',
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+  }
+
   const memoryPath = path.join(workspaceRoot, 'MEMORY.md');
   if (!fs.existsSync(memoryPath)) {
     fs.writeFileSync(
@@ -189,8 +217,9 @@ function ensureWorkspaceScaffold(workspaceRoot: string): void {
         '## Key Knowledge',
         '- Create and use `notes/user-preferences.md` for stable user preferences and conventions as needed.',
         '- Read and extend `notes/channels/` for channel purpose, reset markers, and ongoing context.',
+        '- Read and update `notes/tasks.md` for durable task goals, outcomes, and residual risks.',
         '- Create and use `notes/domain.md` for domain-specific knowledge and conventions as needed.',
-        '- Create and use `notes/work-log.md` for important decisions and completed work as needed.',
+        '- Read and update `notes/work-log.md` for important decisions and completed work.',
         '- Add any other detailed notes under `notes/<topic>.md` as needed.',
         '',
         '## Active Context',

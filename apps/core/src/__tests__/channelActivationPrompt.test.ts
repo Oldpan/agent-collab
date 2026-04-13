@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { buildChannelActivationContextText } from '../web/channelActivationPrompt.js';
+import { buildChannelActivationContextText, buildChannelActivationPrompt } from '../web/channelActivationPrompt.js';
 
 describe('buildChannelActivationContextText', () => {
   it('应附带 history cursor，并只汇报未包含在 recent slice 内的旧 unread', () => {
@@ -75,5 +75,41 @@ describe('buildChannelActivationContextText', () => {
     expect(text).toContain('[Message attachments]');
     expect(text).toContain('attachment_id: 11111111-1111-1111-1111-111111111111');
     expect(text).toContain('Use view_file(attachment_id="<one of the IDs above>")');
+  });
+
+  it('应在 activation prompt 中显式列出优先检查的 workspace memory 文件', () => {
+    const text = buildChannelActivationPrompt({
+      channelName: 'default',
+      target: '#default',
+      replyTarget: '#default',
+      senderName: 'User',
+      content: '请继续推进这个线程。',
+      reason: 'thread_reply',
+      memoryHints: ['MEMORY.md', 'notes/channels/default.md', 'notes/tasks.md'],
+    });
+
+    expect(text).toContain('[Workspace memory to check first]');
+    expect(text).toContain('MEMORY.md');
+    expect(text).toContain('notes/channels/default.md');
+    expect(text).toContain('notes/tasks.md');
+  });
+
+  it('应允许按需隐藏 task board summary，同时保留参与者信息', () => {
+    const text = buildChannelActivationContextText({
+      target: '#default',
+      participants: [
+        { agentId: 'a1', name: 'alice', role: 'owner', joinedAt: 1, lastActiveAt: 2 },
+        { agentId: 'a2', name: 'bob', role: 'participant', joinedAt: 1, lastActiveAt: 2 },
+      ],
+      openTasks: [
+        { taskNumber: 1, title: 'Task A', status: 'todo', claimedByName: null },
+      ],
+    }, {
+      includeParticipants: true,
+      includeOpenTasks: false,
+    });
+
+    expect(text).toContain('[Active participants on this target]');
+    expect(text).not.toContain('[Task-message board summary]');
   });
 });

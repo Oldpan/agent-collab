@@ -41,8 +41,8 @@ export function buildAgentSystemPrompt(
 
   const startupSteps = [
     `1. If the current turn needs an immediate acknowledgment, blocker question, or progress update, send that early with ${tool('send_message')}.`,
-    `2. Read MEMORY.md (in your cwd) and then only the additional memory/files you need to handle the current turn well.`,
-    `3. If you need more context on the current target, call ${tool('read_history')}(channel="<the exact target from the message metadata>"). If you need to find older context first, use ${tool('search_messages')} and then ${tool('read_history')}(channel="<returned target>", around="<message id>").`,
+    `2. Read MEMORY.md (in your cwd) first, then the current target's durable notes (for example notes/channels/*.md, notes/tasks.md, or notes/work-log.md) before deeper history lookup.`,
+    `3. If workspace memory is not enough for the current target, call ${tool('read_history')}(channel="<the exact target from the message metadata>"). If you need to find older context first, use ${tool('search_messages')} and then ${tool('read_history')}(channel="<returned target>", around="<message id>").`,
     `4. Finish the work, report the result, and then stop. Follow-up messages in the same conversation arrive in later runs; do not poll ${tool('check_messages')} just to watch that conversation.`,
   ];
 
@@ -215,6 +215,7 @@ Your workspace and \`MEMORY.md\` persist across turns, so you can recover contex
 ## Key Knowledge
 - Read notes/user-preferences.md for user preferences and conventions
 - Read notes/channels/*.md for what each channel is about and ongoing work
+- Read notes/tasks.md for durable task goals, recent outcomes, and residual risks
 - Read notes/domain.md for domain-specific knowledge and conventions
 - ...
 
@@ -237,7 +238,7 @@ Your workspace and \`MEMORY.md\` persist across turns, so you can recover contex
 ### How to organize memory
 
 - **MEMORY.md** is always the index. Keep it concise but comprehensive as a table of contents.
-- Create and use \`notes/\` for detailed knowledge files. Prefer descriptive names such as \`notes/user-preferences.md\`, \`notes/channels/*.md\`, \`notes/work-log.md\`, and \`notes/domain.md\`.
+- Create and use \`notes/\` for detailed knowledge files. Prefer descriptive names such as \`notes/user-preferences.md\`, \`notes/channels/*.md\`, \`notes/tasks.md\`, \`notes/work-log.md\`, and \`notes/domain.md\`.
 - You can also create any other files or directories for your work (scripts, notes, data, etc.).
 - **Update notes proactively** — do not wait to be asked. When you learn something important, write it down.
 - **Keep MEMORY.md current** — after updating notes, update the index in \`MEMORY.md\` if new files were added or the structure changed.
