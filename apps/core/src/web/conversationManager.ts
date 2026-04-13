@@ -39,6 +39,7 @@ import {
   deleteTargetParticipantsForChannel,
 } from './targetParticipants.js';
 import { buildDirectReplyTarget, resolveDirectUserName } from './directReplyTargets.js';
+import { deleteTaskEventsForChannel } from './taskEvents.js';
 
 function slugifyAgentName(name: string): string {
   return name
@@ -828,6 +829,7 @@ export class ConversationManager {
     this.db.prepare('DELETE FROM conversation_prompt_queue WHERE agent_id = ?').run(agentId);
     this.db.prepare(`DELETE FROM channel_messages WHERE channel_id = ?`).run(dmChannelId);
     this.db.prepare(`DELETE FROM tasks WHERE channel_id = ?`).run(dmChannelId);
+    deleteTaskEventsForChannel(this.db, dmChannelId);
     this.db.prepare(`DELETE FROM channel_task_sequences WHERE channel_id = ?`).run(dmChannelId);
     deleteTargetParticipantsForChannel(this.db, dmChannelId);
     const hasDmThreadContextSnapshots = this.db
@@ -1005,6 +1007,7 @@ export class ConversationManager {
 
     this.db.prepare(`DELETE FROM channel_messages WHERE channel_id = ?`).run(channelId);
     this.db.prepare(`DELETE FROM tasks WHERE channel_id = ?`).run(channelId);
+    deleteTaskEventsForChannel(this.db, channelId);
     this.db.prepare(`DELETE FROM thread_task_bindings WHERE channel_id = ?`).run(channelId);
     this.db.prepare(`DELETE FROM channel_task_sequences WHERE channel_id = ?`).run(channelId);
     this.db.prepare(`DELETE FROM agent_message_checkpoints WHERE channel_id = ?`).run(channelId);

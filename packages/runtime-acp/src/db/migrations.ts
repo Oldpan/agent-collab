@@ -1342,4 +1342,71 @@ export function migrate(db: Db): void {
   if (v59Row.version < 59) {
     db.exec(`UPDATE schema_version SET version = 59;`);
   }
+
+  const taskEventsTableExists = !!db.prepare(
+    `SELECT 1
+     FROM sqlite_master
+     WHERE type = 'table' AND name = 'task_events'
+     LIMIT 1`,
+  ).get();
+  const taskEventsRefIndexExists = !!db.prepare(
+    `SELECT 1
+     FROM sqlite_master
+     WHERE type = 'index' AND name = 'idx_task_events_ref_created'
+     LIMIT 1`,
+  ).get();
+  const taskEventsTaskIndexExists = !!db.prepare(
+    `SELECT 1
+     FROM sqlite_master
+     WHERE type = 'index' AND name = 'idx_task_events_task_created'
+     LIMIT 1`,
+  ).get();
+  const taskEventsChannelIndexExists = !!db.prepare(
+    `SELECT 1
+     FROM sqlite_master
+     WHERE type = 'index' AND name = 'idx_task_events_channel_created'
+     LIMIT 1`,
+  ).get();
+  const v60Row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
+  if (
+    v60Row.version < 60
+    || !taskEventsTableExists
+    || !taskEventsRefIndexExists
+    || !taskEventsTaskIndexExists
+    || !taskEventsChannelIndexExists
+  ) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS task_events (
+        event_id                  TEXT PRIMARY KEY,
+        task_id                   TEXT NOT NULL,
+        agent_task_ref            TEXT,
+        channel_id                TEXT NOT NULL,
+        task_number               INTEGER NOT NULL,
+        event_type                TEXT NOT NULL,
+        actor_type                TEXT NOT NULL,
+        actor_id                  TEXT,
+        actor_name                TEXT,
+        from_status               TEXT,
+        to_status                 TEXT,
+        claimed_by_agent_id_after TEXT,
+        claimed_by_name_after     TEXT,
+        message_id                TEXT,
+        thread_target             TEXT,
+        created_at                INTEGER NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_task_events_ref_created
+      ON task_events(agent_task_ref, created_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_task_events_task_created
+      ON task_events(task_id, created_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_task_events_channel_created
+      ON task_events(channel_id, created_at DESC);
+    `);
+
+    if (v60Row.version < 60) {
+      db.exec(`UPDATE schema_version SET version = 60;`);
+    }
+  }
 }

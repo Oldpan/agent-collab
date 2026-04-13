@@ -454,6 +454,55 @@ server.tool(
   },
 );
 
+server.tool(
+  'get_task_history',
+  'Look up a task by its stable global task ref and return its structured task-event timeline. Use this for creation/claim/status/handoff history; use read_history when you need the actual thread discussion or work output.',
+  {
+    task_ref: z.string().trim().min(1, 'task_ref is required').describe('Stable global task ref, for example task_ab12cd34ef56'),
+    limit: z.number().default(50).describe('Maximum number of history events to return (default 50, max 200)'),
+  },
+  async ({ task_ref, limit }) => {
+    try {
+      const params = new URLSearchParams({
+        task_ref: task_ref.trim().toLowerCase(),
+        limit: String(Math.min(limit, 200)),
+      });
+      const { ok, data } = await apiFetch(`/tasks/history?${params}`);
+      if (!ok) return toText(`Error: ${errText(data, 'task history lookup failed')}`);
+
+      const d = data as { task?: MyTaskItem; events?: TaskHistoryEventItem[] };
+      const task = d.task;
+      if (!task) return toText(`Error: task ${task_ref} not found`);
+
+      const identity = formatTaskIdentity(task.agentTaskRef, task.taskNumber);
+      const header = [
+        `Task: ${identity}`,
+        `Title: ${task.title}`,
+        `Status: ${task.status}`,
+        `Source: ${task.sourceLabel ?? task.sourceTarget ?? task.channelId}`,
+      ];
+
+      const timeline = d.events?.length
+        ? d.events.map((event) => {
+          const parts = [
+            formatBeijingPromptTimestamp(event.createdAt),
+            event.type,
+          ];
+          if (event.actorName) parts.push(event.actorType === 'system' ? event.actorName : `@${event.actorName}`);
+          if (event.fromStatus || event.toStatus) parts.push(`status ${event.fromStatus ?? 'unknown'} → ${event.toStatus ?? 'unknown'}`);
+          if (event.claimedByNameAfter) parts.push(`assignee @${event.claimedByNameAfter}`);
+          if (event.threadTarget) parts.push(`thread ${event.threadTarget}`);
+          return `- ${parts.join(' · ')}`;
+        }).join('\n')
+        : '- No structured task events recorded yet.';
+
+      return toText(`${header.join('\n')}\n\n## History\n${timeline}`);
+    } catch (err: unknown) {
+      return toText(`Error: ${(err as Error).message}`);
+    }
+  },
+);
+
 // ── create_tasks ──────────────────────────────────────────────────────────────
 
 server.tool(
@@ -896,4 +945,19 @@ type MyTaskItem = TaskItem & {
   threadTarget?: string | null;
   createdAt?: string;
   updatedAt?: string;
+};
+
+type TaskHistoryEventItem = {
+  eventId: string;
+  type: string;
+  actorType: string;
+  actorId?: string | null;
+  actorName?: string | null;
+  fromStatus?: string | null;
+  toStatus?: string | null;
+  claimedByAgentIdAfter?: string | null;
+  claimedByNameAfter?: string | null;
+  messageId?: string | null;
+  threadTarget?: string | null;
+  createdAt: string;
 };

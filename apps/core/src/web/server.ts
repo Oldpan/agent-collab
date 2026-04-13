@@ -66,6 +66,7 @@ import { allocateNextTaskNumber } from './taskNumbers.js';
 import { isValidTransition } from './taskStatusTransitions.js';
 import { upsertAgentTaskLink } from './agentTaskLinks.js';
 import { findThreadRootMessageId } from './threadRoots.js';
+import { appendTaskEvent, buildTaskEventThreadTarget, deleteTaskEventsForTask } from './taskEvents.js';
 import type { User } from '../services/auth.js';
 import {
   hasAdminUser,
@@ -331,6 +332,37 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     '',
     'Please start working from this thread, post progress updates here, and move the task to in_review when the implementation is ready.',
   ].join('\n');
+
+  const buildAgentTaskRefCandidate = (taskId: string, length: number): string => {
+    const normalized = taskId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const sliceLength = Math.max(8, Math.min(length, normalized.length));
+    return `task_${normalized.slice(0, sliceLength)}`;
+  };
+
+  const generateUniqueAgentTaskRef = (taskId: string): string => {
+    const normalized = taskId.replace(/[^a-zA-Z0-9]/g, '').toLowerCase();
+    const lookup = db.prepare(
+      `SELECT task_id as taskId
+       FROM tasks
+       WHERE agent_task_ref = ?
+       LIMIT 1`,
+    );
+    const candidateLengths = [12, 16, 20, 24, 28, normalized.length];
+    for (const length of candidateLengths) {
+      const candidate = buildAgentTaskRefCandidate(taskId, length);
+      const existing = lookup.get(candidate) as { taskId: string } | undefined;
+      if (!existing || existing.taskId === taskId) return candidate;
+    }
+
+    const fullBase = buildAgentTaskRefCandidate(taskId, normalized.length);
+    let suffix = 2;
+    while (true) {
+      const candidate = `${fullBase}_${suffix}`;
+      const existing = lookup.get(candidate) as { taskId: string } | undefined;
+      if (!existing || existing.taskId === taskId) return candidate;
+      suffix += 1;
+    }
+  };
 
   const buildDmTaskThreadTarget = (primaryTarget: string, messageId: string) => `${primaryTarget}:${buildThreadShortId(messageId)}`;
 
@@ -1113,12 +1145,32 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       }
 
       const now = Date.now();
-      db.prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?`).run(nextStatus, now, req.params.taskId);
-      syncTaskThreadOwner(db, {
-        taskId: req.params.taskId,
-        agentId: nextStatus === 'done' ? null : current.assigneeId,
-        lastActiveAt: now,
-      });
+      const rootMessage = current.messageId ? fetchTaskRootMessageRow(current.messageId) : null;
+      db.transaction(() => {
+        db.prepare(`UPDATE tasks SET status = ?, updated_at = ? WHERE task_id = ?`).run(nextStatus, now, req.params.taskId);
+        syncTaskThreadOwner(db, {
+          taskId: req.params.taskId,
+          agentId: nextStatus === 'done' ? null : current.assigneeId,
+          lastActiveAt: now,
+        });
+        appendTaskEvent(db, {
+          taskId: current.taskId,
+          agentTaskRef: null,
+          channelId: dmChannelId,
+          taskNumber: current.taskNumber,
+          eventType: 'status_changed',
+          actorType: 'user',
+          actorId: user.id,
+          actorName: user.username,
+          fromStatus: current.status,
+          toStatus: nextStatus,
+          claimedByAgentIdAfter: current.assigneeId,
+          claimedByNameAfter: current.assigneeName,
+          messageId: current.messageId,
+          threadTarget: buildTaskEventThreadTarget({ sourceTarget: rootMessage?.target ?? null, messageId: current.messageId }),
+          createdAt: now,
+        });
+      })();
 
       const updated = getAgentTaskRowById(req.params.taskId);
       if (!updated) {
@@ -1133,11 +1185,11 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
           taskStatus: updated.status,
           taskAssigneeName: updated.assigneeName,
         });
-        const rootMessage = fetchTaskRootMessageRow(updated.messageId);
-        if (rootMessage && (nextStatus === 'in_review' || nextStatus === 'done')) {
+        const refreshedRootMessage = fetchTaskRootMessageRow(updated.messageId);
+        if (refreshedRootMessage && (nextStatus === 'in_review' || nextStatus === 'done')) {
           emitDmTaskLifecycleEvent({
             agentId: req.params.id,
-            primaryTarget: rootMessage.target,
+            primaryTarget: refreshedRootMessage.target,
             taskNumber: updated.taskNumber,
             title: updated.title,
             taskStatus: updated.status,
@@ -1168,19 +1220,55 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       }
 
       const now = Date.now();
-      db.prepare(
-        `UPDATE tasks
-         SET claimed_by_agent_id = NULL,
-             claimed_by_name = NULL,
-             status = 'todo',
-             updated_at = ?
-         WHERE task_id = ?`,
-      ).run(now, req.params.taskId);
-      syncTaskThreadOwner(db, {
-        taskId: req.params.taskId,
-        agentId: null,
-        lastActiveAt: now,
-      });
+      const taskState = db.prepare(
+        `SELECT task_number as taskNumber,
+                status,
+                message_id as messageId,
+                claimed_by_agent_id as claimedByAgentId,
+                claimed_by_name as claimedByName
+         FROM tasks
+         WHERE task_id = ?
+         LIMIT 1`,
+      ).get(req.params.taskId) as {
+        taskNumber: number;
+        status: string;
+        messageId: string | null;
+        claimedByAgentId: string | null;
+        claimedByName: string | null;
+      } | undefined;
+      const rootMessage = taskState?.messageId ? fetchTaskRootMessageRow(taskState.messageId) : null;
+      db.transaction(() => {
+        db.prepare(
+          `UPDATE tasks
+           SET claimed_by_agent_id = NULL,
+               claimed_by_name = NULL,
+               status = 'todo',
+               updated_at = ?
+           WHERE task_id = ?`,
+        ).run(now, req.params.taskId);
+        syncTaskThreadOwner(db, {
+          taskId: req.params.taskId,
+          agentId: null,
+          lastActiveAt: now,
+        });
+        if (taskState) {
+          appendTaskEvent(db, {
+            taskId: req.params.taskId,
+            agentTaskRef: null,
+            channelId: dmChannelId,
+            taskNumber: taskState.taskNumber,
+            eventType: 'unclaimed',
+            actorType: 'user',
+            actorId: user.id,
+            actorName: user.username,
+            fromStatus: taskState.status,
+            toStatus: 'todo',
+            messageId: taskState.messageId,
+            threadTarget: buildTaskEventThreadTarget({ sourceTarget: rootMessage?.target ?? null, messageId: taskState.messageId }),
+            createdAt: now,
+          });
+        }
+      })();
 
       const updated = getAgentTaskRowById(req.params.taskId);
       if (!updated) {
@@ -1436,6 +1524,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         const now = Date.now();
         const msgSeq = allocateNextChannelMessageSeq(db, dmChannelId);
         const taskId = randomUUID();
+        const agentTaskRef = generateUniqueAgentTaskRef(taskId);
         const taskNumber = allocateNextTaskNumber(db, dmChannelId);
         const threadRootId = buildThreadShortId(clientMessageId);
         const threadTarget = buildDmTaskThreadTarget(directTarget, clientMessageId);
@@ -1462,11 +1551,12 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
             );
 
             db.prepare(
-              `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
+              `INSERT INTO tasks(task_id, agent_task_ref, channel_id, task_number, title, description, status, message_id,
                                  claimed_by_agent_id, claimed_by_name, assigned_by_user, created_at, updated_at)
-               VALUES(?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?)`,
+               VALUES(?, ?, ?, ?, ?, ?, 'in_progress', ?, ?, ?, ?, ?, ?)`,
             ).run(
               taskId,
+              agentTaskRef,
               dmChannelId,
               taskNumber,
               taskTitle,
@@ -1489,6 +1579,37 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
               taskId,
               agentId: conv.agentId,
               lastActiveAt: now,
+            });
+            appendTaskEvent(db, {
+              taskId,
+              agentTaskRef,
+              channelId: dmChannelId,
+              taskNumber,
+              eventType: 'created',
+              actorType: 'user',
+              actorId: user.id,
+              actorName: user.username,
+              toStatus: 'in_progress',
+              claimedByAgentIdAfter: conv.agentId,
+              claimedByNameAfter: agent.name,
+              messageId: clientMessageId,
+              threadTarget,
+              createdAt: now,
+            });
+            appendTaskEvent(db, {
+              taskId,
+              agentTaskRef,
+              channelId: dmChannelId,
+              taskNumber,
+              eventType: 'claimed',
+              actorType: 'user',
+              actorId: user.id,
+              actorName: user.username,
+              claimedByAgentIdAfter: conv.agentId,
+              claimedByNameAfter: agent.name,
+              messageId: clientMessageId,
+              threadTarget,
+              createdAt: now,
             });
           })();
         } catch (error: any) {
@@ -1515,6 +1636,19 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
           threadRootId,
         );
         if (!threadConversation) {
+          appendTaskEvent(db, {
+            taskId,
+            agentTaskRef,
+            channelId: dmChannelId,
+            taskNumber,
+            eventType: 'handoff_failed',
+            actorType: 'system',
+            actorName: 'system',
+            claimedByAgentIdAfter: conv.agentId,
+            claimedByNameAfter: agent.name,
+            messageId: clientMessageId,
+            threadTarget,
+          });
           emitDmTaskLifecycleEvent({
             agentId: conv.agentId,
             primaryTarget: directTarget,
@@ -1574,6 +1708,19 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
           if (result.queued) {
             broadcastConversationStatus(threadConversation.id, 'queued');
           }
+          appendTaskEvent(db, {
+            taskId,
+            agentTaskRef,
+            channelId: dmChannelId,
+            taskNumber,
+            eventType: 'handoff_started',
+            actorType: 'system',
+            actorName: 'system',
+            claimedByAgentIdAfter: conv.agentId,
+            claimedByNameAfter: agent.name,
+            messageId: clientMessageId,
+            threadTarget,
+          });
           emitDmTaskLifecycleEvent({
             agentId: conv.agentId,
             primaryTarget: directTarget,
@@ -1589,6 +1736,19 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
             handoffStarted: true,
           };
         } catch {
+          appendTaskEvent(db, {
+            taskId,
+            agentTaskRef,
+            channelId: dmChannelId,
+            taskNumber,
+            eventType: 'handoff_failed',
+            actorType: 'system',
+            actorName: 'system',
+            claimedByAgentIdAfter: conv.agentId,
+            claimedByNameAfter: agent.name,
+            messageId: clientMessageId,
+            threadTarget,
+          });
           emitDmTaskLifecycleEvent({
             agentId: conv.agentId,
             primaryTarget: directTarget,
@@ -3288,6 +3448,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       if (!normalizedDescription) { reply.code(400); return { error: 'description is required' }; }
       const now = Date.now();
       const taskId = randomUUID();
+      const agentTaskRef = generateUniqueAgentTaskRef(taskId);
       const messageId = randomUUID();
       const target = `#${channel.name}`;
       let taskNumber = 0;
@@ -3303,9 +3464,23 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         ).run(messageId, req.params.id, target, normalizedTitle, seq, now);
 
         db.prepare(
-          `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id, created_at, updated_at)
-           VALUES(?, ?, ?, ?, ?, 'todo', ?, ?, ?)`,
-        ).run(taskId, req.params.id, taskNumber, normalizedTitle, normalizedDescription, messageId, now, now);
+          `INSERT INTO tasks(task_id, agent_task_ref, channel_id, task_number, title, description, status, message_id, created_at, updated_at)
+           VALUES(?, ?, ?, ?, ?, ?, 'todo', ?, ?, ?)`,
+        ).run(taskId, agentTaskRef, req.params.id, taskNumber, normalizedTitle, normalizedDescription, messageId, now, now);
+        appendTaskEvent(db, {
+          taskId,
+          agentTaskRef,
+          channelId: req.params.id,
+          taskNumber,
+          eventType: 'created',
+          actorType: 'user',
+          actorId: chanUser.id,
+          actorName: chanUser.username,
+          toStatus: 'todo',
+          messageId,
+          threadTarget: buildTaskEventThreadTarget({ sourceTarget: target, messageId }),
+          createdAt: now,
+        });
       })();
 
       const shortId = buildThreadShortId(messageId);
@@ -3350,21 +3525,51 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       if (existing) { reply.code(409); return { error: 'Message is already a task' }; }
       const now = Date.now();
       const taskId = randomUUID();
+      const agentTaskRef = generateUniqueAgentTaskRef(taskId);
       let taskNumber = 0;
       const taskTitle = deriveTaskTitle(title, msg.content);
       if (!taskTitle) { reply.code(400); return { error: 'title is required' }; }
       db.transaction(() => {
         taskNumber = allocateNextTaskNumber(db, req.params.id);
         db.prepare(
-          `INSERT INTO tasks(task_id, channel_id, task_number, title, description, status, message_id,
+          `INSERT INTO tasks(task_id, agent_task_ref, channel_id, task_number, title, description, status, message_id,
                              claimed_by_agent_id, claimed_by_name, created_at, updated_at)
-           VALUES(?, ?, ?, ?, ?, 'in_progress', ?, NULL, ?, ?, ?)`,
-        ).run(taskId, req.params.id, taskNumber, taskTitle, normalizedDescription, msg.message_id, chanUser.username, now, now);
+           VALUES(?, ?, ?, ?, ?, ?, 'in_progress', ?, NULL, ?, ?, ?)`,
+        ).run(taskId, agentTaskRef, req.params.id, taskNumber, taskTitle, normalizedDescription, msg.message_id, chanUser.username, now, now);
         db.prepare(`UPDATE channel_messages SET message_kind = 'task' WHERE message_id = ?`).run(msg.message_id);
         syncTaskThreadOwner(db, {
           taskId,
           agentId: null,
           lastActiveAt: now,
+        });
+        appendTaskEvent(db, {
+          taskId,
+          agentTaskRef,
+          channelId: req.params.id,
+          taskNumber,
+          eventType: 'created',
+          actorType: 'user',
+          actorId: chanUser.id,
+          actorName: chanUser.username,
+          toStatus: 'in_progress',
+          claimedByNameAfter: chanUser.username,
+          messageId: msg.message_id,
+          threadTarget: buildTaskEventThreadTarget({ sourceTarget: `#${channel.name}`, messageId: msg.message_id }),
+          createdAt: now,
+        });
+        appendTaskEvent(db, {
+          taskId,
+          agentTaskRef,
+          channelId: req.params.id,
+          taskNumber,
+          eventType: 'claimed',
+          actorType: 'user',
+          actorId: chanUser.id,
+          actorName: chanUser.username,
+          claimedByNameAfter: chanUser.username,
+          messageId: msg.message_id,
+          threadTarget: buildTaskEventThreadTarget({ sourceTarget: `#${channel.name}`, messageId: msg.message_id }),
+          createdAt: now,
         });
       })();
       broadcastChannelTasksChanged(req.params.id);
@@ -3547,6 +3752,23 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
             agentId: requestedAgentId,
             lastActiveAt: now,
           });
+          appendTaskEvent(db, {
+            taskId: current.taskId,
+            agentTaskRef: null,
+            channelId: req.params.id,
+            taskNumber,
+            eventType: 'claimed',
+            actorType: 'user',
+            actorId: chanUser.id,
+            actorName: chanUser.username,
+            fromStatus: current.currentStatus,
+            toStatus: nextStatus,
+            claimedByAgentIdAfter: requestedAgentId,
+            claimedByNameAfter: agent.name,
+            messageId: current.messageId,
+            threadTarget: buildTaskEventThreadTarget({ sourceTarget: `#${channel.name}`, messageId: current.messageId }),
+            createdAt: now,
+          });
         })();
 
         const claimedTask = getChannelTaskByNumber(db, {
@@ -3581,6 +3803,22 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
             taskId: current.taskId,
             agentId: null,
             lastActiveAt: now,
+          });
+          appendTaskEvent(db, {
+            taskId: current.taskId,
+            agentTaskRef: null,
+            channelId: req.params.id,
+            taskNumber,
+            eventType: 'claimed',
+            actorType: 'user',
+            actorId: chanUser.id,
+            actorName: chanUser.username,
+            fromStatus: current.currentStatus,
+            toStatus: nextStatus,
+            claimedByNameAfter: chanUser.username,
+            messageId: current.messageId,
+            threadTarget: buildTaskEventThreadTarget({ sourceTarget: `#${channel.name}`, messageId: current.messageId }),
+            createdAt: now,
           });
         })();
       }
@@ -3652,6 +3890,19 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
           agentId: null,
           lastActiveAt: now,
         });
+        appendTaskEvent(db, {
+          taskId: current.taskId,
+          agentTaskRef: null,
+          channelId: req.params.id,
+          taskNumber,
+          eventType: 'unclaimed',
+          actorType: 'user',
+          actorId: chanUser.id,
+          actorName: chanUser.username,
+          fromStatus: current.currentStatus,
+          toStatus: nextStatus,
+          createdAt: now,
+        });
       })();
 
       broadcastChannelTasksChanged(req.params.id);
@@ -3708,6 +3959,21 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
           agentId: nextStatus === 'done' ? null : (current.claimedByAgentId ?? null),
           lastActiveAt: now,
         });
+        appendTaskEvent(db, {
+          taskId: current.taskId,
+          agentTaskRef: null,
+          channelId: req.params.id,
+          taskNumber,
+          eventType: 'status_changed',
+          actorType: 'user',
+          actorId: chanUser.id,
+          actorName: chanUser.username,
+          fromStatus: current.currentStatus,
+          toStatus: nextStatus,
+          claimedByAgentIdAfter: current.claimedByAgentId,
+          claimedByNameAfter: current.claimedByName,
+          createdAt: now,
+        });
       })();
       const row = getChannelTaskByNumber(db, {
         channelId: req.params.id,
@@ -3746,6 +4012,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
           channelId: req.params.id,
           taskId: task.taskId,
         });
+        deleteTaskEventsForTask(db, task.taskId);
         db.prepare(`DELETE FROM tasks WHERE task_id = ?`).run(task.taskId);
         if (task.messageId) {
           db.prepare(`UPDATE channel_messages SET message_kind = NULL WHERE message_id = ?`).run(task.messageId);

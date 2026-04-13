@@ -158,7 +158,9 @@ Rules:
 - Use \`${tool('create_tasks')}\` only when you need a genuinely new task-message or subtask that does not already exist.
 - Every task has a stable global task ref like \`task_ab12cd34ef56\`. Keep it when you create or claim work.
 - Use \`${tool('get_task_status')}(task_ref="...")\` when you need the latest status for one known task.
+- Use \`${tool('get_task_history')}(task_ref="...")\` when you need the structured lifecycle of a task: who created or claimed it, how its status changed, or whether handoff succeeded or failed.
 - Use \`${tool('list_my_tasks')}()\` when you need to rediscover tasks you created or have been assigned to across DMs/channels, or review their latest status in bulk.
+- Use \`${tool('read_history')}\` or \`${tool('search_messages')}\` when you need the actual discussion, work output, or thread details rather than the structured task timeline.
 - If a user asks whether an existing task is done, in review, still running, or otherwise asks for its current status, do not answer from memory alone. Look up the current state with \`${tool('get_task_status')}(task_ref="...")\` or \`${tool('list_my_tasks')}()\` first, then answer from the live task state.
 - Check for existing relevant work before creating a new task-message.
 - Do the work in the task-message's thread whenever possible.

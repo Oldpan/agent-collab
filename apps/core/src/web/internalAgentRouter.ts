@@ -35,6 +35,7 @@ import { allocateNextTaskNumber } from './taskNumbers.js';
 import { isValidTransition } from './taskStatusTransitions.js';
 import { upsertAgentTaskLink } from './agentTaskLinks.js';
 import { findThreadRootMessageId } from './threadRoots.js';
+import { appendTaskEvent, buildTaskEventThreadTarget } from './taskEvents.js';
 
 const AGENT_MENTION_COOLDOWN_MS = 60_000;
 const DM_TASK_HANDOFF_EVENT_METHOD = 'platform/handoff';
@@ -141,6 +142,21 @@ type RunActivationMetadata = {
     seq: number;
     target: string;
   };
+};
+
+type TaskHistoryEventRow = {
+  eventId: string;
+  eventType: string;
+  actorType: string;
+  actorId: string | null;
+  actorName: string | null;
+  fromStatus: string | null;
+  toStatus: string | null;
+  claimedByAgentIdAfter: string | null;
+  claimedByNameAfter: string | null;
+  messageId: string | null;
+  threadTarget: string | null;
+  createdAt: number;
 };
 
 function parseBoundedPositiveInt(value: string | undefined, fallback: number, max: number): number {
@@ -703,6 +719,8 @@ export function registerInternalAgentRoutes(
     currentConversationId: string | null;
     currentConversationRunId: string | null;
     currentPrimaryDmTarget: string;
+    taskId: string;
+    agentTaskRef: string | null;
     taskNumber: number;
     title: string;
     description: string;
@@ -747,6 +765,19 @@ export function registerInternalAgentRoutes(
     );
     if (!threadConversationId) {
       const handoffError = `Failed to open task thread conversation for ${threadTarget}`;
+      appendTaskEvent(db, {
+        taskId: params.taskId,
+        agentTaskRef: params.agentTaskRef,
+        channelId: `dm:${params.agentId}`,
+        taskNumber: params.taskNumber,
+        eventType: 'handoff_failed',
+        actorType: 'system',
+        actorName: 'system',
+        claimedByAgentIdAfter: params.agentId,
+        claimedByNameAfter: conversationManager.getAgent(params.agentId)?.name ?? null,
+        messageId: params.messageId,
+        threadTarget,
+      });
       emitDmTaskLifecycleEvent({
         agentId: params.agentId,
         primaryTarget: params.currentPrimaryDmTarget,
@@ -814,6 +845,19 @@ export function registerInternalAgentRoutes(
       if (result.queued) {
         broadcastConversationStatus(threadConversationId, 'queued');
       }
+      appendTaskEvent(db, {
+        taskId: params.taskId,
+        agentTaskRef: params.agentTaskRef,
+        channelId: `dm:${params.agentId}`,
+        taskNumber: params.taskNumber,
+        eventType: 'handoff_started',
+        actorType: 'system',
+        actorName: 'system',
+        claimedByAgentIdAfter: params.agentId,
+        claimedByNameAfter: conversationManager.getAgent(params.agentId)?.name ?? null,
+        messageId: params.messageId,
+        threadTarget,
+      });
       emitDmTaskLifecycleEvent({
         agentId: params.agentId,
         primaryTarget: params.currentPrimaryDmTarget,
@@ -831,6 +875,19 @@ export function registerInternalAgentRoutes(
         (afterDispatchState.queueId !== null && afterDispatchState.queueId !== beforeDispatchState.queueId)
         || (afterDispatchState.runId !== null && afterDispatchState.runId !== beforeDispatchState.runId)
       ) {
+        appendTaskEvent(db, {
+          taskId: params.taskId,
+          agentTaskRef: params.agentTaskRef,
+          channelId: `dm:${params.agentId}`,
+          taskNumber: params.taskNumber,
+          eventType: 'handoff_started',
+          actorType: 'system',
+          actorName: 'system',
+          claimedByAgentIdAfter: params.agentId,
+          claimedByNameAfter: conversationManager.getAgent(params.agentId)?.name ?? null,
+          messageId: params.messageId,
+          threadTarget,
+        });
         emitDmTaskLifecycleEvent({
           agentId: params.agentId,
           primaryTarget: params.currentPrimaryDmTarget,
@@ -844,6 +901,19 @@ export function registerInternalAgentRoutes(
         return { handoffStarted: true, threadConversationId, threadTarget };
       }
       const handoffError = String((error as Error)?.message ?? error);
+      appendTaskEvent(db, {
+        taskId: params.taskId,
+        agentTaskRef: params.agentTaskRef,
+        channelId: `dm:${params.agentId}`,
+        taskNumber: params.taskNumber,
+        eventType: 'handoff_failed',
+        actorType: 'system',
+        actorName: 'system',
+        claimedByAgentIdAfter: params.agentId,
+        claimedByNameAfter: conversationManager.getAgent(params.agentId)?.name ?? null,
+        messageId: params.messageId,
+        threadTarget,
+      });
       emitDmTaskLifecycleEvent({
         agentId: params.agentId,
         primaryTarget: params.currentPrimaryDmTarget,
@@ -1957,6 +2027,113 @@ export function registerInternalAgentRoutes(
     };
   });
 
+  app.get<{
+    Params: { agentId: string };
+    Querystring: { task_ref: string; limit?: string };
+  }>('/api/internal/agent/:agentId/tasks/history', async (req, reply) => {
+    const { agentId } = req.params;
+    if (!conversationManager.getAgent(agentId)) {
+      reply.code(404);
+      return { error: 'Agent not found' };
+    }
+
+    const taskRef = req.query.task_ref?.trim().toLowerCase();
+    if (!taskRef) {
+      reply.code(400);
+      return { error: 'task_ref query parameter is required' };
+    }
+    const limit = parseBoundedPositiveInt(req.query.limit, 50, 200);
+
+    const row = db.prepare(
+      `SELECT t.task_id as taskId,
+              t.agent_task_ref as agentTaskRef,
+              t.channel_id as channelId,
+              t.task_number as taskNumber,
+              t.title,
+              t.description,
+              t.status,
+              t.claimed_by_agent_id as claimedByAgentId,
+              t.claimed_by_name as claimedByName,
+              t.created_by_agent_id as createdByAgentId,
+              t.created_by_name as createdByName,
+              t.created_at as createdAt,
+              t.updated_at as updatedAt,
+              t.message_id as messageId,
+              cm.target as sourceTarget,
+              ch.name as channelName
+       FROM agent_task_links atl
+       JOIN tasks t ON t.task_id = atl.task_id
+       LEFT JOIN channel_messages cm ON cm.message_id = t.message_id
+       LEFT JOIN channels ch ON ch.channel_id = t.channel_id
+       WHERE t.agent_task_ref = ?
+         AND atl.agent_id = ?
+       LIMIT 1`,
+    ).get(taskRef, agentId) as (TaskRow & {
+      messageId?: string | null;
+      sourceTarget?: string | null;
+      channelName?: string | null;
+    }) | undefined;
+
+    if (!row) {
+      reply.code(404);
+      return { error: 'Task not found' };
+    }
+
+    const sourceTarget = buildTaskSourceTarget(row.channelId, row.sourceTarget ?? null, row.channelName ?? null);
+    const events = db.prepare(
+      `SELECT event_id as eventId,
+              event_type as eventType,
+              actor_type as actorType,
+              actor_id as actorId,
+              actor_name as actorName,
+              from_status as fromStatus,
+              to_status as toStatus,
+              claimed_by_agent_id_after as claimedByAgentIdAfter,
+              claimed_by_name_after as claimedByNameAfter,
+              message_id as messageId,
+              thread_target as threadTarget,
+              created_at as createdAt
+       FROM task_events
+       WHERE task_id = ?
+       ORDER BY created_at DESC
+       LIMIT ?`,
+    ).all(row.taskId, limit) as TaskHistoryEventRow[];
+
+    return {
+      task: {
+        taskId: row.taskId,
+        agentTaskRef: row.agentTaskRef,
+        channelId: row.channelId,
+        taskNumber: row.taskNumber,
+        title: row.title,
+        description: row.description ?? null,
+        status: row.status,
+        claimedByName: row.claimedByName,
+        createdByName: row.createdByName,
+        messageId: row.messageId ?? null,
+        sourceTarget,
+        sourceLabel: buildTaskSourceLabel(row.channelId, sourceTarget, row.channelName ?? null),
+        threadTarget: buildTaskThreadTarget(sourceTarget, row.messageId ?? null),
+        createdAt: new Date(row.createdAt).toISOString(),
+        updatedAt: new Date(row.updatedAt).toISOString(),
+      },
+      events: events.map((event) => ({
+        eventId: event.eventId,
+        type: event.eventType,
+        actorType: event.actorType,
+        actorId: event.actorId,
+        actorName: event.actorName,
+        fromStatus: event.fromStatus,
+        toStatus: event.toStatus,
+        claimedByAgentIdAfter: event.claimedByAgentIdAfter,
+        claimedByNameAfter: event.claimedByNameAfter,
+        messageId: event.messageId,
+        threadTarget: event.threadTarget,
+        createdAt: new Date(event.createdAt).toISOString(),
+      })),
+    };
+  });
+
   /**
    * POST /api/internal/agent/:agentId/tasks
    * Create one or more tasks on a channel's task board.
@@ -2056,6 +2233,7 @@ export function registerInternalAgentRoutes(
         const taskNumber = allocateNextTaskNumber(db, channelId);
         const seq = allocateNextChannelMessageSeq(db, channelId);
         const target = canonicalTaskTarget(channelId, channel, db);
+        const threadTarget = buildTaskEventThreadTarget({ sourceTarget: target, messageId });
         insertMessage.run(messageId, channelId, agentId, agent.name, target, taskDef.title, seq, now);
         if (autoClaimInPrimaryDm) {
           insertClaimedTask.run(
@@ -2085,6 +2263,37 @@ export function registerInternalAgentRoutes(
             created: true,
             assigned: true,
           });
+          appendTaskEvent(db, {
+            taskId,
+            agentTaskRef,
+            channelId,
+            taskNumber,
+            eventType: 'created',
+            actorType: 'agent',
+            actorId: agentId,
+            actorName: agent.name,
+            toStatus: 'in_progress',
+            claimedByAgentIdAfter: agentId,
+            claimedByNameAfter: agent.name,
+            messageId,
+            threadTarget,
+            createdAt: now,
+          });
+          appendTaskEvent(db, {
+            taskId,
+            agentTaskRef,
+            channelId,
+            taskNumber,
+            eventType: 'claimed',
+            actorType: 'agent',
+            actorId: agentId,
+            actorName: agent.name,
+            claimedByAgentIdAfter: agentId,
+            claimedByNameAfter: agent.name,
+            messageId,
+            threadTarget,
+            createdAt: now,
+          });
         } else {
           insertTask.run(taskId, agentTaskRef, channelId, taskNumber, taskDef.title, taskDef.description, messageId, agentId, agent.name, now, now);
           upsertAgentTaskLink(db, {
@@ -2092,6 +2301,20 @@ export function registerInternalAgentRoutes(
             taskId,
             linkedAt: now,
             created: true,
+          });
+          appendTaskEvent(db, {
+            taskId,
+            agentTaskRef,
+            channelId,
+            taskNumber,
+            eventType: 'created',
+            actorType: 'agent',
+            actorId: agentId,
+            actorName: agent.name,
+            toStatus: 'todo',
+            messageId,
+            threadTarget,
+            createdAt: now,
           });
         }
         created.push({ taskId, agentTaskRef, taskNumber, title: taskDef.title, description: taskDef.description, messageId });
@@ -2129,6 +2352,8 @@ export function registerInternalAgentRoutes(
           currentConversationId: currentConversation?.id ?? null,
           currentConversationRunId,
           currentPrimaryDmTarget,
+          taskId: task.taskId,
+          agentTaskRef: task.agentTaskRef,
           taskNumber: task.taskNumber,
           title: task.title,
           description: task.description,
@@ -2312,6 +2537,37 @@ export function registerInternalAgentRoutes(
           created: true,
           assigned: true,
         });
+        appendTaskEvent(db, {
+          taskId,
+          agentTaskRef,
+          channelId,
+          taskNumber,
+          eventType: 'created',
+          actorType: 'agent',
+          actorId: agentId,
+          actorName: agent.name,
+          toStatus: 'in_progress',
+          claimedByAgentIdAfter: agentId,
+          claimedByNameAfter: agent.name,
+          messageId: msg.messageId,
+          threadTarget: buildTaskEventThreadTarget({ sourceTarget: msg.target, messageId: msg.messageId }),
+          createdAt: now,
+        });
+        appendTaskEvent(db, {
+          taskId,
+          agentTaskRef,
+          channelId,
+          taskNumber,
+          eventType: 'claimed',
+          actorType: 'agent',
+          actorId: agentId,
+          actorName: agent.name,
+          claimedByAgentIdAfter: agentId,
+          claimedByNameAfter: agent.name,
+          messageId: msg.messageId,
+          threadTarget: buildTaskEventThreadTarget({ sourceTarget: msg.target, messageId: msg.messageId }),
+          createdAt: now,
+        });
       })();
       changed = true;
 
@@ -2340,6 +2596,8 @@ export function registerInternalAgentRoutes(
           currentConversationId: currentConversation?.id ?? null,
           currentConversationRunId,
           currentPrimaryDmTarget,
+          taskId,
+          agentTaskRef,
           taskNumber,
           title: taskTitle,
           description: normalizedDescription,
@@ -2639,6 +2897,23 @@ export function registerInternalAgentRoutes(
           linkedAt: now,
           assigned: true,
         });
+        appendTaskEvent(db, {
+          taskId: row.taskId,
+          agentTaskRef: row.agentTaskRef,
+          channelId,
+          taskNumber,
+          eventType: 'claimed',
+          actorType: 'agent',
+          actorId: agentId,
+          actorName: agent.name,
+          fromStatus: row.status,
+          toStatus: newStatus,
+          claimedByAgentIdAfter: agentId,
+          claimedByNameAfter: agent.name,
+          messageId: row.messageId,
+          threadTarget: buildTaskEventThreadTarget({ sourceTarget: row.messageTarget, messageId: row.messageId }),
+          createdAt: now,
+        });
       })();
       changed = true;
 
@@ -2674,6 +2949,8 @@ export function registerInternalAgentRoutes(
           currentConversationId: currentConversation?.id ?? null,
           currentConversationRunId,
           currentPrimaryDmTarget,
+          taskId: row.taskId,
+          agentTaskRef: row.agentTaskRef,
           taskNumber,
           title: row.title,
           description: row.description?.trim() || row.title,
@@ -2773,6 +3050,37 @@ export function registerInternalAgentRoutes(
           created: true,
           assigned: true,
         });
+        appendTaskEvent(db, {
+          taskId,
+          agentTaskRef,
+          channelId,
+          taskNumber,
+          eventType: 'created',
+          actorType: 'agent',
+          actorId: agentId,
+          actorName: agent.name,
+          toStatus: 'in_progress',
+          claimedByAgentIdAfter: agentId,
+          claimedByNameAfter: agent.name,
+          messageId: messageRow.messageId,
+          threadTarget: buildTaskEventThreadTarget({ sourceTarget: messageRow.target, messageId: messageRow.messageId }),
+          createdAt: now,
+        });
+        appendTaskEvent(db, {
+          taskId,
+          agentTaskRef,
+          channelId,
+          taskNumber,
+          eventType: 'claimed',
+          actorType: 'agent',
+          actorId: agentId,
+          actorName: agent.name,
+          claimedByAgentIdAfter: agentId,
+          claimedByNameAfter: agent.name,
+          messageId: messageRow.messageId,
+          threadTarget: buildTaskEventThreadTarget({ sourceTarget: messageRow.target, messageId: messageRow.messageId }),
+          createdAt: now,
+        });
       })();
       changed = true;
 
@@ -2800,6 +3108,8 @@ export function registerInternalAgentRoutes(
           currentConversationId: currentConversation?.id ?? null,
           currentConversationRunId,
           currentPrimaryDmTarget,
+          taskId,
+          agentTaskRef,
           taskNumber,
           title: taskTitle,
           description: normalizedDescription,
@@ -2922,6 +3232,21 @@ export function registerInternalAgentRoutes(
         agentId: null,
         lastActiveAt: now,
       });
+      appendTaskEvent(db, {
+        taskId: row.taskId,
+        agentTaskRef: null,
+        channelId,
+        taskNumber: task_number,
+        eventType: 'unclaimed',
+        actorType: 'agent',
+        actorId: agentId,
+        actorName: conversationManager.getAgent(agentId)?.name ?? null,
+        fromStatus: row.status,
+        toStatus: newStatus,
+        messageId: row.messageId,
+        threadTarget: buildTaskEventThreadTarget({ sourceTarget: row.messageTarget, messageId: row.messageId }),
+        createdAt: now,
+      });
     })();
 
     broadcastChannelTasksChanged(channelId);
@@ -3042,6 +3367,23 @@ export function registerInternalAgentRoutes(
         taskId: row.taskId,
         agentId: nextOwnerAgentId,
         lastActiveAt: now,
+      });
+      appendTaskEvent(db, {
+        taskId: row.taskId,
+        agentTaskRef: null,
+        channelId,
+        taskNumber: task_number,
+        eventType: 'status_changed',
+        actorType: 'agent',
+        actorId: agentId,
+        actorName: agent.name,
+        fromStatus: row.currentStatus,
+        toStatus: nextStatus,
+        claimedByAgentIdAfter: row.claimedByAgentId,
+        claimedByNameAfter: agent.name,
+        messageId: row.messageId,
+        threadTarget: buildTaskEventThreadTarget({ sourceTarget: row.messageTarget, messageId: row.messageId }),
+        createdAt: now,
       });
     })();
 
