@@ -14,8 +14,10 @@ import {
   type CodexDebugRollout,
   type CodexDebugTurn,
 } from "@/lib/api";
+import { BEIJING_TIME_ZONE } from "@agent-collab/protocol";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
+  timeZone: BEIJING_TIME_ZONE,
   month: "2-digit",
   day: "2-digit",
   hour: "2-digit",

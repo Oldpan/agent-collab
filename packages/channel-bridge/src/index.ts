@@ -17,7 +17,7 @@ import { tmpdir } from 'node:os';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
-import { formatHistoryMessages, formatMessages } from './messageFormat.js';
+import { formatBeijingPromptTimestamp, formatHistoryMessages, formatMessages } from './messageFormat.js';
 
 // ─── CLI args ─────────────────────────────────────────────────────────────────
 
@@ -311,7 +311,7 @@ server.tool(
       if (!d.results?.length) return toText('No search results.');
 
       const formatted = d.results.map((result, index) => [
-        `[${index + 1}] msg=${result.id} seq=${result.seq} time=${result.createdAt}`,
+        `[${index + 1}] msg=${result.id} seq=${result.seq} time=${formatBeijingPromptTimestamp(result.createdAt)}`,
         `target: ${result.target}`,
         `sender: @${result.senderName}${result.senderType === 'agent' ? ' (agent)' : ''}`,
         `content: ${result.content}`,
@@ -442,7 +442,7 @@ server.tool(
         `Source: ${task.sourceLabel ?? task.sourceTarget ?? task.channelId}`,
         `Assignee: ${task.claimedByName ? `@${task.claimedByName}` : 'unclaimed'}`,
         `Creator: ${task.createdByName ? `@${task.createdByName}` : 'unknown'}`,
-        `Updated: ${task.updatedAt ?? 'unknown'}`,
+        `Updated: ${task.updatedAt ? formatBeijingPromptTimestamp(task.updatedAt) : 'unknown'}`,
       ];
       if (task.messageId) details.push(`Root message: ${task.messageId}`);
       if (threadTarget) details.push(`Thread target: ${threadTarget}`);

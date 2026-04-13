@@ -3,7 +3,7 @@ import { clearDraft, readDraft, writeDraft } from "@/lib/drafts";
 import { cn } from "@/lib/utils";
 import { ChevronDownIcon, HashIcon, MenuIcon, SendIcon, UsersIcon, MessageSquareIcon, Settings2Icon, MessageSquareOffIcon, ListTodoIcon, PaperclipIcon, XIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildThreadShortId, extractMentionedNames, type ChannelInfo, type AgentInfo, type ConversationInfo, type ChannelMemberStatus, type ConversationStatus } from "@agent-collab/protocol";
+import { BEIJING_TIME_ZONE, buildThreadShortId, extractMentionedNames, type ChannelInfo, type AgentInfo, type ConversationInfo, type ChannelMemberStatus, type ConversationStatus } from "@agent-collab/protocol";
 import { useConversationsStore } from "@/hooks/useConversations";
 import type { ChannelMessage } from "@/lib/api";
 import { addAgentToChannel, clearChannelChat, listChannelConversations, removeAgentFromChannel, claimMessageAsTask, getChannelMemberStatuses, uploadAttachment } from "@/lib/api";
@@ -52,6 +52,7 @@ type ChannelPanelProps = {
 };
 
 const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  timeZone: BEIJING_TIME_ZONE,
   month: "2-digit",
   day: "2-digit",
   hour: "2-digit",

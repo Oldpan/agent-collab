@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type { AgentInfo, ConversationInfo, TaskInfo } from "@agent-collab/protocol";
+import { BEIJING_TIME_ZONE, type AgentInfo, type ConversationInfo, type TaskInfo } from "@agent-collab/protocol";
 import { Button } from "@/components/ui/button";
 import {
   getConversationTasks,
@@ -57,6 +57,7 @@ function hasTaskBrief(description?: string | null): boolean {
 function formatUpdatedAt(ts: number): string {
   try {
     return new Intl.DateTimeFormat(undefined, {
+      timeZone: BEIJING_TIME_ZONE,
       month: "2-digit",
       day: "2-digit",
       hour: "2-digit",

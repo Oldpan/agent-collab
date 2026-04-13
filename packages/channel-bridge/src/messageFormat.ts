@@ -23,6 +23,33 @@ export type HistoryMessageItem = {
 
 const MESSAGE_SEPARATOR = '\n\n---\n\n';
 
+const BEIJING_TIME_ZONE = 'Asia/Shanghai';
+const BEIJING_DATE_TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: BEIJING_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+});
+
+function formatBeijingDateTime(input: string): string {
+  const date = new Date(input);
+  if (!Number.isFinite(date.getTime())) return input;
+  const parts = BEIJING_DATE_TIME_FORMATTER.formatToParts(date);
+  const values: Record<string, string> = {};
+  for (const part of parts) {
+    if (part.type !== 'literal') values[part.type] = part.value;
+  }
+  return `${values.year}-${values.month}-${values.day} ${values.hour}:${values.minute}:${values.second}`;
+}
+
+export function formatBeijingPromptTimestamp(input: string): string {
+  return `${formatBeijingDateTime(input)} UTC+8`;
+}
+
 function formatMetadataBlock(lines: Array<string | null | undefined>): string {
   return ['[Message metadata]', ...lines.filter(Boolean)].join('\n');
 }
@@ -47,7 +74,7 @@ export function formatMessages(messages: IncomingMessageItem[]): string {
           `msg: ${m.message_id.slice(0, 8)}`,
         ]),
         joinParts([
-          `time: ${m.timestamp}`,
+          `time: ${formatBeijingPromptTimestamp(m.timestamp)}`,
           `sender: @${m.sender_name}`,
           m.sender_type === 'agent' ? 'sender_type: agent' : null,
         ]),
@@ -68,7 +95,7 @@ export function formatHistoryMessages(messages: HistoryMessageItem[]): string {
       const metadata = formatMetadataBlock([
         joinParts([
           `seq: ${m.seq}`,
-          `time: ${m.createdAt}`,
+          `time: ${formatBeijingPromptTimestamp(m.createdAt)}`,
         ]),
         joinParts([
           `sender: @${m.senderName}`,

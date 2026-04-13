@@ -59,7 +59,7 @@ import { CodexDebugPanel } from "./CodexDebugPanel";
 import { DmTaskThreadPanel } from "./DmTaskThreadPanel";
 import { ChatAvatar } from "./ChatAvatar";
 import { AgentSettingsPanel } from "./AgentSettingsPanel";
-import type { AgentInfo, ConversationInfo, UpdateAgentRequest } from "@agent-collab/protocol";
+import { BEIJING_TIME_ZONE, type AgentInfo, type ConversationInfo, type UpdateAgentRequest } from "@agent-collab/protocol";
 import { openConversationThread, type AgentTask } from "@/lib/api";
 import type { LiveMessage, LiveToolCall } from "@/hooks/types";
 import { cn } from "@/lib/utils";
@@ -89,6 +89,7 @@ function getToolState(tc: LiveToolCall): ToolState {
 }
 
 const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  timeZone: BEIJING_TIME_ZONE,
   month: "2-digit",
   day: "2-digit",
   hour: "2-digit",
@@ -96,20 +97,20 @@ const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
 });
 
 const taskLifecycleTimeFormatter = new Intl.DateTimeFormat("en-US", {
-  timeZone: "Asia/Shanghai",
+  timeZone: BEIJING_TIME_ZONE,
   hour: "2-digit",
   minute: "2-digit",
   hour12: true,
 });
 
 const taskLifecycleDateFormatter = new Intl.DateTimeFormat("en-US", {
-  timeZone: "Asia/Shanghai",
+  timeZone: BEIJING_TIME_ZONE,
   month: "2-digit",
   day: "2-digit",
 });
 
 const taskLifecycleYearFormatter = new Intl.DateTimeFormat("en-US", {
-  timeZone: "Asia/Shanghai",
+  timeZone: BEIJING_TIME_ZONE,
   year: "numeric",
 });
 

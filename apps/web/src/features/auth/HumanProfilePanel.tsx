@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { XIcon, UserIcon, ShieldIcon, CalendarIcon, SettingsIcon, CheckIcon } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { BEIJING_TIME_ZONE } from '@agent-collab/protocol';
 import type { User } from '@/lib/auth-api';
 import { UserSettingsPanel } from './UserSettingsPanel';
 import { useAgents } from '@/hooks/useAgents';
@@ -14,7 +15,7 @@ interface HumanProfilePanelProps {
 }
 
 function formatDate(ts: number): string {
-  return new Date(ts).toLocaleString();
+  return new Date(ts).toLocaleString(undefined, { timeZone: BEIJING_TIME_ZONE });
 }
 
 export function HumanProfilePanel({ user, currentUser, onClose }: HumanProfilePanelProps) {

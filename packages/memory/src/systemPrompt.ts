@@ -90,7 +90,7 @@ Messages returned by ${tool('check_messages')} or ${tool('read_history')} includ
 [Message metadata]
 target: #general
 msg: a1b2c3d4
-time: 2026-03-15T01:00:00Z
+time: 2026-03-15 09:00:00 UTC+8
 sender: @richard
 
 [Message body]

@@ -1,3 +1,4 @@
+import { formatBeijingPromptTimestamp } from '@agent-collab/protocol';
 import type { ActivationContextMessage } from './activationContext.js';
 import type { TargetParticipant } from './targetParticipants.js';
 import { sanitizePromptHistoryContent } from './promptHistorySanitizer.js';
@@ -160,7 +161,7 @@ function formatPromptMessage(message: ActivationContextMessage): string {
     `seq: ${message.seq}`,
   ].join('  ');
   const secondLineParts = [
-    `time: ${new Date(message.createdAt).toISOString()}`,
+    `time: ${formatBeijingPromptTimestamp(message.createdAt)}`,
     `sender: @${message.senderName}`,
   ];
   if (message.senderType === 'agent') secondLineParts.push('sender_type: agent');

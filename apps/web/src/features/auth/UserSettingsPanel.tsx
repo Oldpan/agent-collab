@@ -2,6 +2,7 @@ import { useCallback, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { XIcon, ShieldIcon, CalendarIcon, UploadIcon, RotateCcwIcon } from 'lucide-react';
+import { BEIJING_TIME_ZONE } from '@agent-collab/protocol';
 import type { User } from '@/lib/auth-api';
 import { ChatAvatar } from '../chat/ChatAvatar';
 import { clearStoredUserAvatar, createStoredAvatarDataUrl, useStoredUserIdentity, writeStoredUserIdentity } from '@/lib/userIdentity';
@@ -12,7 +13,7 @@ interface UserSettingsPanelProps {
 }
 
 function formatDate(ts: number): string {
-  return new Date(ts).toLocaleString();
+  return new Date(ts).toLocaleString(undefined, { timeZone: BEIJING_TIME_ZONE });
 }
 
 export function UserSettingsPanel({ user, onClose }: UserSettingsPanelProps) {

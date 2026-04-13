@@ -15,6 +15,7 @@ import {
 import { Loader } from "@/components/ai-elements/loader";
 import { ChevronRightIcon, ActivityIcon } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { BEIJING_TIME_ZONE } from "@agent-collab/protocol";
 import type { LiveRun, LiveRunActivityItem, LiveToolCall } from "@/hooks/types";
 
 type AgentActivityPanelProps = {
@@ -22,6 +23,7 @@ type AgentActivityPanelProps = {
 };
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
+  timeZone: BEIJING_TIME_ZONE,
   hour: "2-digit",
   minute: "2-digit",
   second: "2-digit",

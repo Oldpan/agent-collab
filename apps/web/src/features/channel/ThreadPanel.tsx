@@ -4,7 +4,7 @@ import { clearDraft, readDraft, writeDraft } from "@/lib/drafts";
 import { cn } from "@/lib/utils";
 import { XIcon, SendIcon, MessageSquareIcon, ChevronDownIcon } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { buildThreadShortId, type AgentInfo, type ConversationStatus } from "@agent-collab/protocol";
+import { BEIJING_TIME_ZONE, buildThreadShortId, type AgentInfo, type ConversationStatus } from "@agent-collab/protocol";
 import { useConversationsStore } from "@/hooks/useConversations";
 import {
   type ChannelMessage,
@@ -27,6 +27,7 @@ import { MessageSourceBadge } from "@/components/MessageSourceBadge";
 import { TaskEditorDialog, type TaskEditorValues } from "./TaskEditorDialog";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
+  timeZone: BEIJING_TIME_ZONE,
   month: "2-digit",
   day: "2-digit",
   hour: "2-digit",

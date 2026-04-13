@@ -5,7 +5,7 @@ import { MessageResponse, UserMessageContent } from "@/components/ai-elements/me
 import { Button } from "@/components/ui/button";
 import { useConversationStream } from "@/hooks/useConversationStream";
 import type { LiveMessage } from "@/hooks/types";
-import type { AgentInfo, ConversationInfo } from "@agent-collab/protocol";
+import { BEIJING_TIME_ZONE, type AgentInfo, type ConversationInfo } from "@agent-collab/protocol";
 import { ChevronDownIcon, ChevronRightIcon, XIcon } from "lucide-react";
 import { PromptComposer } from "./PromptComposer";
 import { ChatAvatar } from "./ChatAvatar";
@@ -14,6 +14,7 @@ import { CodexDebugPanel } from "./CodexDebugPanel";
 import { useStoredUserIdentity } from "@/lib/userIdentity";
 
 const messageTimeFormatter = new Intl.DateTimeFormat(undefined, {
+  timeZone: BEIJING_TIME_ZONE,
   month: "2-digit",
   day: "2-digit",
   hour: "2-digit",

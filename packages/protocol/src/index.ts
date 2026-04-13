@@ -64,6 +64,124 @@ export function listRuntimeDrivers(): RuntimeDriverDefinition[] {
   return Object.values(RUNTIME_DRIVERS);
 }
 
+export const BEIJING_TIME_ZONE = 'Asia/Shanghai';
+
+type TimeInput = number | string | Date;
+
+const BEIJING_DATE_TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: BEIJING_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+});
+
+const BEIJING_DATE_TIME_NO_SECONDS_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: BEIJING_TIME_ZONE,
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
+const BEIJING_MONTH_DAY_TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: BEIJING_TIME_ZONE,
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
+const BEIJING_MONTH_DAY_TIME_WITH_SECONDS_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: BEIJING_TIME_ZONE,
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+});
+
+const BEIJING_TIME_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: BEIJING_TIME_ZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+  hour12: false,
+});
+
+const BEIJING_TIME_WITH_SECONDS_FORMATTER = new Intl.DateTimeFormat('en-US', {
+  timeZone: BEIJING_TIME_ZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false,
+});
+
+function normalizeTimeInput(input: TimeInput): Date | null {
+  const date = input instanceof Date ? input : new Date(input);
+  return Number.isFinite(date.getTime()) ? date : null;
+}
+
+function getDateTimeParts(
+  formatter: Intl.DateTimeFormat,
+  input: TimeInput,
+): Record<string, string> | null {
+  const date = normalizeTimeInput(input);
+  if (!date) return null;
+  const parts = formatter.formatToParts(date);
+  const values: Record<string, string> = {};
+  for (const part of parts) {
+    if (part.type !== 'literal') values[part.type] = part.value;
+  }
+  return values;
+}
+
+export function formatBeijingDateTime(input: TimeInput, options?: { withSeconds?: boolean }): string {
+  const parts = getDateTimeParts(
+    options?.withSeconds === false
+      ? BEIJING_DATE_TIME_NO_SECONDS_FORMATTER
+      : BEIJING_DATE_TIME_FORMATTER,
+    input,
+  );
+  if (!parts) return '';
+  const dateText = `${parts.year}-${parts.month}-${parts.day}`;
+  const timeText = options?.withSeconds === false
+    ? `${parts.hour}:${parts.minute}`
+    : `${parts.hour}:${parts.minute}:${parts.second}`;
+  return `${dateText} ${timeText}`;
+}
+
+export function formatBeijingPromptTimestamp(input: TimeInput): string {
+  const formatted = formatBeijingDateTime(input);
+  return formatted ? `${formatted} UTC+8` : '';
+}
+
+export function formatBeijingMonthDayTime(input: TimeInput, options?: { withSeconds?: boolean }): string {
+  const parts = getDateTimeParts(
+    options?.withSeconds
+      ? BEIJING_MONTH_DAY_TIME_WITH_SECONDS_FORMATTER
+      : BEIJING_MONTH_DAY_TIME_FORMATTER,
+    input,
+  );
+  if (!parts) return '';
+  const timeText = options?.withSeconds
+    ? `${parts.hour}:${parts.minute}:${parts.second}`
+    : `${parts.hour}:${parts.minute}`;
+  return `${parts.month}/${parts.day} ${timeText}`;
+}
+
+export function formatBeijingTime(input: TimeInput, options?: { withSeconds?: boolean }): string {
+  const date = normalizeTimeInput(input);
+  if (!date) return '';
+  return (options?.withSeconds ? BEIJING_TIME_WITH_SECONDS_FORMATTER : BEIJING_TIME_FORMATTER).format(date);
+}
+
 export const THREAD_SHORT_ID_LENGTH = 16;
 
 export function stripIgnoredMentionContexts(content: string): string {

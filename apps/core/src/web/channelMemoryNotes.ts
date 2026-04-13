@@ -1,4 +1,4 @@
-import type { AgentInfo } from '@agent-collab/protocol';
+import { formatBeijingPromptTimestamp, type AgentInfo } from '@agent-collab/protocol';
 import type { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 
 type WorkspaceNoteWriter = Pick<AgentWorkspaceBroker, 'readFile' | 'writeFile'>;
@@ -22,7 +22,7 @@ export function channelMemoryNotePath(channelName: string): string {
 export function buildChannelResetMarker(channelName: string, clearedAt: number): string {
   return [
     '## History Reset',
-    `- Live chat history for #${channelName} was cleared at ${new Date(clearedAt).toISOString()}.`,
+    `- Live chat history for #${channelName} was cleared at ${formatBeijingPromptTimestamp(clearedAt)}.`,
     '- Treat older notes in this file as durable memory, not as the currently visible channel transcript.',
     '- If asked what is currently visible in the channel, rely on current chat history or read_history rather than older notes from before this reset.',
   ].join('\n');
@@ -51,7 +51,7 @@ function buildLegacyChannelsHeader(): string {
 function buildLegacyResetEntry(channelName: string, clearedAt: number): string {
   return [
     `## #${channelName}`,
-    `- Live chat history was cleared at ${new Date(clearedAt).toISOString()}.`,
+    `- Live chat history was cleared at ${formatBeijingPromptTimestamp(clearedAt)}.`,
     '- Earlier bullets in this file are durable summaries, not necessarily the currently visible transcript.',
   ].join('\n');
 }
