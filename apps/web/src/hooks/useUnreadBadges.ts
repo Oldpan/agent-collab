@@ -1,36 +1,16 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AgentInfo, ChannelInfo } from "@agent-collab/protocol";
 import * as api from "@/lib/api";
+import {
+  AGENT_DM_READ_STORAGE_KEY,
+  CHANNEL_READ_STORAGE_KEY,
+  readStoredSeqMap,
+  writeStoredSeqMap,
+  type SeqMap,
+} from "@/lib/readState";
 
-const AGENT_READ_STORAGE_KEY = "agent-collab:agent-dm-read-seqs:v2";
-const CHANNEL_READ_STORAGE_KEY = "agent-collab:channel-read-seqs:v2";
 const POLL_INTERVAL_MS = 3000;
-
-type SeqMap = Record<string, number>;
 type UnreadEntry = { unreadCount: number; latestSeq: number };
-
-function readStoredSeqMap(key: string): SeqMap {
-  if (typeof window === "undefined") return {};
-  try {
-    const raw = window.localStorage.getItem(key);
-    if (!raw) return {};
-    const parsed = JSON.parse(raw) as Record<string, unknown>;
-    return Object.fromEntries(
-      Object.entries(parsed).flatMap(([entryKey, value]) =>
-        typeof value === "number" && Number.isFinite(value)
-          ? [[entryKey, value]]
-          : [],
-      ),
-    );
-  } catch {
-    return {};
-  }
-}
-
-function writeStoredSeqMap(key: string, value: SeqMap): void {
-  if (typeof window === "undefined") return;
-  window.localStorage.setItem(key, JSON.stringify(value));
-}
 
 function filterSeqMap(ids: string[], source: SeqMap): SeqMap {
   return Object.fromEntries(ids.map((id) => [id, Math.max(0, Number(source[id] ?? 0))]));
@@ -69,7 +49,7 @@ export function useUnreadBadges(params: {
     () => typeof document === "undefined" || document.visibilityState === "visible",
   );
 
-  const [agentReadSeqs, setAgentReadSeqs] = useState<SeqMap>(() => readStoredSeqMap(AGENT_READ_STORAGE_KEY));
+  const [agentReadSeqs, setAgentReadSeqs] = useState<SeqMap>(() => readStoredSeqMap(AGENT_DM_READ_STORAGE_KEY));
   const [channelReadSeqs, setChannelReadSeqs] = useState<SeqMap>(() => readStoredSeqMap(CHANNEL_READ_STORAGE_KEY));
   const [agentEntries, setAgentEntries] = useState<Record<string, UnreadEntry>>({});
   const [channelEntries, setChannelEntries] = useState<Record<string, UnreadEntry>>({});
@@ -90,7 +70,7 @@ export function useUnreadBadges(params: {
       const current = Math.max(0, Number(prev[agentId] ?? 0));
       if (resolvedLatestSeq <= current) return prev;
       const next = { ...prev, [agentId]: resolvedLatestSeq };
-      writeStoredSeqMap(AGENT_READ_STORAGE_KEY, next);
+      writeStoredSeqMap(AGENT_DM_READ_STORAGE_KEY, next);
       return next;
     });
   }, []);

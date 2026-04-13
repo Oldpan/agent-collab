@@ -5,7 +5,7 @@ import { CreateDialog } from "@/components/ui/create-dialog";
 import { Tooltip, TooltipTrigger, TooltipContent } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import {
-  PlusIcon, TrashIcon, ChevronRightIcon, ChevronDownIcon, Rows3Icon, HashIcon, LogOutIcon, LinkIcon, SettingsIcon, UserIcon, ShieldIcon, SearchIcon, FolderSearchIcon,
+  PlusIcon, TrashIcon, ChevronRightIcon, ChevronDownIcon, Rows3Icon, HashIcon, LogOutIcon, LinkIcon, SettingsIcon, UserIcon, ShieldIcon, SearchIcon, FolderSearchIcon, InboxIcon,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import type {
@@ -24,6 +24,8 @@ import { UserSettingsPanel } from "../auth/UserSettingsPanel";
 import { HumanProfilePanel } from "../auth/HumanProfilePanel";
 
 const EXPANDED_MACHINES_STORAGE_KEY = "agent-collab:expanded-machines";
+const SIDEBAR_CARD_WIDTH_CLASS = "w-[calc(90%_-_0.50rem)] min-w-[4.75rem] max-w-[14.5rem]";
+const SIDEBAR_CARD_BASE_CLASS = "min-w-0 overflow-hidden rounded-md border-2 border-zinc-900 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]";
 
 function readStoredSet(storageKey: string): Set<string> {
   if (typeof window === "undefined") return new Set();
@@ -50,10 +52,12 @@ type SidebarProps = {
   channels: ChannelInfo[];
   agentUnreadCounts: Record<string, number>;
   channelUnreadCounts: Record<string, number>;
+  recentUnreadCount: number;
   selectedId: string | null;
   selectedChannelId: string | null;
-  selectedView: "chat" | "sessions" | "search" | "resources";
+  selectedView: "chat" | "recent" | "sessions" | "search" | "resources";
   currentUser?: User | null;
+  onOpenRecent: () => void;
   onOpenSessions: () => void;
   onOpenResources: () => void;
   onCreateMachine: (req: CreateMachineRequest) => Promise<MachineInfo>;
@@ -141,8 +145,10 @@ function AgentStatusDot({
 
 export function Sidebar({
   machines, agents, conversations, channels, agentUnreadCounts, channelUnreadCounts, selectedId, selectedChannelId,
+  recentUnreadCount,
   selectedView,
   currentUser,
+  onOpenRecent,
   onCreateMachine, onDeleteMachine,
   onOpenSearch,
   onOpenResources,
@@ -262,7 +268,7 @@ export function Sidebar({
   }, [agents, conversations, selectedId]);
 
   return (
-    <div className="flex h-full flex-col bg-[#ffe135]">
+    <div className="flex h-full min-w-0 flex-col overflow-hidden bg-[#ffe135]">
       {/* Header */}
       <div className="flex items-center justify-between border-b-2 border-black bg-[#ffd700] px-3 py-3 shadow-[0_2px_0_0_rgba(0,0,0,0.15)]">
         <h1 className="text-xs font-semibold uppercase tracking-wider text-zinc-800">
@@ -376,8 +382,43 @@ export function Sidebar({
         />
       </CreateDialog>
 
-      <ScrollArea className="flex-1 h-full overflow-hidden bg-[#ffe135]">
-        <div className="flex flex-col items-start gap-2 p-3">
+      <ScrollArea className="h-full flex-1 overflow-hidden bg-[#ffe135]">
+        <div className="flex flex-col items-start gap-2 p-2">
+          <div className="w-full">
+            <div className="px-0.5 py-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-800">
+                Recent
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={onOpenRecent}
+              className={cn(
+                SIDEBAR_CARD_WIDTH_CLASS,
+                SIDEBAR_CARD_BASE_CLASS,
+                "flex items-center gap-1.5 px-2.5 py-1.5 text-left transition-colors cursor-pointer",
+                selectedView === "recent" ? "bg-[#c4b5fd] text-zinc-950" : "bg-[#fff8d8] hover:bg-[#fff1a9]",
+              )}
+            >
+              <InboxIcon className="size-3 shrink-0 text-zinc-500" />
+              <div className="min-w-0 flex-1 overflow-hidden">
+                <div className="truncate text-xs font-medium">Unread inbox</div>
+                <div className="truncate text-[10px] text-zinc-500">
+                  DM, channel, thread, and task updates
+                </div>
+              </div>
+              <UnreadBadge count={recentUnreadCount} />
+            </button>
+          </div>
+
+          <div className="w-full">
+            <div className="px-0.5 py-2">
+              <span className="text-xs font-bold uppercase tracking-wider text-zinc-800">
+                Machines
+              </span>
+            </div>
+          </div>
+
           {machines.length === 0 && channels.length === 0 && (
             <p className="rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-3 py-4 text-center text-[10px] text-zinc-500 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]">
               No machines yet — click + to add one
@@ -395,11 +436,15 @@ export function Sidebar({
               : null;
 
             return (
-              <div key={machine.nodeId}>
+              <div key={machine.nodeId} className="w-full min-w-0 overflow-hidden">
                 {/* Machine row */}
                 <button
                   type="button"
-                  className="group flex w-full max-w-full items-center gap-1.5 rounded-md border-2 border-zinc-900 bg-[#fff8d8] px-2.5 py-1.5 text-left shadow-[3px_3px_0_0_rgba(0,0,0,0.1)] transition-colors hover:bg-[#fff1a9] cursor-pointer"
+                  className={cn(
+                    SIDEBAR_CARD_WIDTH_CLASS,
+                    SIDEBAR_CARD_BASE_CLASS,
+                    "group flex items-center gap-1.5 bg-[#fff8d8] px-2.5 py-1.5 text-left transition-colors hover:bg-[#fff1a9] cursor-pointer",
+                  )}
                   onClick={() => toggleMachine(machine.nodeId)}
                 >
                   {isExpanded
@@ -407,7 +452,7 @@ export function Sidebar({
                     : <ChevronRightIcon className="size-3 shrink-0 text-zinc-500" />
                   }
                   <span className="flex items-center"><StatusDot status={machine.status} /></span>
-                  <span className="min-w-0 flex-1 break-words text-xs font-medium leading-tight">{machine.name}</span>
+                  <span className="min-w-0 flex-1 truncate text-xs font-medium leading-tight">{machine.name}</span>
                   {isAdmin && (
                     <div className="flex shrink-0 items-center gap-1 opacity-0 group-hover:opacity-100">
                       <button
@@ -432,7 +477,7 @@ export function Sidebar({
 
                 {/* Machine content */}
                 {isExpanded && (
-                  <div className="ml-3 mt-1 flex flex-col items-start gap-1">
+                  <div className="ml-3 mt-1 flex min-w-0 overflow-hidden flex-col items-start gap-1">
                     {machineAgents.length === 0 && (
                       <p className="rounded-md border-2 border-dashed border-zinc-900/40 bg-[#fff8d8] px-2 py-2 text-[10px] text-zinc-500">
                         {isAdmin ? "No agents — click + to create one" : "No agents available"}
@@ -445,9 +490,9 @@ export function Sidebar({
                       );
 
                       return (
-                        <AgentRow
-                          key={agent.agentId}
-                          agent={agent}
+                          <AgentRow
+                            key={agent.agentId}
+                            agent={agent}
                           isSelected={selectedAgentId === agent.agentId}
                           updatedAt={primaryConversation?.updatedAt ?? agent.updatedAt}
                           unreadCount={agentUnreadCounts[agent.agentId] ?? 0}
@@ -681,13 +726,15 @@ function ChannelRow({ channel, isSelected, unreadCount, onSelect }: ChannelRowPr
     <button
       type="button"
       className={cn(
-        "flex w-full items-center gap-1.5 rounded-md border-2 border-zinc-900 px-2.5 py-1.5 text-left shadow-[3px_3px_0_0_rgba(0,0,0,0.1)] transition-colors cursor-pointer",
+        SIDEBAR_CARD_WIDTH_CLASS,
+        SIDEBAR_CARD_BASE_CLASS,
+        "flex items-center gap-1.5 px-2.5 py-1.5 text-left transition-colors cursor-pointer",
         isSelected ? "bg-[#c4b5fd] text-zinc-950" : "bg-[#fff8d8] hover:bg-[#fff1a9]",
       )}
       onClick={onSelect}
     >
       <HashIcon className="size-3 shrink-0 text-zinc-500" />
-      <span className="flex-1 break-words text-xs font-medium">{channel.name}</span>
+      <span className="min-w-0 flex-1 truncate text-xs font-medium">{channel.name}</span>
       <UnreadBadge count={unreadCount} />
     </button>
   );
@@ -698,7 +745,9 @@ function ChannelRow({ channel, isSelected, unreadCount, onSelect }: ChannelRowPr
 function AgentRow({ agent, isSelected, updatedAt, unreadCount, machineStatus, conversationStatus, isAdmin, onOpen, onDelete }: AgentRowProps) {
   return (
     <div className={cn(
-      "group flex w-full items-center gap-1.5 rounded-md border-2 border-zinc-900 px-2 py-1.5 shadow-[3px_3px_0_0_rgba(0,0,0,0.1)]",
+      SIDEBAR_CARD_WIDTH_CLASS,
+      SIDEBAR_CARD_BASE_CLASS,
+      "group flex items-center gap-1.5 px-2 py-1.5",
       isSelected ? "bg-[#c4b5fd] text-zinc-950" : "bg-[#fff8d8] hover:bg-[#fff1a9]",
     )}>
       <button

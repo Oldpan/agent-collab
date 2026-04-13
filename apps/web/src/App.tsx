@@ -5,6 +5,7 @@ import { useMachines } from "@/hooks/useMachines";
 import { useChannels } from "@/hooks/useChannels";
 import { useResourceSpaces } from "@/hooks/useResourceSpaces";
 import { useUnreadBadges } from "@/hooks/useUnreadBadges";
+import { useRecentMessages } from "@/hooks/useRecentMessages";
 import { useAuth } from "@/hooks/useAuth";
 import { Sidebar } from "@/features/sidebar/Sidebar";
 import { ChatPanel } from "@/features/chat/ChatPanel";
@@ -12,6 +13,7 @@ import { ChannelPanel } from "@/features/channel/ChannelPanel";
 import { SessionManagerPanel } from "@/features/sessions/SessionManagerPanel";
 import { SearchPanel } from "@/features/search/SearchPanel";
 import { ResourcesPanel } from "@/features/resources/ResourcesPanel";
+import { RecentMessagesPanel } from "@/features/recent/RecentMessagesPanel";
 import { LoginPanel } from "@/features/auth/LoginPanel";
 import { SetupPanel } from "@/features/auth/SetupPanel";
 import {
@@ -22,6 +24,7 @@ import {
 import type {
   CreateAgentRequest,
   UpdateAgentRequest,
+  RecentMessageSourceItem,
 } from "@agent-collab/protocol";
 import * as api from "@/lib/api";
 import type { AgentTask, SearchMessageHit } from "@/lib/api";
@@ -62,8 +65,8 @@ function getInviteTokenFromUrl(): string {
 export function App() {
   const isMobile = useIsMobile();
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
-  const [viewMode, setViewMode] = useState<"chat" | "sessions" | "search" | "resources">("chat");
-  const [lastNonResourceView, setLastNonResourceView] = useState<"chat" | "sessions" | "search">("chat");
+  const [viewMode, setViewMode] = useState<"chat" | "recent" | "sessions" | "search" | "resources">("chat");
+  const [lastNonResourceView, setLastNonResourceView] = useState<"chat" | "recent" | "sessions" | "search">("chat");
   const [resourcesSidebarCollapsed, setResourcesSidebarCollapsed] = useState(false);
   const { user, isAuthenticated, isLoading, hasAdmin, checkAuth, checkSetupStatus, doLogout } = useAuth();
 
@@ -230,6 +233,11 @@ export function App() {
     setMobileSidebarOpen(false);
   }, []);
 
+  const handleOpenRecent = useCallback(() => {
+    setViewMode("recent");
+    setMobileSidebarOpen(false);
+  }, []);
+
   const handleOpenResources = useCallback(() => {
     setViewMode("resources");
     setMobileSidebarOpen(false);
@@ -309,6 +317,16 @@ export function App() {
     activeChannelId,
   });
 
+  const {
+    items: recentItems,
+    totalUnreadCount: recentUnreadCount,
+    refresh: refreshRecentMessages,
+    markSourceReadUpTo,
+  } = useRecentMessages({
+    markAgentReadUpTo,
+    markChannelReadUpTo,
+  });
+
   const handleChannelSeenSeq = useCallback(
     (seq: number) => {
       if (!selectedChannel) return;
@@ -336,10 +354,12 @@ export function App() {
     channelUnreadCounts: viewMode === "chat" && selectedChannelId
       ? { ...channelUnreadCounts, [selectedChannelId]: 0 }
       : channelUnreadCounts,
+    recentUnreadCount,
     selectedId,
     selectedChannelId,
     selectedView: viewMode,
     currentUser: user,
+    onOpenRecent: handleOpenRecent,
     onOpenSearch: handleOpenSearch,
     onOpenResources: handleOpenResources,
     onOpenSessions: handleOpenSessions,
@@ -352,6 +372,56 @@ export function App() {
     onCreateChannel: createChannel,
     onLogout: doLogout,
   };
+
+  const handleOpenRecentOriginal = useCallback(async (source: RecentMessageSourceItem) => {
+    if (source.sourceType === "dm" && source.agentId) {
+      await openAgentThread(source.agentId);
+      setSelectedChannelId(null);
+      setSearchFocusTarget(null);
+      setChannelTaskContextAgent(null);
+      setViewMode("chat");
+      setMobileSidebarOpen(false);
+      return;
+    }
+
+    if ((source.sourceType === "thread" || source.sourceType === "task") && source.channelId.startsWith("dm:") && source.agentId && source.threadRootId) {
+      const primaryConversation = await openAgentThread(source.agentId);
+      const threadConversation = await api.openConversationThread(primaryConversation.id, {
+        threadRootId: source.threadRootId,
+      });
+      upsertConversation(threadConversation, { select: true });
+      setSelectedChannelId(null);
+      setSearchFocusTarget(null);
+      setChannelTaskContextAgent(null);
+      setViewMode("chat");
+      setMobileSidebarOpen(false);
+      return;
+    }
+
+    if (source.sourceType === "channel") {
+      setSelectedChannelId(source.channelId);
+      selectConversation(null);
+      setSearchFocusTarget(null);
+      setChannelTaskContextAgent(null);
+      setViewMode("chat");
+      setMobileSidebarOpen(false);
+      return;
+    }
+
+    if ((source.sourceType === "thread" || source.sourceType === "task") && source.threadRootId) {
+      setSelectedChannelId(source.channelId);
+      selectConversation(null);
+      setSearchFocusTarget({
+        channelId: source.channelId,
+        messageId: source.latestMessageId,
+        threadRootId: source.threadRootId,
+        requestId: Date.now(),
+      });
+      setChannelTaskContextAgent(null);
+      setViewMode("chat");
+      setMobileSidebarOpen(false);
+    }
+  }, [openAgentThread, selectConversation, upsertConversation]);
 
   // Auth gates — placed after all hooks
   if (isLoading || hasAdmin === null) {
@@ -373,7 +443,16 @@ export function App() {
     return <LoginPanel />;
   }
 
-  const mainContent = viewMode === "sessions" ? (
+  const mainContent = viewMode === "recent" ? (
+    <RecentMessagesPanel
+      items={recentItems}
+      totalUnreadCount={recentUnreadCount}
+      onRefresh={refreshRecentMessages}
+      onMarkSourceRead={markSourceReadUpTo}
+      onOpenOriginal={handleOpenRecentOriginal}
+      onOpenSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
+    />
+  ) : viewMode === "sessions" ? (
     <SessionManagerPanel
       conversations={visibleConversations}
       agents={agents}
@@ -483,15 +562,15 @@ export function App() {
       {showDesktopSidebar ? (
         <ResizablePanelGroup direction="horizontal" className="h-full">
           <ResizablePanel
-            defaultSize={25}
+            defaultSize={18}
             minSize={14}
             maxSize={20}
-            className="bg-[#ffe135] text-zinc-950 shadow-[4px_0_0_0_rgba(0,0,0,0.3)]"
+            className="min-w-0 overflow-hidden bg-[#ffe135] text-zinc-950 shadow-[4px_0_0_0_rgba(0,0,0,0.3)]"
           >
             <Sidebar {...sidebarProps} />
           </ResizablePanel>
           <ResizableHandle />
-          <ResizablePanel defaultSize={75} minSize={50}>
+          <ResizablePanel defaultSize={75} minSize={50} className="min-w-0 overflow-hidden">
             {mainContent}
           </ResizablePanel>
         </ResizablePanelGroup>

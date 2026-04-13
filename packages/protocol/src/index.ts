@@ -236,6 +236,78 @@ export function buildThreadShortId(messageId: string): string {
   return normalized.slice(0, THREAD_SHORT_ID_LENGTH);
 }
 
+export type RecentMessageSourceType = 'dm' | 'channel' | 'thread' | 'task';
+
+export type RecentMessageSourceItem = {
+  sourceKey: string;
+  sourceType: RecentMessageSourceType;
+  channelId: string;
+  channelName?: string | null;
+  agentId?: string | null;
+  agentName?: string | null;
+  threadRootId?: string | null;
+  taskRef?: string | null;
+  taskNumber?: number | null;
+  taskTitle?: string | null;
+  latestMessageId: string;
+  latestSeq: number;
+  latestCreatedAt: string;
+  latestSenderName: string;
+  latestSenderType: 'user' | 'agent' | 'system';
+  latestSnippet: string;
+  unreadCount: number;
+};
+
+export function buildRecentMessageSourceKey(params: {
+  sourceType: RecentMessageSourceType;
+  channelId?: string | null;
+  agentId?: string | null;
+  threadRootId?: string | null;
+}): string {
+  if (params.sourceType === 'dm') {
+    return `dm:${encodeURIComponent((params.agentId ?? '').trim())}`;
+  }
+  if (params.sourceType === 'channel') {
+    return `channel:${encodeURIComponent((params.channelId ?? '').trim())}`;
+  }
+  return `${params.sourceType}:${encodeURIComponent((params.channelId ?? '').trim())}:${encodeURIComponent((params.threadRootId ?? '').trim())}`;
+}
+
+export function parseRecentMessageSourceKey(sourceKey: string): (
+  | { sourceType: 'dm'; agentId: string }
+  | { sourceType: 'channel'; channelId: string }
+  | { sourceType: 'thread' | 'task'; channelId: string; threadRootId: string }
+) | null {
+  const separatorIndex = sourceKey.indexOf(':');
+  if (separatorIndex <= 0) return null;
+  const sourceType = sourceKey.slice(0, separatorIndex);
+  const rest = sourceKey.slice(separatorIndex + 1);
+
+  try {
+    if (sourceType === 'dm') {
+      const agentId = decodeURIComponent(rest).trim();
+      return agentId ? { sourceType: 'dm', agentId } : null;
+    }
+    if (sourceType === 'channel') {
+      const channelId = decodeURIComponent(rest).trim();
+      return channelId ? { sourceType: 'channel', channelId } : null;
+    }
+    if (sourceType === 'thread' || sourceType === 'task') {
+      const secondSeparatorIndex = rest.indexOf(':');
+      if (secondSeparatorIndex <= 0) return null;
+      const channelId = decodeURIComponent(rest.slice(0, secondSeparatorIndex)).trim();
+      const threadRootId = decodeURIComponent(rest.slice(secondSeparatorIndex + 1)).trim();
+      return channelId && threadRootId
+        ? { sourceType, channelId, threadRootId }
+        : null;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 export type ConversationStatusEvent = {
   type: 'conversation.status';
   status: ConversationStatus;

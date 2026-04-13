@@ -13,6 +13,8 @@ import type { Db } from '@agent-collab/runtime-acp';
 import { log, finishRun } from '@agent-collab/runtime-acp';
 import {
   buildThreadShortId,
+  buildRecentMessageSourceKey,
+  parseRecentMessageSourceKey,
   type ConversationStatus,
   type CreateConversationRequest,
   type CreateChannelRequest,
@@ -23,6 +25,7 @@ import {
   type CreateResourceSpaceRequest,
   type UpdateResourceSpaceRequest,
   type AnalyzeResourceRequest,
+  type RecentMessageSourceItem,
 } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
 import { handleWebSocket, broadcast } from './wsHandler.js';
@@ -57,6 +60,7 @@ import {
 import {
   clearTaskThreadState,
   getChannelTaskByNumber,
+  getBoundTaskForThread,
   getThreadCollaborationSummary,
   listChannelTasks,
   syncTaskThreadOwner,
@@ -2352,6 +2356,336 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       ),
     };
   });
+
+  type RecentSourceMessageRow = {
+    id: string;
+    senderName: string;
+    senderType: 'user' | 'agent' | 'system';
+    content: string;
+    createdAt: number;
+    seq: number;
+    messageSource: string | null;
+    attachmentIds: string | null;
+  };
+
+  const parseRecentAttachmentIds = (raw: string | null): string[] | undefined => {
+    if (!raw) return undefined;
+    try {
+      const parsed = JSON.parse(raw) as unknown;
+      if (!Array.isArray(parsed)) return undefined;
+      const attachmentIds = parsed.filter((value): value is string => typeof value === 'string');
+      return attachmentIds.length > 0 ? attachmentIds : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
+  const truncateRecentSnippet = (content: string): string => {
+    const normalized = content.replace(/\s+/g, ' ').trim();
+    if (!normalized) return '—';
+    return normalized.length > 140 ? `${normalized.slice(0, 137)}...` : normalized;
+  };
+
+  const buildRecentSourcePredicate = (
+    channelId: string,
+    threadRootId?: string | null,
+  ): { sql: string; params: Array<string | number> } => (
+    threadRootId
+      ? { sql: 'channel_id = ? AND thread_root_id = ?', params: [channelId, threadRootId] }
+      : { sql: 'channel_id = ? AND thread_root_id IS NULL', params: [channelId] }
+  );
+
+  const queryLatestRecentMessage = (
+    channelId: string,
+    threadRootId?: string | null,
+    options?: { unreadAfterSeq?: number },
+  ): RecentSourceMessageRow | undefined => {
+    const predicate = buildRecentSourcePredicate(channelId, threadRootId);
+    const unreadClause = options?.unreadAfterSeq != null ? ' AND sender_type != \'user\' AND seq > ?' : '';
+    const params = options?.unreadAfterSeq != null
+      ? [...predicate.params, options.unreadAfterSeq]
+      : predicate.params;
+    return db.prepare(
+      `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
+              content, created_at as createdAt, seq, message_source as messageSource,
+              attachment_ids as attachmentIds
+       FROM channel_messages
+       WHERE ${predicate.sql}${unreadClause}
+       ORDER BY seq DESC
+       LIMIT 1`,
+    ).get(...params) as RecentSourceMessageRow | undefined;
+  };
+
+  const queryRecentUnreadCount = (
+    channelId: string,
+    threadRootId: string | null,
+    lastReadSeq: number,
+  ): number => {
+    const predicate = buildRecentSourcePredicate(channelId, threadRootId);
+    const row = db.prepare(
+      `SELECT COUNT(*) as count
+       FROM channel_messages
+       WHERE ${predicate.sql}
+         AND sender_type != 'user'
+         AND seq > ?`,
+    ).get(...predicate.params, lastReadSeq) as { count: number } | undefined;
+    return Number(row?.count ?? 0);
+  };
+
+  const queryRecentSourceMessages = (
+    channelId: string,
+    threadRootId: string | null,
+    limit: number,
+    before: number | null,
+  ): { messages: Array<Record<string, unknown>>; hasOlder: boolean } => {
+    const predicate = buildRecentSourcePredicate(channelId, threadRootId);
+    const beforeClause = before != null ? ' AND seq < ?' : '';
+    const rows = db.prepare(
+      `SELECT message_id as id, sender_name as senderName, sender_type as senderType,
+              content, created_at as createdAt, seq, message_source as messageSource,
+              attachment_ids as attachmentIds
+       FROM channel_messages
+       WHERE ${predicate.sql}${beforeClause}
+       ORDER BY seq DESC
+       LIMIT ?`,
+    ).all(
+      ...predicate.params,
+      ...(before != null ? [before] : []),
+      limit,
+    ) as RecentSourceMessageRow[];
+    const orderedRows = rows.reverse();
+    const oldestSeq = orderedRows[0]?.seq ?? before ?? 0;
+    const hasOlder = orderedRows.length > 0 && !!db.prepare(
+      `SELECT 1
+       FROM channel_messages
+       WHERE ${predicate.sql}
+         AND seq < ?
+       LIMIT 1`,
+    ).get(...predicate.params, oldestSeq);
+
+    return {
+      messages: orderedRows.map((row) => {
+        const attachmentIds = parseRecentAttachmentIds(row.attachmentIds);
+        return {
+          id: row.id,
+          senderName: row.senderName,
+          senderType: row.senderType,
+          content: row.content,
+          createdAt: new Date(row.createdAt).toISOString(),
+          seq: row.seq,
+          ...(threadRootId ? { threadRootId } : {}),
+          ...(row.messageSource ? { messageSource: row.messageSource } : {}),
+          ...(attachmentIds ? { attachmentIds } : {}),
+        };
+      }),
+      hasOlder,
+    };
+  };
+
+  const buildRecentSourceItem = (
+    channelId: string,
+    threadRootId: string | null,
+    latestRow: RecentSourceMessageRow,
+    unreadCount: number,
+  ): RecentMessageSourceItem => {
+    const dmAgentId = channelId.startsWith('dm:') ? channelId.slice(3) : null;
+    const dmAgent = dmAgentId ? conversationManager.getAgent(dmAgentId) : null;
+    const channel = dmAgentId ? null : conversationManager.getChannel(channelId);
+    const boundTask = threadRootId ? getBoundTaskForThread(db, { channelId, threadRootId }) : undefined;
+    const taskRef = boundTask
+      ? (
+          db.prepare(
+            `SELECT agent_task_ref as taskRef
+             FROM tasks
+             WHERE task_id = ?
+             LIMIT 1`,
+          ).get(boundTask.taskId) as { taskRef: string | null } | undefined
+        )?.taskRef ?? null
+      : null;
+    const sourceType = threadRootId
+      ? (boundTask ? 'task' : 'thread')
+      : (dmAgentId ? 'dm' : 'channel');
+    const sourceKey = sourceType === 'dm'
+      ? buildRecentMessageSourceKey({ sourceType: 'dm', agentId: dmAgentId })
+      : sourceType === 'channel'
+        ? buildRecentMessageSourceKey({ sourceType: 'channel', channelId })
+        : buildRecentMessageSourceKey({ sourceType, channelId, threadRootId });
+
+    return {
+      sourceKey,
+      sourceType,
+      channelId,
+      channelName: channel?.name ?? null,
+      agentId: dmAgentId,
+      agentName: dmAgent?.name ?? null,
+      threadRootId,
+      taskRef,
+      taskNumber: boundTask?.taskNumber ?? null,
+      taskTitle: boundTask?.title ?? null,
+      latestMessageId: latestRow.id,
+      latestSeq: latestRow.seq,
+      latestCreatedAt: new Date(latestRow.createdAt).toISOString(),
+      latestSenderName: latestRow.senderName,
+      latestSenderType: latestRow.senderType,
+      latestSnippet: truncateRecentSnippet(latestRow.content),
+      unreadCount,
+    };
+  };
+
+  const listRecentMessageSources = (
+    user: User,
+    readSeqs: Record<string, number>,
+    limit: number,
+  ): { items: RecentMessageSourceItem[]; totalUnreadCount: number; totalSourceCount: number } => {
+    const items: RecentMessageSourceItem[] = [];
+    let totalUnreadCount = 0;
+
+    const allowedAgents = conversationManager.listAgents().filter((agent) => user.isAdmin || hasAgentAccess(user, agent.agentId));
+    for (const agent of allowedAgents) {
+      const channelId = `dm:${agent.agentId}`;
+      const sourceKey = buildRecentMessageSourceKey({ sourceType: 'dm', agentId: agent.agentId });
+      const lastReadSeq = Math.max(0, Number(readSeqs[sourceKey] ?? 0));
+      const unreadCount = queryRecentUnreadCount(channelId, null, lastReadSeq);
+      if (unreadCount <= 0) continue;
+      const latestRow = queryLatestRecentMessage(channelId, null, { unreadAfterSeq: lastReadSeq });
+      if (!latestRow) continue;
+      totalUnreadCount += unreadCount;
+      items.push(buildRecentSourceItem(channelId, null, latestRow, unreadCount));
+    }
+
+    const allowedChannelIds = conversationManager.listChannels()
+      .filter((channel) => user.isAdmin || hasChannelAccess(user, channel.channelId))
+      .map((channel) => channel.channelId);
+    for (const channelId of allowedChannelIds) {
+      const sourceKey = buildRecentMessageSourceKey({ sourceType: 'channel', channelId });
+      const lastReadSeq = Math.max(0, Number(readSeqs[sourceKey] ?? 0));
+      const unreadCount = queryRecentUnreadCount(channelId, null, lastReadSeq);
+      if (unreadCount <= 0) continue;
+      const latestRow = queryLatestRecentMessage(channelId, null, { unreadAfterSeq: lastReadSeq });
+      if (!latestRow) continue;
+      totalUnreadCount += unreadCount;
+      items.push(buildRecentSourceItem(channelId, null, latestRow, unreadCount));
+    }
+
+    const threadRows = db.prepare(
+      `SELECT channel_id as channelId, thread_root_id as threadRootId
+       FROM channel_messages
+       WHERE thread_root_id IS NOT NULL
+       GROUP BY channel_id, thread_root_id`,
+    ).all() as Array<{ channelId: string; threadRootId: string }>;
+
+    for (const row of threadRows) {
+      const dmAgentId = row.channelId.startsWith('dm:') ? row.channelId.slice(3) : null;
+      if (dmAgentId) {
+        if (!user.isAdmin && !hasAgentAccess(user, dmAgentId)) continue;
+      } else if (!user.isAdmin && !hasChannelAccess(user, row.channelId)) {
+        continue;
+      }
+
+      const boundTask = getBoundTaskForThread(db, {
+        channelId: row.channelId,
+        threadRootId: row.threadRootId,
+      });
+      const sourceType = boundTask ? 'task' : 'thread';
+      const sourceKey = buildRecentMessageSourceKey({
+        sourceType,
+        channelId: row.channelId,
+        threadRootId: row.threadRootId,
+      });
+      const lastReadSeq = Math.max(0, Number(readSeqs[sourceKey] ?? 0));
+      const unreadCount = queryRecentUnreadCount(row.channelId, row.threadRootId, lastReadSeq);
+      if (unreadCount <= 0) continue;
+      const latestRow = queryLatestRecentMessage(row.channelId, row.threadRootId, { unreadAfterSeq: lastReadSeq });
+      if (!latestRow) continue;
+      totalUnreadCount += unreadCount;
+      items.push(buildRecentSourceItem(row.channelId, row.threadRootId, latestRow, unreadCount));
+    }
+
+    items.sort((a, b) => b.latestSeq - a.latestSeq || b.latestCreatedAt.localeCompare(a.latestCreatedAt));
+    return {
+      items: items.slice(0, limit),
+      totalUnreadCount,
+      totalSourceCount: items.length,
+    };
+  };
+
+  app.post<{ Body: { readSeqs?: Record<string, number>; limit?: number } }>(
+    '/api/recent-messages/summary',
+    async (req, reply) => {
+      const user = requireUser(req, reply);
+      if (!user) return { error: 'Unauthorized' };
+      const readSeqs = req.body?.readSeqs && typeof req.body.readSeqs === 'object'
+        ? req.body.readSeqs
+        : {};
+      const limit = Math.min(Math.max(Number(req.body?.limit ?? 100), 1), 200);
+      return listRecentMessageSources(user, readSeqs, limit);
+    },
+  );
+
+  app.post<{ Body: { sourceKey?: string; limit?: number; before?: number } }>(
+    '/api/recent-messages/detail',
+    async (req, reply) => {
+      const user = requireUser(req, reply);
+      if (!user) return { error: 'Unauthorized' };
+
+      const sourceKey = typeof req.body?.sourceKey === 'string' ? req.body.sourceKey.trim() : '';
+      const parsed = parseRecentMessageSourceKey(sourceKey);
+      if (!parsed) {
+        reply.code(400);
+        return { error: 'Invalid sourceKey' };
+      }
+
+      let channelId: string;
+      let threadRootId: string | null = null;
+
+      if (parsed.sourceType === 'dm') {
+        if (!user.isAdmin && !hasAgentAccess(user, parsed.agentId)) {
+          reply.code(403);
+          return { error: 'Access denied' };
+        }
+        channelId = `dm:${parsed.agentId}`;
+      } else if (parsed.sourceType === 'channel') {
+        if (!user.isAdmin && !hasChannelAccess(user, parsed.channelId)) {
+          reply.code(403);
+          return { error: 'Access denied' };
+        }
+        channelId = parsed.channelId;
+      } else {
+        channelId = parsed.channelId;
+        threadRootId = parsed.threadRootId;
+        const dmAgentId = channelId.startsWith('dm:') ? channelId.slice(3) : null;
+        if (dmAgentId) {
+          if (!user.isAdmin && !hasAgentAccess(user, dmAgentId)) {
+            reply.code(403);
+            return { error: 'Access denied' };
+          }
+        } else if (!user.isAdmin && !hasChannelAccess(user, channelId)) {
+          reply.code(403);
+          return { error: 'Access denied' };
+        }
+      }
+
+      const latestRow = queryLatestRecentMessage(channelId, threadRootId);
+      if (!latestRow) {
+        reply.code(404);
+        return { error: 'Source not found' };
+      }
+      const source = buildRecentSourceItem(channelId, threadRootId, latestRow, 0);
+      if (parsed.sourceType === 'task' && source.sourceType !== 'task') {
+        reply.code(404);
+        return { error: 'Task thread not found' };
+      }
+
+      const limit = Math.min(Math.max(Number(req.body?.limit ?? 100), 1), 200);
+      const before = req.body?.before != null ? Number(req.body.before) : null;
+      const detail = queryRecentSourceMessages(channelId, threadRootId, limit, before);
+      return {
+        source,
+        messages: detail.messages,
+        hasOlder: detail.hasOlder,
+      };
+    },
+  );
 
   // ─── Resource Space routes ───
 

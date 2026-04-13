@@ -20,6 +20,7 @@ import type {
   ResourceTreeResult,
   ResourceFileResult,
   AnalyzeResourceResult,
+  RecentMessageSourceItem,
 } from "@agent-collab/protocol";
 
 const API_BASE = "/api";
@@ -445,6 +446,48 @@ export async function getUnreadSummary(req: UnreadSummaryRequest): Promise<Unrea
     body: JSON.stringify(req),
   });
   if (!res.ok) throw new Error(`Failed to get unread summary: ${res.statusText}`);
+  return res.json();
+}
+
+export type RecentMessagesSummaryResult = {
+  items: RecentMessageSourceItem[];
+  totalUnreadCount: number;
+  totalSourceCount: number;
+};
+
+export type RecentMessagesDetailResult = {
+  source: RecentMessageSourceItem;
+  messages: ChannelMessage[];
+  hasOlder?: boolean;
+};
+
+export async function getRecentMessagesSummary(params?: {
+  readSeqs?: Record<string, number>;
+  limit?: number;
+}): Promise<RecentMessagesSummaryResult> {
+  const res = await fetch(`${API_BASE}/recent-messages/summary`, {
+    method: "POST",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(params ?? {}),
+  });
+  if (!res.ok) throw new Error(`Failed to get recent messages summary: ${res.statusText}`);
+  return res.json();
+}
+
+export async function getRecentMessagesDetail(params: {
+  sourceKey: string;
+  limit?: number;
+  before?: number;
+}): Promise<RecentMessagesDetailResult> {
+  const res = await fetch(`${API_BASE}/recent-messages/detail`, {
+    method: "POST",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const err = (await res.json().catch(() => ({}))) as { error?: string };
+    throw new Error(err.error ?? `Failed to get recent message detail: ${res.statusText}`);
+  }
   return res.json();
 }
 
