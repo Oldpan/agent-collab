@@ -25,8 +25,10 @@ import {
   type CreateResourceSpaceRequest,
   type UpdateResourceSpaceRequest,
   type AnalyzeResourceRequest,
+  type CreateWorkbenchGitActionRequest,
   type CreateWorkbenchTerminalRequest,
   type RecentMessageSourceItem,
+  type WorkbenchGitDiffMode,
   type WorkbenchTerminalWsClientEvent,
 } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
@@ -47,6 +49,8 @@ import {
 } from '../services/workbenchRootService.js';
 import { WorkbenchTerminalBroker } from '../services/workbenchTerminalBroker.js';
 import { WorkbenchInspectBroker } from '../services/workbenchInspectBroker.js';
+import { WorkbenchGitBroker } from '../services/workbenchGitBroker.js';
+import { WorkbenchGitService, WorkbenchGitServiceError } from '../services/workbenchGitService.js';
 import { WorkbenchRegistryService } from '../services/workbenchRegistryService.js';
 import { CodexTranscriptBroker } from '../services/codexTranscriptBroker.js';
 import { CodexTranscriptService } from '../services/codexTranscriptService.js';
@@ -133,6 +137,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
   const claudeTranscriptBroker = new ClaudeTranscriptBroker({ nodeRegistry });
   const terminalBroker = new WorkbenchTerminalBroker({ nodeRegistry });
   const inspectBroker = new WorkbenchInspectBroker({ nodeRegistry });
+  const gitBroker = new WorkbenchGitBroker({ nodeRegistry });
   const workspaceService = new AgentWorkspaceService({
     getAgentById: (agentId) => conversationManager.getAgent(agentId),
     broker: workspaceBroker,
@@ -144,6 +149,9 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
   });
   const workbenchNodePathService = new WorkbenchNodePathService({
     broker: workspaceBroker,
+  });
+  const workbenchGitService = new WorkbenchGitService({
+    broker: gitBroker,
   });
   const skillsService = new AgentSkillsService({
     getAgentById: (agentId) => conversationManager.getAgent(agentId),
@@ -1676,6 +1684,63 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       return { error: String((error as Error)?.message ?? error) };
     }
   });
+
+  app.get<{ Params: { id: string } }>('/api/workbench/roots/:id/git/status', async (req, reply) => {
+    const access = requireWorkbenchRootAccess(req, reply, req.params.id);
+    if (!access) return { error: 'Access denied' };
+    try {
+      return await workbenchGitService.getStatus(access.root);
+    } catch (error) {
+      if (error instanceof WorkbenchGitServiceError) {
+        reply.code(error.statusCode);
+        return { error: error.message };
+      }
+      reply.code(500);
+      return { error: String((error as Error)?.message ?? error) };
+    }
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { mode?: WorkbenchGitDiffMode } }>(
+    '/api/workbench/roots/:id/git/diff',
+    async (req, reply) => {
+      const access = requireWorkbenchRootAccess(req, reply, req.params.id);
+      if (!access) return { error: 'Access denied' };
+      const mode = req.query.mode === 'base' ? 'base' : 'uncommitted';
+      try {
+        return await workbenchGitService.getDiff(access.root, mode);
+      } catch (error) {
+        if (error instanceof WorkbenchGitServiceError) {
+          reply.code(error.statusCode);
+          return { error: error.message };
+        }
+        reply.code(500);
+        return { error: String((error as Error)?.message ?? error) };
+      }
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: CreateWorkbenchGitActionRequest }>(
+    '/api/workbench/roots/:id/git/action',
+    async (req, reply) => {
+      const access = requireWorkbenchRootAccess(req, reply, req.params.id);
+      if (!access) return { error: 'Access denied' };
+      const body = (req.body ?? {}) as CreateWorkbenchGitActionRequest;
+      if (!body.action) {
+        reply.code(400);
+        return { error: 'action is required' };
+      }
+      try {
+        return await workbenchGitService.runAction(access.root, body.action, body.commitMessage);
+      } catch (error) {
+        if (error instanceof WorkbenchGitServiceError) {
+          reply.code(error.statusCode);
+          return { error: error.message };
+        }
+        reply.code(500);
+        return { error: String((error as Error)?.message ?? error) };
+      }
+    },
+  );
 
   app.get<{ Params: { id: string } }>('/api/workbench/roots/:id/terminals', async (req, reply) => {
     const access = requireWorkbenchRootAccess(req, reply, req.params.id);
@@ -4928,6 +4993,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         broadcastToChannel,
         terminalBroker,
         inspectBroker,
+        gitBroker,
       );
     },
   );

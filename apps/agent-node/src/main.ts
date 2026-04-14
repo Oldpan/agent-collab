@@ -28,6 +28,7 @@ import {
 import { listSkills, readSkillFile } from './skillFs.js';
 import { TerminalManager, TerminalManagerError } from './terminalManager.js';
 import { inspectWorkspace, WorkspaceInspectError } from './workspaceInspect.js';
+import { getWorkspaceGitDiff, getWorkspaceGitStatus, runWorkspaceGitAction, WorkspaceGitError } from './workspaceGit.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -141,6 +142,42 @@ async function main(): Promise<void> {
           });
         } catch (error) {
           connection.send(workspaceInspectErrorResponse(msg.requestId, error));
+        }
+        break;
+
+      case 'workspace.git_status.request':
+        try {
+          connection.send({
+            type: 'workspace.git_status.response',
+            requestId: msg.requestId,
+            status: getWorkspaceGitStatus(msg.workspaceRoot),
+          });
+        } catch (error) {
+          connection.send(workspaceGitStatusErrorResponse(msg.requestId, error));
+        }
+        break;
+
+      case 'workspace.git_diff.request':
+        try {
+          connection.send({
+            type: 'workspace.git_diff.response',
+            requestId: msg.requestId,
+            diff: getWorkspaceGitDiff(msg.workspaceRoot, msg.mode),
+          });
+        } catch (error) {
+          connection.send(workspaceGitDiffErrorResponse(msg.requestId, error));
+        }
+        break;
+
+      case 'workspace.git_action.request':
+        try {
+          connection.send({
+            type: 'workspace.git_action.response',
+            requestId: msg.requestId,
+            result: runWorkspaceGitAction(msg.workspaceRoot, msg.action, msg.commitMessage),
+          });
+        } catch (error) {
+          connection.send(workspaceGitActionErrorResponse(msg.requestId, error));
         }
         break;
 
@@ -504,6 +541,69 @@ function terminalErrorResponse<
     error: String((error as Error)?.message ?? error),
     errorCode: 'io_error' as const,
   } as Extract<NodeToCore, { type: T }>;
+}
+
+function workspaceGitStatusErrorResponse(
+  requestId: string,
+  error: unknown,
+) {
+  if (error instanceof WorkspaceGitError) {
+    return {
+      type: 'workspace.git_status.response' as const,
+      requestId,
+      error: error.message,
+      errorCode: error.code,
+    };
+  }
+
+  return {
+    type: 'workspace.git_status.response' as const,
+    requestId,
+    error: String((error as Error)?.message ?? error),
+    errorCode: 'io_error' as const,
+  };
+}
+
+function workspaceGitDiffErrorResponse(
+  requestId: string,
+  error: unknown,
+) {
+  if (error instanceof WorkspaceGitError) {
+    return {
+      type: 'workspace.git_diff.response' as const,
+      requestId,
+      error: error.message,
+      errorCode: error.code,
+    };
+  }
+
+  return {
+    type: 'workspace.git_diff.response' as const,
+    requestId,
+    error: String((error as Error)?.message ?? error),
+    errorCode: 'io_error' as const,
+  };
+}
+
+function workspaceGitActionErrorResponse(
+  requestId: string,
+  error: unknown,
+) {
+  if (error instanceof WorkspaceGitError) {
+    return {
+      type: 'workspace.git_action.response' as const,
+      requestId,
+      error: error.message,
+      errorCode: error.code,
+    };
+  }
+
+  return {
+    type: 'workspace.git_action.response' as const,
+    requestId,
+    error: String((error as Error)?.message ?? error),
+    errorCode: 'io_error' as const,
+  };
 }
 
 function workspaceResetErrorResponse(

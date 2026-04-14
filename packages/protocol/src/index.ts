@@ -665,6 +665,130 @@ export type WorkspaceInspectResponseMsg = {
   errorCode?: WorkspaceErrorCode;
 };
 
+export type WorkbenchGitDiffMode = 'uncommitted' | 'base';
+
+export type WorkbenchGitAheadBehind = {
+  ahead: number;
+  behind: number;
+};
+
+export type WorkbenchGitStatusResult = {
+  workspaceRoot: string;
+  isGit: boolean;
+  repoRoot: string | null;
+  workspaceKind: WorkbenchWorkspaceKind;
+  branchName: string | null;
+  remoteUrl: string | null;
+  baseRef: string | null;
+  hasRemote: boolean;
+  isDirty: boolean;
+  changedFiles: number;
+  stagedFiles: number;
+  unstagedFiles: number;
+  untrackedFiles: number;
+  aheadOfOrigin: number;
+  behindOfOrigin: number;
+  aheadBehind: WorkbenchGitAheadBehind | null;
+};
+
+export type WorkbenchGitDiffLineType = 'context' | 'add' | 'remove' | 'header';
+
+export type WorkbenchGitDiffLine = {
+  type: WorkbenchGitDiffLineType;
+  content: string;
+  oldLineNumber: number | null;
+  newLineNumber: number | null;
+};
+
+export type WorkbenchGitDiffHunk = {
+  header: string;
+  lines: WorkbenchGitDiffLine[];
+};
+
+export type WorkbenchGitDiffFileStatus =
+  | 'modified'
+  | 'added'
+  | 'deleted'
+  | 'renamed'
+  | 'copied'
+  | 'untracked'
+  | 'type_changed'
+  | 'conflicted'
+  | 'unknown';
+
+export type WorkbenchGitDiffFile = {
+  path: string;
+  oldPath: string | null;
+  status: WorkbenchGitDiffFileStatus;
+  isNew: boolean;
+  isDeleted: boolean;
+  isUntracked: boolean;
+  hunks: WorkbenchGitDiffHunk[];
+};
+
+export type WorkbenchGitDiffResult = {
+  workspaceRoot: string;
+  isGit: boolean;
+  mode: WorkbenchGitDiffMode;
+  baseRef: string | null;
+  files: WorkbenchGitDiffFile[];
+};
+
+export type WorkbenchGitAction = 'fetch' | 'pull_ff_only' | 'commit_all' | 'push';
+
+export type WorkbenchGitActionResult = {
+  workspaceRoot: string;
+  action: WorkbenchGitAction;
+  stdout: string;
+  stderr: string;
+  branchName: string | null;
+};
+
+export type WorkspaceGitStatusRequestMsg = {
+  type: 'workspace.git_status.request';
+  requestId: string;
+  workspaceRoot: string;
+};
+
+export type WorkspaceGitStatusResponseMsg = {
+  type: 'workspace.git_status.response';
+  requestId: string;
+  status?: WorkbenchGitStatusResult;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
+export type WorkspaceGitDiffRequestMsg = {
+  type: 'workspace.git_diff.request';
+  requestId: string;
+  workspaceRoot: string;
+  mode: WorkbenchGitDiffMode;
+};
+
+export type WorkspaceGitDiffResponseMsg = {
+  type: 'workspace.git_diff.response';
+  requestId: string;
+  diff?: WorkbenchGitDiffResult;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
+export type WorkspaceGitActionRequestMsg = {
+  type: 'workspace.git_action.request';
+  requestId: string;
+  workspaceRoot: string;
+  action: WorkbenchGitAction;
+  commitMessage?: string;
+};
+
+export type WorkspaceGitActionResponseMsg = {
+  type: 'workspace.git_action.response';
+  requestId: string;
+  result?: WorkbenchGitActionResult;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
 export type WorkbenchTerminalInfo = {
   terminalId: string;
   workspaceRoot: string;
@@ -922,6 +1046,9 @@ export type NodeToCore =
   | RunEndMsg
   | NodePermissionRequestMsg
   | WorkspaceInspectResponseMsg
+  | WorkspaceGitStatusResponseMsg
+  | WorkspaceGitDiffResponseMsg
+  | WorkspaceGitActionResponseMsg
   | WorkspaceListResponseMsg
   | WorkspaceReadResponseMsg
   | WorkspaceWriteResponseMsg
@@ -1013,6 +1140,12 @@ export type WorkspaceWriteRequestMsg = {
 
 export type WorkspaceInspectCoreRequestMsg = WorkspaceInspectRequestMsg;
 
+export type WorkspaceGitStatusCoreRequestMsg = WorkspaceGitStatusRequestMsg;
+
+export type WorkspaceGitDiffCoreRequestMsg = WorkspaceGitDiffRequestMsg;
+
+export type WorkspaceGitActionCoreRequestMsg = WorkspaceGitActionRequestMsg;
+
 export type TerminalListCoreRequestMsg = TerminalListRequestMsg;
 
 export type TerminalCreateCoreRequestMsg = TerminalCreateRequestMsg;
@@ -1040,6 +1173,9 @@ export type CoreToNode =
   | RunCancelMsg
   | NodePermissionResponseMsg
   | WorkspaceInspectCoreRequestMsg
+  | WorkspaceGitStatusCoreRequestMsg
+  | WorkspaceGitDiffCoreRequestMsg
+  | WorkspaceGitActionCoreRequestMsg
   | WorkspaceListRequestMsg
   | WorkspaceReadRequestMsg
   | WorkspaceWriteRequestMsg
@@ -1185,6 +1321,17 @@ export type WorkbenchProjectInfo = {
 export type WorkbenchProjectsResult = {
   projects: WorkbenchProjectInfo[];
 };
+
+export type WorkbenchGitStatusApiResult = WorkbenchGitStatusResult;
+
+export type WorkbenchGitDiffApiResult = WorkbenchGitDiffResult;
+
+export type CreateWorkbenchGitActionRequest = {
+  action: WorkbenchGitAction;
+  commitMessage?: string;
+};
+
+export type WorkbenchGitActionApiResult = WorkbenchGitActionResult;
 
 export type WorkbenchTreeResult = AgentWorkspaceListResult;
 

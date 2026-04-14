@@ -1,5 +1,26 @@
 # Changelog
 
+## 2026-04-14 (workspace yellow theme refresh)
+
+- `Workspace` 页整体视觉现在重新对齐主 chat 的黄系风格：外壳、项目卡片、pane chrome、Explorer、diff 预览、terminal 容器和内嵌 agent pane 都收回到暖黄/琥珀色调，不再继续使用之前那套偏冷的白灰工作台配色。
+- `Workspace` 的选中态现在改成更贴近 chat 的分层方案：左侧项目/资源卡片与文件树走紫色选中，pane tabs、Explorer 的 `Changes / Files` 切换和 git compare mode 走 chat 同款亮黄选中，同时把卡片里的主次文字颜色拉开，避免信息多时整块发糊。
+- 与 workspace 相关的对话和工具入口也同步收口到同一色盘：git action 菜单、commit/resource-space 表单、recent terminal dirs、Markdown/image preview、terminal loading overlay 等都不再跳回黑白灰按钮样式。
+- 这轮又进一步把 `Workspace` 的亮度和 chat 拉齐：剩余的淡黄/橘色按钮统一换成 chat 同款亮黄主按钮，diff/changes/agent pane 的大面积背景也回到更接近 chat 的黄白层次；选中态则改成更接近 chat 的分层方案，列表卡片走紫色选中、tab 和切换控件走亮黄选中，并把卡片里的主次文字颜色拉开，提升可读性。
+- `Workspace` 左右两侧 sidebar 的底板也一起从偏白调整成了 chat 风格的黄色背景，保留内部卡片和内容面板的浅色层次，让两侧栏不再像独立的白色抽屉。
+- `Workspace` 的 pane 区不再依赖显式 `Split Right / Split Down` 按钮；现在把文件拖到 pane 的左右或上下边缘会自动创建对应方向的新 pane，拖到中间则直接在当前 pane 打开，同时 pane 栏位标题也收窄成了更轻的 `Panes`。
+- `Workspace` 的本地 pane 布局恢复逻辑也做了容错加固：即使浏览器里残留了损坏或过时的布局状态，页面现在也会自动回退到默认 pane 布局，而不是直接白屏。
+- `Workspace` 的 pane 布局持久化现在升级到了新的 `v3` key，并且在读取时会按 root 单独兜底；pane/split id 也会在归一化时自动去重，同时 split-size 写回会跳过无变化更新，避免旧 split 布局把页面拖进白屏的无限更新循环。
+- `Workspace` 页内部专用滚动区也从 Radix `ScrollArea` 改成了普通 `overflow-auto` 容器，避免 `Workspace` 在当前 pane/tree 组合下触发 `Maximum update depth exceeded` 的白屏循环；chat 其它页面仍保持原有 `ScrollArea` 组件不变。
+- `Workspace` 的 `syncRootLayout` 现在不会再被“无 tab 时每次 render 都新建的空数组”反复触发；空 tab 集合已稳定化，layout store 也会跳过等价布局写回，修掉了打开 `Workspace` 就白屏的无限更新问题。
+
+## 2026-04-14 (workspace git-aware changes view)
+
+- `Workspace` 对 `project_space` 根新增了只读 git 视图：core/node 之间现在有独立的 `workspace.git_status` / `workspace.git_diff` 协议和对应的 REST 接口 `/api/workbench/roots/:id/git/status|diff`，不会复用或污染原有 `workspace.inspect` 轻量路径。
+- 右侧 explorer 现在对 git 项目根显示 `Changes | Files` 双标签，默认优先 `Changes`；`Changes` 视图支持 `Uncommitted / Base` 两种比较模式、手动刷新、变更摘要、按文件展开的 hunk diff，以及从变更列表直接打开文件 tab。
+- 在同一条 git broker 上，`Workspace` 现在还支持对 `project_space` 直接执行 `fetch / pull --ff-only / commit all / push`；提交使用单独的 `Commit All Changes` 对话框，动作结束后会自动刷新当前 root 的状态和 diff。
+- 这次 git-aware 能力只对共享开发目录 `project_space` 生效；agent 私有 memory 根和 shared resources 继续沿用原有文件浏览/terminal/Ask Agent 行为，聊天首页和 chat 面板结构不变。
+- `Workspace` 本地持久化新增每个 root 的 explorer 标签记忆，刷新后会恢复到上次的 `Changes` 或 `Files` 视图。
+
 ## 2026-04-14 (workspace shell closer to paseo)
 
 - `Workspace` 现在在桌面端使用独立工作台壳，不再继续挂在全局黄色 sidebar 下；进入 workspace 时会显示专用的三段式 shell，退出后才回到主 chat 壳。
@@ -339,3 +360,51 @@
 - `Workspace` 页整体色调重新收敛到白色系，去掉了之前偏重的蓝色底板。
 - 保留现有 workbench 布局和像素感边框/阴影，但把 chrome、tabs、explorer、terminal 容器和内嵌 agent pane 都统一成白底 + 中性边框。
 - 主要强调色改成更克制的 slate 对比，避免继续和主 chat 的黄色主题打架。
+
+## 2026-04-14 (workspace split panes and diff tabs)
+
+- `Workspace` 前端状态从 `ResourcesPanel` 的单组件局部状态拆成了三层 workbench store：tabs、layout、explorer；这些状态继续只落浏览器本地持久化，不影响现有 chat 页面。
+- workbench 持久化模型新增了 `diff` tab、每个 root 的双 pane 布局、focused pane、split 方向和 explorer collapsed 状态，并兼容迁移旧版的单 tab 行持久化数据。
+- 中央内容区不再是单一 tab 面板；现在支持 `primary + secondary` 两个 pane、`Split Right / Split Down / Close Split`，每个 pane 都有自己的 tab strip 和 active tab。
+- `Changes` explorer 改成了更接近 `paseo` 的导航器：右侧只列变更文件和 compare mode，点击变更文件会在中心区打开真正的 `diff` tab，而不是把完整 diff 挤在 sidebar 里。
+- `diff` tab 现在复用现有 git diff cache，在中心区按 hunk/line 渲染，并提供一键打开对应源码文件的入口；`New Terminal` 也会按照当前 focused pane 打开到对应 pane 里。
+
+## 2026-04-14 (workspace layout polish)
+
+- `Workspace` 左侧 `Projects` / `Shared Resources` 卡片改成了自适应高度：标题和路径现在允许两行展示，长项目名、长路径和多 workspace 子项不再只能单行截断。
+- 左栏展开项的缩进和子卡片密度做了收敛，选中态的路径和 badge 对比度也修正了，不再出现深底深字的可读性问题。
+- workbench 顶部 root header 和 action bar 拆成两层布局，metadata、linked agents、git actions、split controls、terminal action 不再全部挤在同一行里换行打架。
+- `Changes` explorer 和中心 `diff` tab` 的路径/rename 信息都改成了可换行展示，长文件路径和 rename diff 在窄笔记本宽度下也能读全更多信息。
+
+## 2026-04-14 (workspace pane tree and compact chrome)
+
+- `Workspace` 中央 pane 不再是固定 `primary + secondary`；前端 layout 现在改成了 pane tree，支持连续 split、关闭当前 pane、按 pane 聚焦以及持久化 split 尺寸。
+- 本地持久化模型升级到了新的 pane-tree 版本，并兼容迁移旧版的双栏 layout；刷新页面后会继续恢复 pane tree、focused pane、explorer tab 和终端目录历史。
+- `Changes` / `Files` 现在都支持更明确的 pane 工作流：可以直接把 diff 或文件打开到当前 pane，也可以一键打开到另一 pane；已有 tab 也可以从 tab strip 直接移到其他 pane。
+- `Workspace` 顶部和 pane 工具栏收敛成了图标优先的紧凑 chrome：高频动作保留在主界面，git 动作收进更小的菜单里，功能不减但常驻文字按钮显著减少。
+
+## 2026-04-14 (workspace pane drag-and-drop cleanup)
+
+- `Workspace` pane 内显式的 `Open in other pane` / `Move to other pane` 按钮已移除，pane header 里的 `Pane A / Pane B` 标签也不再显示，中心区 chrome 更干净。
+- 文件树现在支持把文件直接拖到任意 pane 中打开；pane 在拖拽悬停时会高亮，并在空 pane 中显示 drop 提示。
+- `Changes` 和 `diff` 视图保留最必要的打开动作，不再持续暴露额外的 other-pane 快捷入口，pane 间切换主要通过拖拽文件完成。
+- `Workspace` 页头的 root 信息改成两层：第一行收纳项目名、类型、node 和路径，第二行再放 linked agents，减少原来那一整坨 metadata 竖向堆叠的视觉噪音。
+
+## 2026-04-14 (workspace git scope and refresh hardening)
+
+- `projectPath` 指向 repo 子目录时，workspace git status/diff 现在都会显式限制在当前项目目录范围内，不再把 repo 其它目录的改动混进 `Changes` 视图。
+- `commit_all` 现在会在提交前检查 repo 中是否已经存在当前项目目录之外的 staged 改动；如果有，会直接拒绝提交，避免把共享仓库其它位置的变更意外一起提交进去。
+- workbench git broker 不再把 `status / diff / fetch/pull/push/commit` 全绑在同一个 `3s` 超时上；现在按请求类型拆成了更合理的默认超时，减少大仓库和远端 git 操作的误超时。
+- `Workspace` 刷新和 git action 现在会把同一 root 下所有已打开的 diff mode 一起强制刷新，不再只刷新当前模式，避免多 diff tab 同时开着时出现新旧缓存混杂。
+- `Workspace` 的多处 selected 态改成浅灰底，不再继续用黑底白字表示普通选中状态，包括左侧项目卡片、pane tab、Explorer 的 `Changes / Files` 开关和 changes compare mode。
+
+## 2026-04-14 (workspace terminal pane mount hardening)
+
+- `Workspace` 里的 terminal pane 改成了更稳的 xterm 挂载方式：使用单独的无 padding 容器承载 terminal、本地强制 remount 终端 tab，并在首帧、snapshot 和 resize 后统一做延迟 `fit`，减少“terminal 已连上但前端白屏/零尺寸”的情况。
+- terminal pane 现在在真正收到 snapshot/output 前会显示 `Connecting terminal...`，如果 websocket 在收到任何输出前就关闭，也会直接显示错误提示，不再只剩一块纯白 pane。
+
+## 2026-04-14 (workspace pane chrome tightening)
+
+- `Workspace` 中央原本单独的 `Panes` 工具栏已移除，相关动作入口收进了左侧 `Workspaces` 头部，整体 chrome 更紧凑，不再在中心内容区额外占一条横栏。
+- 左侧 `Workspaces` 头部现在会承载当前 root 的 pane/terminal/git 相关动作，选中项目后可以直接从左栏执行，而不需要再把视线移回中间顶部的独立 toolbar。
+- pane 里的文件 tab chip 进一步收紧了 padding、阴影和标题最大宽度，关闭按钮也改成更小的内联控件，打开文件列表会更贴近文字本身，不再显得像一排过胖的卡片。

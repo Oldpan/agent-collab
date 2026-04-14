@@ -10,6 +10,7 @@ import type { CodexTranscriptBroker } from '../services/codexTranscriptBroker.js
 import type { ClaudeTranscriptBroker } from '../services/claudeTranscriptBroker.js';
 import type { WorkbenchTerminalBroker } from '../services/workbenchTerminalBroker.js';
 import type { WorkbenchInspectBroker } from '../services/workbenchInspectBroker.js';
+import type { WorkbenchGitBroker } from '../services/workbenchGitBroker.js';
 import type { ConversationManager } from './conversationManager.js';
 import { resolveConversationReplyTarget } from './directReplyTargets.js';
 import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
@@ -691,6 +692,7 @@ export function handleNodeWebSocket(
   broadcastToChannel?: ChannelBroadcaster,
   terminalBroker?: WorkbenchTerminalBroker,
   inspectBroker?: WorkbenchInspectBroker,
+  gitBroker?: WorkbenchGitBroker,
 ): void {
   let nodeId: string | null = null;
   // Sequence counter per runId for node/event persistence
@@ -941,6 +943,21 @@ export function handleNodeWebSocket(
         break;
       }
 
+      case 'workspace.git_status.response': {
+        gitBroker?.handleGitStatusResponse(msg);
+        break;
+      }
+
+      case 'workspace.git_diff.response': {
+        gitBroker?.handleGitDiffResponse(msg);
+        break;
+      }
+
+      case 'workspace.git_action.response': {
+        gitBroker?.handleGitActionResponse(msg);
+        break;
+      }
+
       case 'workspace.read.response': {
         workspaceBroker?.handleWorkspaceReadResponse(msg);
         break;
@@ -1036,6 +1053,7 @@ export function handleNodeWebSocket(
     if (nodeId) {
       const disconnectMessage = `Agent node disconnected: ${nodeId}`;
       inspectBroker?.rejectPendingForNode(nodeId);
+      gitBroker?.rejectPendingForNode(nodeId);
       workspaceBroker?.rejectPendingForNode(nodeId);
       terminalBroker?.handleNodeDisconnect(nodeId);
       skillsBroker?.rejectPendingForNode(nodeId);

@@ -81,7 +81,7 @@ function AttachmentImage({ attachmentId }: { attachmentId: string }) {
     <img
       src={src}
       alt="attachment"
-      className="mt-2 max-h-72 max-w-full rounded-sm border border-slate-200 object-contain"
+      className="mt-2 max-h-72 max-w-full rounded-sm border border-amber-300/80 object-contain"
     />
   );
 }
@@ -110,14 +110,14 @@ export function WorkspaceAgentPane({
   if (!conversation || !agent) {
     return (
       <div className="flex h-full items-center justify-center px-6">
-        <div className="max-w-md rounded-sm border-2 border-slate-200 bg-white px-5 py-5 text-center shadow-[4px_4px_0_0_rgba(15,23,42,0.08)]">
-          <div className="text-sm font-semibold text-slate-950">Agent conversation unavailable</div>
-          <div className="mt-2 text-sm text-slate-500">
+        <div className="max-w-md rounded-sm border-2 border-amber-300/80 bg-[#fffdf5] px-5 py-5 text-center shadow-[4px_4px_0_0_rgba(180,120,32,0.12)]">
+          <div className="text-sm font-semibold text-stone-900">Agent conversation unavailable</div>
+          <div className="mt-2 text-sm text-stone-600">
             Open the agent chat from the workspace header or switch back to the main chat view.
           </div>
           {onOpenChat ? (
             <Button
-              className="mt-4 rounded-sm border-2 border-slate-950 bg-slate-950 text-white hover:bg-slate-800"
+              className="mt-4 rounded-sm border-2 border-zinc-900 bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]"
               onClick={onOpenChat}
             >
               <ExternalLinkIcon className="mr-1.5 size-4" />
@@ -137,8 +137,8 @@ export function WorkspaceAgentPane({
     || status === "awaiting_approval";
 
   return (
-    <div className="flex h-full flex-col bg-white">
-      <div className="border-b border-slate-200 bg-white px-4 py-2.5">
+    <div className="flex h-full flex-col bg-[#fff9d0]">
+      <div className="border-b border-amber-300/80 bg-[#fffdf5] px-4 py-2.5">
         <div className="flex items-center justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
@@ -151,9 +151,9 @@ export function WorkspaceAgentPane({
                 status === "awaiting_approval" && "bg-amber-500",
                 status === "error" && "bg-rose-500",
               )} />
-              <div className="truncate text-sm font-semibold text-slate-950">{agent.name}</div>
+              <div className="truncate text-sm font-semibold text-stone-900">{agent.name}</div>
             </div>
-            <div className="mt-1 text-[11px] uppercase tracking-[0.18em] text-slate-500">
+            <div className="mt-1 text-[11px] uppercase tracking-[0.18em] text-stone-600">
               {STATUS_LABELS[status] ?? status}
             </div>
           </div>
@@ -161,7 +161,7 @@ export function WorkspaceAgentPane({
             <Button
               size="sm"
               variant="outline"
-              className="h-8 rounded-sm border-2 border-slate-300 bg-white text-slate-900 hover:bg-slate-50"
+              className="h-8 rounded-sm border-2 border-amber-300 bg-[#fffdf5] text-stone-800 hover:bg-[#fff1a9]"
               onClick={onOpenChat}
             >
               <ExternalLinkIcon className="mr-1.5 size-3.5" />
@@ -190,7 +190,7 @@ export function WorkspaceAgentPane({
           )}
 
           {pendingApproval ? (
-            <div className="mx-1 mt-2 mb-3 rounded-sm border-2 border-slate-200 bg-white p-3 shadow-[4px_4px_0_0_rgba(15,23,42,0.08)]">
+            <div className="mx-1 mt-2 mb-3 rounded-sm border-2 border-amber-300/80 bg-[#fffdf5] p-3 shadow-[4px_4px_0_0_rgba(180,120,32,0.12)]">
               <Confirmation
                 toolName={pendingApproval.toolName}
                 toolArgs={pendingApproval.toolArgs}
@@ -201,7 +201,7 @@ export function WorkspaceAgentPane({
           ) : null}
 
           {(status === "queued" || status === "recovering" || status === "awaiting_approval") ? (
-            <div className="mx-1 mt-2 mb-3 flex items-center gap-2 rounded-sm border-2 border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600 shadow-[4px_4px_0_0_rgba(15,23,42,0.06)]">
+            <div className="mx-1 mt-2 mb-3 flex items-center gap-2 rounded-sm border-2 border-amber-300/80 bg-[#fff1a9] px-3 py-2 text-sm text-stone-800 shadow-[4px_4px_0_0_rgba(180,120,32,0.10)]">
               <Loader size={14} />
               <span>
                 {status === "queued"
@@ -253,19 +253,19 @@ function WorkspaceMessageRow({
   if (message.role === "system") {
     return (
       <div className="flex items-center gap-2 py-2 px-1">
-        <div className="h-px flex-1 bg-slate-200" />
-        <span className="shrink-0 rounded-sm border border-slate-300 bg-white px-2 py-0.5 text-[11px] text-slate-500">
+        <div className="h-px flex-1 bg-amber-200" />
+        <span className="shrink-0 rounded-sm border border-amber-300 bg-[#fffdf5] px-2 py-0.5 text-[11px] text-stone-600">
           {message.text}
         </span>
-        <div className="h-px flex-1 bg-slate-200" />
+        <div className="h-px flex-1 bg-amber-200" />
       </div>
     );
   }
 
   const isUser = message.role === "user";
   const bubbleTone = isUser
-    ? "border-slate-300 bg-slate-100 text-slate-950"
-    : "border-emerald-200 bg-emerald-50 text-slate-950";
+    ? "border-[#f3a8c4] bg-[#fde3ec] text-[#93415f]"
+    : "border-emerald-200 bg-emerald-50 text-stone-900";
 
   const body = isUser ? (
     <UserMessageContent className={cn("w-fit min-w-[20px] max-w-full self-end rounded-md border-2 px-3 py-2.5 shadow-[4px_4px_0_0_rgba(15,23,42,0.06)]", bubbleTone)}>
@@ -275,7 +275,7 @@ function WorkspaceMessageRow({
   ) : (
     <MessageContent className={cn("w-fit min-w-[80px] rounded-md border-2 px-3 py-2.5 shadow-[4px_4px_0_0_rgba(15,23,42,0.06)]", bubbleTone)}>
       {message.thinking ? (
-        <div className="mb-2 rounded-sm border border-slate-300 bg-white/70 px-2 py-1 text-xs italic text-slate-600">
+        <div className="mb-2 rounded-sm border border-amber-300 bg-[#fffdf5]/80 px-2 py-1 text-xs italic text-stone-600">
           {message.thinking}
         </div>
       ) : null}
@@ -301,13 +301,13 @@ function WorkspaceMessageRow({
         <div className={cn("flex min-w-0 max-w-[min(760px,84%)] flex-col", isUser ? "items-end" : "items-start")}>
           <div className={cn("mb-1.5 flex w-full items-start gap-3", isUser ? "justify-end" : "justify-between")}>
             <div className={cn("flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1", isUser ? "justify-end" : "justify-start")}>
-              <span className="text-[14px] font-semibold tracking-tight text-slate-950">
+              <span className="text-[14px] font-semibold tracking-tight text-stone-900">
                 {isUser ? userIdentity.name : agent.name}
               </span>
-              <span className="rounded-sm border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
+              <span className="rounded-sm border border-amber-300 bg-[#fffdf5] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-stone-600">
                 {isUser ? "Owner" : "Agent"}
               </span>
-              <span className="text-[11px] font-medium text-slate-500">
+              <span className="text-[11px] font-medium text-stone-600">
                 {messageTimeFormatter.format(message.createdAt)}
               </span>
             </div>
@@ -346,20 +346,20 @@ function PendingWorkspaceMessageRow({
         <div className="flex min-w-0 max-w-[min(760px,84%)] flex-col items-end text-left">
           <div className="mb-1.5 flex w-full items-start justify-end gap-3">
             <div className="flex min-w-0 flex-wrap items-center justify-end gap-x-2 gap-y-1">
-              <span className="text-[14px] font-semibold tracking-tight text-slate-950">{userIdentity.name}</span>
-              <span className="rounded-sm border border-slate-300 bg-white px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-slate-500">
+              <span className="text-[14px] font-semibold tracking-tight text-stone-900">{userIdentity.name}</span>
+              <span className="rounded-sm border border-amber-300 bg-[#fffdf5] px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.18em] text-stone-600">
                 Owner
               </span>
-              <span className="rounded-sm border border-dashed border-slate-400 bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+              <span className="rounded-sm border border-dashed border-[#f3a8c4] bg-[#fde3ec] px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.14em] text-[#93415f]">
                 Pending
               </span>
-              <span className="text-[11px] font-medium text-slate-500">
+              <span className="text-[11px] font-medium text-stone-600">
                 {messageTimeFormatter.format(createdAt)}
               </span>
             </div>
           </div>
 
-          <UserMessageContent className="w-fit min-w-[20px] max-w-full self-end rounded-md border-2 border-dashed border-slate-300 bg-slate-100 px-3 py-2.5 text-slate-950 opacity-85 shadow-[4px_4px_0_0_rgba(15,23,42,0.06)]">
+          <UserMessageContent className="w-fit min-w-[20px] max-w-full self-end rounded-md border-2 border-dashed border-[#f3a8c4] bg-[#fde3ec] px-3 py-2.5 text-[#93415f] opacity-85 shadow-[4px_4px_0_0_rgba(237,116,157,0.16)]">
             {text}
             {attachmentIds?.map((id) => <AttachmentImage key={id} attachmentId={id} />)}
           </UserMessageContent>

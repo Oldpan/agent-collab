@@ -1,6 +1,7 @@
 import type {
   ConversationInfo,
   CreateConversationRequest,
+  CreateWorkbenchGitActionRequest,
   NodeInfoRest,
   AgentInfo,
   CreateAgentRequest,
@@ -22,6 +23,10 @@ import type {
   AnalyzeResourceResult,
   CreateWorkbenchTerminalRequest,
   RecentMessageSourceItem,
+  WorkbenchGitDiffApiResult,
+  WorkbenchGitDiffMode,
+  WorkbenchGitActionApiResult,
+  WorkbenchGitStatusApiResult,
   WorkbenchFileResult,
   WorkbenchProjectsResult,
   WorkbenchRootInfo,
@@ -345,6 +350,49 @@ export async function readWorkbenchFile(
   if (!res.ok) {
     const body = await safeReadErrorBody(res);
     throw new Error(formatHttpError("Failed to read workbench file", res, body));
+  }
+  return res.json();
+}
+
+export async function getWorkbenchGitStatus(rootId: string): Promise<WorkbenchGitStatusApiResult> {
+  const res = await fetch(`${API_BASE}/workbench/roots/${encodeURIComponent(rootId)}/git/status`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to get workbench git status: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function getWorkbenchGitDiff(
+  rootId: string,
+  mode: WorkbenchGitDiffMode,
+): Promise<WorkbenchGitDiffApiResult> {
+  const params = new URLSearchParams();
+  params.set("mode", mode);
+  const res = await fetch(`${API_BASE}/workbench/roots/${encodeURIComponent(rootId)}/git/diff?${params.toString()}`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to get workbench git diff: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function runWorkbenchGitAction(
+  rootId: string,
+  req: CreateWorkbenchGitActionRequest,
+): Promise<WorkbenchGitActionApiResult> {
+  const res = await fetch(`${API_BASE}/workbench/roots/${encodeURIComponent(rootId)}/git/action`, {
+    method: "POST",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to run workbench git action: ${res.statusText}`);
   }
   return res.json();
 }
