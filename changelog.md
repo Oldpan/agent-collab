@@ -1,5 +1,22 @@
 # Changelog
 
+## 2026-04-14 (workspace shell closer to paseo)
+
+- `Workspace` 现在在桌面端使用独立工作台壳，不再继续挂在全局黄色 sidebar 下；进入 workspace 时会显示专用的三段式 shell，退出后才回到主 chat 壳。
+- workspace 中间区域的 tabs 扩成了 `agent / file / terminal` 三类，agent workspace 默认优先打开内嵌 agent pane；这个 pane 复用了现有 conversation stream 和 composer，但不嵌套 chat 页原本的 `Chat / Activity / Workspace / Profile` 二级 tabs。
+- 右侧区域从原来的 `Explorer + Inspector` 双层堆叠收口成更接近 `paseo` 的 explorer sidebar；shared resource 的 `Ask Agent` 和 agent workspace 的 recent terminal dirs 作为 explorer 底部工具区保留。
+- workspace 顶部操作也重新分层：header 负责 root/project 信息和全局动作，tabs row 负责 `Open Agent` / `New Terminal` 这类 pane 级动作，更接近 `paseo` 的 workspace screen 组织方式。
+- workbench 本地持久化现在支持 `agent` tab，刷新页面后会继续恢复每个 workspace 的 file / terminal / agent tabs。
+
+## 2026-04-13 (workbench projects registry)
+
+- `resources` 入口的用户可见命名现在统一改为 `Workspace`；页面内部改成了独立的浅色冷调像素风格，与 chat 的黄色主色区分开来，只影响这条 workbench/workspace 页面，不改聊天首页和 chat 面板的现有视觉风格。
+- workspace 页的壳布局也向 `paseo` 靠拢：改成 `左侧 workspace list / 中间 tabs+content / 右侧 explorer+inspector`，不再把 explorer 放在左侧堆叠区；现有 root/project/terminal/Ask Agent 功能都保留，只是位置和层次更接近 `paseo` 的 workspace shell。
+- `resources` 页继续保留原入口，但内部升级成更接近 workspace workbench 的结构：agent workspaces 现在按 `Project -> Workspace` 分组展示，shared resources 继续作为独立 section 保留。
+- core 新增了 `workbench_projects` / `workbench_workspaces` registry，并通过新的 `/api/workbench/projects` 接口返回按 remote/repo/root 归并后的项目视图；shared resources 不进入这套 registry。
+- agent-node 新增只读 `workspace.inspect` 能力，用于探测 git repo root、branch、remote 和 worktree/checkout 类型；node 离线时，resources 页会回退到 registry 里的持久化项目信息。
+- resources 页本地持久化最近项目、每个 workspace 的 tabs、最近 terminal 启动目录和默认 cwd；terminal tabs 恢复时会先校验后端 session 是否仍然存在，失效 tab 会自动清掉。
+
 ## 2026-04-10 (resource preview cleanup)
 
 - Resources 面板的图片预览不再走独立的 `POST /file/raw` + blob URL 双编码链路：node 端本来就把图片以 `data:image/...;base64,...` 形式返回，前端直接把这串 data URL 喂给 `<img src>` 即可。删除 `apps/core/src/web/server.ts` 里的 `/file/raw` 路由、`?format=raw` 分支和 `decodeBase64DataUrl`；删除 `apps/web/src/lib/api.ts` 里的 `readResourceFileBlob` / `readResourceFileRawViaGet`；`ResourcesPanel` 的 `loadFile` 简化为统一走 `readResourceFile`，去掉 `currentObjectUrlRef` / `isImageResourcePath` / `inferImageMimeType` 等扩展名分流，行为与 `AgentWorkspacePanel` 一致。
@@ -233,6 +250,7 @@
 
 - ChannelPanel 新增 `Tasks` tab，先落地基础版 task board。
 - 前端接入公开 task API：支持按频道拉任务、新建任务、推进状态 `todo -> in_progress -> in_review -> done`。
+
 - `done` 分组默认折叠；assignee 暂时只读展示，不提供用户侧分配交互。
 - 原计划里的 DM Thread UI 暂缓，保持当前“私聊单主 thread、分支只在 channel 内出现”的产品语义。
 
@@ -293,3 +311,31 @@
   - Strengthened prompt rules around `send_message(kind="final")`.
   - Final replies must now contain the actual result, not just a heading, teaser, or half-finished sentence.
   - Added explicit guidance that a final reply should be self-contained and that agents must keep working until the full answer is ready.
+
+## 2026-04-14 (shared project roots in workspace)
+
+- Agent 配置新增了独立的 `projectPath`，用于指向同一台机器上可被多个 agent 共享的开发目录；agent 私有 `workspacePath` 继续只负责运行时、记忆和本地 memory 文件。
+- `Workspace` 页的 `Projects` 现在基于 `(nodeId, projectPath)` 聚合共享项目目录，不再展示 agent 私有 workspace 根，因此不会再把 `MEMORY.md` / `notes/` 那棵 agent 记忆目录当成开发项目展示出来。
+- workbench 的目录树/文件读取对 `project_space` 直接走对应 `agent-node + rootPath`，并显式关闭 scaffold；这保证项目目录浏览仍由远端节点负责，同时不会在项目目录里自动生成 agent memory 文件。
+- `Workspace` 页的 explorer 现在默认折叠隐藏；项目根选中后会直接显示可复用主聊天窗口的 linked-agent 入口，聊天暂时仍回到原有 chat 界面而不是嵌入 workspace 内。
+
+## 2026-04-14 (workspace preview completeness)
+
+- 扩展了 workspace 文件预览的后端 MIME 识别：markdown 现在支持 `.mdx/.markdown/.mdown/.mkd`，图片补了 `.avif/.bmp/.ico`。
+- `Workspace` 页和聊天里的 `Agent Workspace` 页都不再把 `text/plain` 一律当成普通 `<pre>`；现在会按文件扩展名推断语言，用统一的 code block 组件做代码高亮和行号展示。
+- markdown 和图片预览保留原有安全渲染链路，但代码文件的显示完整度明显提升，workspace 与 chat 两个入口的预览行为也对齐了。
+
+## 2026-04-14 (workbench review follow-up fixes)
+
+- `projectPath` 和 resource `rootPath` 的绝对路径校验不再依赖 core 当前机器的路径语义；core 现在同时接受 POSIX 和 Windows 风格路径，并且 workbench root 的规范化/展示名也同步做了跨平台处理。
+- workbench terminal 的 websocket 连接改成先完成 terminal/root 归属校验，再开放 `input` / `resize`，补上了原先存在的授权竞态窗口。
+- `Workspace` 页的 explorer 目录缓存改成按 `rootId + relativePath` 隔离，避免在快速切换项目根时把上一个根的异步目录结果误渲染到当前项目下。
+- workbench 默认打开文件现在包含 `README.mdx/.markdown/.mdown/.mkd`，并且 `.mdx` 预览改回源码 code view，不再被当成普通 markdown 渲染。
+- workbench projects 现在会按 repo key 聚合同 repo 的多个 workspace，而不是把每个 project root 都错误地显示成一个独立 project。
+- workbench registry 不再只是 live inspect 的现算视图：core 现在会把 project/workspace 快照和 workspace-agent 关联持久化到 DB，并在 inspect 失败或节点暂时离线时回退到已持久化的元数据。
+
+## 2026-04-14 (workspace light theme)
+
+- `Workspace` 页整体色调重新收敛到白色系，去掉了之前偏重的蓝色底板。
+- 保留现有 workbench 布局和像素感边框/阴影，但把 chrome、tabs、explorer、terminal 容器和内嵌 agent pane 都统一成白底 + 中性边框。
+- 主要强调色改成更克制的 slate 对比，避免继续和主 chat 的黄色主题打架。

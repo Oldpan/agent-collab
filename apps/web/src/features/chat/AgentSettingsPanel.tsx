@@ -22,6 +22,7 @@ type Props = {
 export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart, onClearChat, onReset }: Props) {
   const [name, setName] = useState(agent.name);
   const [description, setDescription] = useState(agent.description ?? "");
+  const [projectPath, setProjectPath] = useState(agent.projectPath ?? "");
   const [model, setModel] = useState(agent.model ?? "");
   const [reasoningEffort, setReasoningEffort] = useState(agent.reasoningEffort ?? "");
   const [envVars, setEnvVars] = useState<Record<string, string> | undefined>(agent.envVars);
@@ -70,11 +71,12 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
         reasoningEffort: agent.agentType === "codex_acp" ? (reasoningEffort.trim() || undefined) : undefined,
         envVars,
         disabledToolKinds,
+        projectPath: projectPath.trim() || null,
       });
     } finally {
       setSaving(false);
     }
-  }, [agent.agentType, description, disabledToolKinds, envVars, model, reasoningEffort, name, onUpdate]);
+  }, [agent.agentType, description, disabledToolKinds, envVars, model, projectPath, reasoningEffort, name, onUpdate]);
 
   const handleRestart = useCallback(async () => {
     setActionError(null);
@@ -209,6 +211,10 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
               <span className="mt-0.5 block opacity-70">(managed by Agent Collab)</span>
             </section>
           )}
+          <section className="rounded-sm border-2 border-zinc-900 bg-[#fff8d8] px-3 py-2 text-xs text-zinc-600">
+            <span className="font-medium">Project directory: </span>
+            <span className={cn("font-mono break-all")}>{agent.projectPath ?? "Not configured"}</span>
+          </section>
         </div>
         <ConfirmDialog
           open={dialogOpen}
@@ -369,6 +375,19 @@ export function AgentSettingsPanel({ agent, isAdmin = false, onUpdate, onRestart
                   No channel memberships. Manage memberships from a channel panel.
                 </div>
               )}
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-xs text-zinc-600">Project Directory</label>
+              <input
+                className="w-full rounded-sm border-2 border-zinc-900 bg-white px-2 py-1.5 font-mono text-sm"
+                value={projectPath}
+                onChange={(e) => setProjectPath(e.target.value)}
+                placeholder="/absolute/path/to/project"
+              />
+              <div className="text-[11px] text-zinc-500">
+                Shared development directory on the assigned machine. The private workspace and memory stay under the agent workspace path.
+              </div>
             </div>
 
             {/* Workspace local memory path (read-only info) */}

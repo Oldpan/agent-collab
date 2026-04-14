@@ -6,6 +6,7 @@ export type NodeEntry = {
   hostname: string;
   agentTypes: string[];
   version: string;
+  terminalBackendAvailable?: boolean;
   ws: WebSocket;
   lastSeen: number;
 };
@@ -26,7 +27,10 @@ export class NodeRegistry {
   }
 
   listNodes(): NodeInfoRest[] {
-    return [...this.entries.values()].map(({ ws: _ws, ...rest }) => rest);
+    return [...this.entries.values()].map(({ ws: _ws, terminalBackendAvailable, ...rest }) => ({
+      ...rest,
+      terminalBackendAvailable: Boolean(terminalBackendAvailable),
+    }));
   }
 
   heartbeat(nodeId: string): void {

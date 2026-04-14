@@ -25,7 +25,9 @@ import {
   type CreateResourceSpaceRequest,
   type UpdateResourceSpaceRequest,
   type AnalyzeResourceRequest,
+  type CreateWorkbenchTerminalRequest,
   type RecentMessageSourceItem,
+  type WorkbenchTerminalWsClientEvent,
 } from '@agent-collab/protocol';
 import type { ConversationManager } from './conversationManager.js';
 import { handleWebSocket, broadcast } from './wsHandler.js';
@@ -37,6 +39,15 @@ import { AgentWorkspaceService, AgentWorkspaceServiceError } from '../services/a
 import { AgentSkillsBroker } from '../services/agentSkillsBroker.js';
 import { AgentSkillsService, AgentSkillsServiceError } from '../services/agentSkillsService.js';
 import { ResourceSpaceService, ResourceSpaceServiceError } from '../services/resourceSpaceService.js';
+import { WorkbenchNodePathService, WorkbenchNodePathServiceError } from '../services/workbenchNodePathService.js';
+import {
+  isAbsoluteWorkbenchRootPath,
+  WorkbenchRootService,
+  type ResolvedWorkbenchRoot,
+} from '../services/workbenchRootService.js';
+import { WorkbenchTerminalBroker } from '../services/workbenchTerminalBroker.js';
+import { WorkbenchInspectBroker } from '../services/workbenchInspectBroker.js';
+import { WorkbenchRegistryService } from '../services/workbenchRegistryService.js';
 import { CodexTranscriptBroker } from '../services/codexTranscriptBroker.js';
 import { CodexTranscriptService } from '../services/codexTranscriptService.js';
 import { ClaudeTranscriptBroker } from '../services/claudeTranscriptBroker.js';
@@ -120,6 +131,8 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
   const skillsBroker = params.skillsBroker ?? new AgentSkillsBroker({ nodeRegistry });
   const codexTranscriptBroker = new CodexTranscriptBroker({ nodeRegistry });
   const claudeTranscriptBroker = new ClaudeTranscriptBroker({ nodeRegistry });
+  const terminalBroker = new WorkbenchTerminalBroker({ nodeRegistry });
+  const inspectBroker = new WorkbenchInspectBroker({ nodeRegistry });
   const workspaceService = new AgentWorkspaceService({
     getAgentById: (agentId) => conversationManager.getAgent(agentId),
     broker: workspaceBroker,
@@ -129,9 +142,24 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     broker: workspaceBroker,
     nodeRegistry,
   });
+  const workbenchNodePathService = new WorkbenchNodePathService({
+    broker: workspaceBroker,
+  });
   const skillsService = new AgentSkillsService({
     getAgentById: (agentId) => conversationManager.getAgent(agentId),
     broker: skillsBroker,
+  });
+  const workbenchRootService = new WorkbenchRootService({
+    getAgentById: (agentId) => conversationManager.getAgent(agentId),
+    listAgents: () => conversationManager.listAgents(),
+    getResourceSpaceById: (resourceSpaceId) => conversationManager.getResourceSpace(resourceSpaceId),
+    listResourceSpaces: () => conversationManager.listResourceSpaces(),
+    nodeRegistry,
+  });
+  const workbenchRegistryService = new WorkbenchRegistryService({
+    db,
+    workbenchRootService,
+    inspectBroker,
   });
   const queueTaskDurableNoteSync = (agentId: string | null | undefined, taskId: string): void => {
     if (!agentId) return;
@@ -291,6 +319,65 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       return null;
     }
     return user;
+  };
+
+  const hasWorkbenchRootAccess = (user: User, rootId: string): boolean => {
+    const root = workbenchRootService.getRoot(rootId);
+    if (!root) return false;
+    if (root.kind === 'agent_workspace') {
+      return !!root.agentId && hasAgentAccess(user, root.agentId);
+    }
+    if (root.kind === 'project_space') {
+      return (root.agentIds ?? []).some((agentId) => hasAgentAccess(user, agentId));
+    }
+    return !!root.resourceSpaceId && hasResourceSpaceAccess(user, root.resourceSpaceId);
+  };
+
+  const requireWorkbenchRootAccess = (
+    req: { headers: Record<string, unknown> },
+    reply: { code: (statusCode: number) => unknown },
+    rootId: string,
+  ): { user: User; root: ResolvedWorkbenchRoot } | null => {
+    const user = requireUser(req, reply);
+    if (!user) return null;
+    const root = workbenchRootService.getRoot(rootId);
+    if (!root) {
+      reply.code(404);
+      return null;
+    }
+    if (!hasWorkbenchRootAccess(user, rootId)) {
+      reply.code(403);
+      return null;
+    }
+    return { user, root };
+  };
+
+  const mapWorkbenchTerminalError = (
+    error: unknown,
+  ): { statusCode: number; message: string } => {
+    const message = String((error as Error)?.message ?? error);
+    if (message === 'Agent node is offline.' || message.startsWith('Agent node disconnected:')) {
+      return { statusCode: 409, message };
+    }
+    if (message.includes('request timed out.')) {
+      return { statusCode: 504, message };
+    }
+    if (message.startsWith('not_found:')) {
+      return { statusCode: 404, message: message.slice('not_found:'.length) };
+    }
+    if (message.startsWith('path_outside_workspace:')) {
+      return { statusCode: 400, message: message.slice('path_outside_workspace:'.length) };
+    }
+    if (message.startsWith('not_directory:') || message.startsWith('not_file:')) {
+      return { statusCode: 400, message: message.slice(message.indexOf(':') + 1) };
+    }
+    if (message.startsWith('io_error:Persistent terminal backend is unavailable')) {
+      return { statusCode: 409, message: message.slice('io_error:'.length) };
+    }
+    if (message.startsWith('io_error:')) {
+      return { statusCode: 500, message: message.slice('io_error:'.length) };
+    }
+    return { statusCode: 500, message };
   };
 
   const isTaskClaimedByUser = (
@@ -822,6 +909,10 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       reply.code(400);
       return { error: 'name is required' };
     }
+    if (typeof body.projectPath === 'string' && body.projectPath.trim() && !isAbsoluteWorkbenchRootPath(body.projectPath.trim())) {
+      reply.code(400);
+      return { error: 'projectPath must be an absolute path' };
+    }
     const agent = conversationManager.createAgent(body);
     reply.code(201);
     return agent;
@@ -836,7 +927,12 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
 
   app.patch<{ Params: { id: string }; Body: UpdateAgentRequest }>('/api/agents/:id', async (req, reply) => {
     if (!requireAdmin(req, reply)) return { error: 'Admin access required' };
-    const updated = conversationManager.updateAgent(req.params.id, req.body ?? {});
+    const body = (req.body ?? {}) as UpdateAgentRequest;
+    if (typeof body.projectPath === 'string' && body.projectPath.trim() && !isAbsoluteWorkbenchRootPath(body.projectPath.trim())) {
+      reply.code(400);
+      return { error: 'projectPath must be an absolute path' };
+    }
+    const updated = conversationManager.updateAgent(req.params.id, body);
     if (!updated) { reply.code(404); return { error: 'Not found' }; }
     return updated;
   });
@@ -1476,6 +1572,185 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       }
       reply.code(500);
       return { error: String((error as Error)?.message ?? error) };
+    }
+  });
+
+  app.get('/api/workbench/roots', async (req, reply) => {
+    const user = requireUser(req, reply);
+    if (!user) return { error: 'Unauthorized' };
+    return workbenchRootService
+      .listRoots()
+      .filter((root) => hasWorkbenchRootAccess(user, root.workbenchRootId))
+      .map((root) => {
+        if (root.kind !== 'project_space') return root;
+        return {
+          ...root,
+          agentIds: (root.agentIds ?? []).filter((agentId) => hasAgentAccess(user, agentId)),
+        };
+      });
+  });
+
+  app.get('/api/workbench/projects', async (req, reply) => {
+    const user = requireUser(req, reply);
+    if (!user) return { error: 'Unauthorized' };
+    const projects = await workbenchRegistryService.listProjects();
+    return {
+      projects: projects
+        .map((project) => ({
+          ...project,
+          workspaces: project.workspaces.filter((workspace) => (
+            (workspace.agentIds ?? (workspace.agentId ? [workspace.agentId] : []))
+              .some((agentId) => hasAgentAccess(user, agentId))
+          )).map((workspace) => ({
+            ...workspace,
+            agentIds: (workspace.agentIds ?? (workspace.agentId ? [workspace.agentId] : []))
+              .filter((agentId) => hasAgentAccess(user, agentId)),
+          })),
+        }))
+        .filter((project) => project.workspaces.length > 0),
+    };
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/workbench/roots/:id/tree', async (req, reply) => {
+    const access = requireWorkbenchRootAccess(req, reply, req.params.id);
+    if (!access) return { error: 'Access denied' };
+    try {
+      if (access.root.kind === 'agent_workspace' && access.root.agentId) {
+        return await workspaceService.listWorkspace(access.root.agentId, normalizeWorkspaceQueryPath(req.query.path));
+      }
+      if (access.root.kind === 'project_space') {
+        return await workbenchNodePathService.listTree(
+          access.root.nodeId,
+          access.root.rootPath,
+          normalizeWorkspaceQueryPath(req.query.path),
+        );
+      }
+      if (access.root.kind === 'resource_space' && access.root.resourceSpaceId) {
+        return await resourceSpaceService.listTree(access.root.resourceSpaceId, normalizeWorkspaceQueryPath(req.query.path));
+      }
+      reply.code(404);
+      return { error: 'Workbench root not found' };
+    } catch (error) {
+      if (
+        error instanceof AgentWorkspaceServiceError
+        || error instanceof ResourceSpaceServiceError
+        || error instanceof WorkbenchNodePathServiceError
+      ) {
+        reply.code(error.statusCode);
+        return { error: error.message };
+      }
+      reply.code(500);
+      return { error: String((error as Error)?.message ?? error) };
+    }
+  });
+
+  app.get<{ Params: { id: string }; Querystring: { path?: string } }>('/api/workbench/roots/:id/file', async (req, reply) => {
+    const access = requireWorkbenchRootAccess(req, reply, req.params.id);
+    if (!access) return { error: 'Access denied' };
+    try {
+      if (access.root.kind === 'agent_workspace' && access.root.agentId) {
+        return await workspaceService.readWorkspaceFile(access.root.agentId, normalizeWorkspaceQueryPath(req.query.path));
+      }
+      if (access.root.kind === 'project_space') {
+        return await workbenchNodePathService.readFile(
+          access.root.nodeId,
+          access.root.rootPath,
+          normalizeWorkspaceQueryPath(req.query.path),
+        );
+      }
+      if (access.root.kind === 'resource_space' && access.root.resourceSpaceId) {
+        return await resourceSpaceService.readFile(access.root.resourceSpaceId, normalizeWorkspaceQueryPath(req.query.path));
+      }
+      reply.code(404);
+      return { error: 'Workbench root not found' };
+    } catch (error) {
+      if (
+        error instanceof AgentWorkspaceServiceError
+        || error instanceof ResourceSpaceServiceError
+        || error instanceof WorkbenchNodePathServiceError
+      ) {
+        reply.code(error.statusCode);
+        return { error: error.message };
+      }
+      reply.code(500);
+      return { error: String((error as Error)?.message ?? error) };
+    }
+  });
+
+  app.get<{ Params: { id: string } }>('/api/workbench/roots/:id/terminals', async (req, reply) => {
+    const access = requireWorkbenchRootAccess(req, reply, req.params.id);
+    if (!access) return { error: 'Access denied' };
+    const root = access.root;
+    if (!root.terminalSupported || !root.nodeId) {
+      reply.code(409);
+      return { error: root.terminalDisabledReason ?? 'Terminals are not supported for this workbench root.' };
+    }
+
+    try {
+      const terminals = await terminalBroker.listTerminals(root.nodeId, root.rootPath);
+      return {
+        workbenchRootId: root.workbenchRootId,
+        terminals,
+      };
+    } catch (error) {
+      const mapped = mapWorkbenchTerminalError(error);
+      reply.code(mapped.statusCode);
+      return { error: mapped.message };
+    }
+  });
+
+  app.post<{ Params: { id: string }; Body: CreateWorkbenchTerminalRequest }>('/api/workbench/roots/:id/terminals', async (req, reply) => {
+    const access = requireWorkbenchRootAccess(req, reply, req.params.id);
+    if (!access) return { error: 'Access denied' };
+    const root = access.root;
+    if (!root.terminalSupported || !root.nodeId) {
+      reply.code(409);
+      return { error: root.terminalDisabledReason ?? 'Terminals are not supported for this workbench root.' };
+    }
+
+    try {
+      const body = (req.body ?? {}) as CreateWorkbenchTerminalRequest;
+      const terminal = await terminalBroker.createTerminal(root.nodeId, {
+        workspaceRoot: root.rootPath,
+        cwd: body.cwd,
+        name: body.name,
+        cols: body.cols,
+        rows: body.rows,
+      });
+      return terminal;
+    } catch (error) {
+      const mapped = mapWorkbenchTerminalError(error);
+      reply.code(mapped.statusCode);
+      return { error: mapped.message };
+    }
+  });
+
+  app.delete<{ Params: { id: string }; Querystring: { rootId?: string } }>('/api/workbench/terminals/:id', async (req, reply) => {
+    const rootId = (req.query.rootId ?? '').trim();
+    if (!rootId) {
+      reply.code(400);
+      return { error: 'rootId is required' };
+    }
+    const access = requireWorkbenchRootAccess(req, reply, rootId);
+    if (!access) return { error: 'Access denied' };
+    const root = access.root;
+    if (!root.terminalSupported || !root.nodeId) {
+      reply.code(409);
+      return { error: root.terminalDisabledReason ?? 'Terminals are not supported for this workbench root.' };
+    }
+
+    try {
+      const snapshot = await terminalBroker.snapshotTerminal(root.nodeId, req.params.id);
+      if (snapshot.terminal.workspaceRoot !== root.rootPath) {
+        reply.code(404);
+        return { error: 'Terminal not found for this workbench root.' };
+      }
+      await terminalBroker.closeTerminal(root.nodeId, req.params.id);
+      return { ok: true };
+    } catch (error) {
+      const mapped = mapWorkbenchTerminalError(error);
+      reply.code(mapped.statusCode);
+      return { error: mapped.message };
     }
   });
 
@@ -2709,7 +2984,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
       reply.code(400);
       return { error: 'name, resourceType, backendType, and rootPath are required' };
     }
-    if (!path.isAbsolute(rootPath)) {
+    if (!isAbsoluteWorkbenchRootPath(rootPath)) {
       reply.code(400);
       return { error: 'rootPath must be an absolute path' };
     }
@@ -2758,7 +3033,7 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         reply.code(400);
         return { error: 'rootPath cannot be empty' };
       }
-      if (body.rootPath != null && !path.isAbsolute(body.rootPath.trim())) {
+      if (body.rootPath != null && !isAbsoluteWorkbenchRootPath(body.rootPath.trim())) {
         reply.code(400);
         return { error: 'rootPath must be an absolute path' };
       }
@@ -4529,6 +4804,112 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
     },
   );
 
+  app.get<{ Params: { id: string }; Querystring: { token?: string; rootId?: string } }>(
+    '/api/workbench/terminals/:id/stream',
+    { websocket: true },
+    (socket, req) => {
+      const terminalId = req.params.id;
+      const wsToken = (req.query as Record<string, string>)['token'] ?? '';
+      const rootId = (req.query as Record<string, string>)['rootId'] ?? '';
+      const wsUser = wsToken ? validateSession(db, wsToken) : null;
+
+      if (!wsUser) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Unauthorized' }));
+        socket.close();
+        return;
+      }
+      if (!rootId) {
+        socket.send(JSON.stringify({ type: 'error', message: 'rootId is required' }));
+        socket.close();
+        return;
+      }
+      if (!hasWorkbenchRootAccess(wsUser, rootId)) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Access denied' }));
+        socket.close();
+        return;
+      }
+
+      const root = workbenchRootService.getRoot(rootId);
+      if (!root) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Workbench root not found' }));
+        socket.close();
+        return;
+      }
+      if (!root.terminalSupported || !root.nodeId) {
+        socket.send(JSON.stringify({ type: 'error', message: root.terminalDisabledReason ?? 'Terminals are not supported for this workbench root.' }));
+        socket.close();
+        return;
+      }
+
+      const knownRoute = terminalBroker.getTerminalRoute(terminalId);
+      if (knownRoute && (knownRoute.nodeId !== root.nodeId || knownRoute.workspaceRoot !== root.rootPath)) {
+        socket.send(JSON.stringify({ type: 'error', message: 'Terminal not found for this workbench root.' }));
+        socket.close();
+        return;
+      }
+
+      let terminalAuthorized = false;
+
+      void terminalBroker.snapshotTerminal(root.nodeId, terminalId).then((snapshot) => {
+        if (snapshot.terminal.workspaceRoot !== root.rootPath) {
+          socket.send(JSON.stringify({ type: 'error', message: 'Terminal not found for this workbench root.' }));
+          socket.close();
+          return;
+        }
+        terminalBroker.subscribe(terminalId, socket);
+        terminalAuthorized = true;
+        socket.send(JSON.stringify({
+          type: 'snapshot',
+          terminal: snapshot.terminal,
+          buffer: snapshot.buffer,
+        }));
+      }).catch((error) => {
+        socket.send(JSON.stringify({ type: 'error', message: String((error as Error)?.message ?? error) }));
+        socket.close();
+      });
+
+      socket.on('message', (raw) => {
+        let event: WorkbenchTerminalWsClientEvent;
+        try {
+          event = JSON.parse(String(raw)) as WorkbenchTerminalWsClientEvent;
+        } catch {
+          socket.send(JSON.stringify({ type: 'error', message: 'Invalid JSON' }));
+          return;
+        }
+
+        if (event.type === 'ping') {
+          socket.send(JSON.stringify({ type: 'pong' }));
+          return;
+        }
+
+        if (!terminalAuthorized) {
+          socket.send(JSON.stringify({ type: 'error', message: 'Terminal is still authorizing.' }));
+          return;
+        }
+
+        if (event.type === 'input') {
+          void terminalBroker.sendInput(root.nodeId!, terminalId, event.data).catch((error) => {
+            socket.send(JSON.stringify({ type: 'error', message: String((error as Error)?.message ?? error) }));
+          });
+          return;
+        }
+
+        if (event.type === 'resize') {
+          void terminalBroker.resizeTerminal(root.nodeId!, terminalId, event.cols, event.rows).catch((error) => {
+            socket.send(JSON.stringify({ type: 'error', message: String((error as Error)?.message ?? error) }));
+          });
+          return;
+        }
+
+        socket.send(JSON.stringify({ type: 'error', message: 'Unsupported terminal event.' }));
+      });
+
+      socket.on('close', () => {
+        terminalBroker.unsubscribe(terminalId, socket);
+      });
+    },
+  );
+
   // Agent-node WebSocket connection
   app.get(
     '/api/nodes/connect',
@@ -4545,6 +4926,8 @@ export async function buildServerApp(params: ServerParams): Promise<FastifyInsta
         codexTranscriptBroker,
         claudeTranscriptBroker,
         broadcastToChannel,
+        terminalBroker,
+        inspectBroker,
       );
     },
   );

@@ -15,6 +15,7 @@ type Props = {
 export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
+  const [projectPath, setProjectPath] = useState("");
   const [agentType, setAgentType] = useState<AgentType>("claude_acp");
   const [model, setModel] = useState("");
   const [reasoningEffort, setReasoningEffort] = useState("");
@@ -36,12 +37,13 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
         reasoningEffort: agentType === "codex_acp" ? (reasoningEffort.trim() || undefined) : undefined,
         envVars,
         nodeId: machineNodeId,
+        projectPath: projectPath.trim() || undefined,
       });
       onClose();
     } finally {
       setCreating(false);
     }
-  }, [name, description, agentType, model, reasoningEffort, envVars, machineNodeId, onCreate, onClose]);
+  }, [name, description, projectPath, agentType, model, reasoningEffort, envVars, machineNodeId, onCreate, onClose]);
 
   return (
     <div className="space-y-3">
@@ -72,6 +74,19 @@ export function AgentCreateDialog({ onClose, onCreate, machineNodeId }: Props) {
           value={description}
           onChange={(e) => setDescription(e.target.value)}
         />
+      </div>
+
+      <div className="space-y-0.5">
+        <label className="text-[10px] text-zinc-500">Project Directory</label>
+        <input
+          className="w-full rounded-sm border-2 border-zinc-900 bg-white px-1.5 py-1 text-xs placeholder:text-zinc-400"
+          placeholder="/absolute/path/to/project (optional)"
+          value={projectPath}
+          onChange={(e) => setProjectPath(e.target.value)}
+        />
+        <div className="text-[10px] text-zinc-500">
+          Shared development directory on this machine. The private agent workspace remains separate.
+        </div>
       </div>
 
       <div className="space-y-0.5">

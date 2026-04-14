@@ -8,6 +8,7 @@ export type MessageHandler = (msg: CoreToNode) => void;
 type ConnectionHooks = {
   onConnected?: () => void;
   onDisconnected?: () => void;
+  getTerminalBackendAvailable?: () => boolean;
 };
 
 export class CoreConnection {
@@ -93,6 +94,7 @@ export class CoreConnection {
         hostname: this.config.hostname,
         agentTypes: this.config.agentTypes,
         version: this.config.version,
+        terminalBackendAvailable: this.hooks.getTerminalBackendAvailable?.() ?? false,
       });
 
       this.heartbeatTimer = setInterval(() => {

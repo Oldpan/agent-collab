@@ -8,6 +8,8 @@ import type { AgentWorkspaceBroker } from '../services/agentWorkspaceBroker.js';
 import type { AgentSkillsBroker } from '../services/agentSkillsBroker.js';
 import type { CodexTranscriptBroker } from '../services/codexTranscriptBroker.js';
 import type { ClaudeTranscriptBroker } from '../services/claudeTranscriptBroker.js';
+import type { WorkbenchTerminalBroker } from '../services/workbenchTerminalBroker.js';
+import type { WorkbenchInspectBroker } from '../services/workbenchInspectBroker.js';
 import type { ConversationManager } from './conversationManager.js';
 import { resolveConversationReplyTarget } from './directReplyTargets.js';
 import { allocateNextChannelMessageSeq } from './channelMessageSequences.js';
@@ -687,6 +689,8 @@ export function handleNodeWebSocket(
   codexTranscriptBroker?: CodexTranscriptBroker,
   claudeTranscriptBroker?: ClaudeTranscriptBroker,
   broadcastToChannel?: ChannelBroadcaster,
+  terminalBroker?: WorkbenchTerminalBroker,
+  inspectBroker?: WorkbenchInspectBroker,
 ): void {
   let nodeId: string | null = null;
   // Sequence counter per runId for node/event persistence
@@ -733,6 +737,7 @@ export function handleNodeWebSocket(
           hostname: msg.hostname,
           agentTypes: msg.agentTypes,
           version: msg.version,
+          terminalBackendAvailable: msg.terminalBackendAvailable,
           ws: socket,
           lastSeen: now,
         });
@@ -931,6 +936,11 @@ export function handleNodeWebSocket(
         break;
       }
 
+      case 'workspace.inspect.response': {
+        inspectBroker?.handleInspectResponse(msg);
+        break;
+      }
+
       case 'workspace.read.response': {
         workspaceBroker?.handleWorkspaceReadResponse(msg);
         break;
@@ -943,6 +953,46 @@ export function handleNodeWebSocket(
 
       case 'workspace.reset.response': {
         workspaceBroker?.handleWorkspaceResetResponse(msg);
+        break;
+      }
+
+      case 'terminal.list.response': {
+        terminalBroker?.handleListResponse(msg);
+        break;
+      }
+
+      case 'terminal.create.response': {
+        terminalBroker?.handleCreateResponse(msg);
+        break;
+      }
+
+      case 'terminal.snapshot.response': {
+        terminalBroker?.handleSnapshotResponse(msg);
+        break;
+      }
+
+      case 'terminal.input.response': {
+        terminalBroker?.handleInputResponse(msg);
+        break;
+      }
+
+      case 'terminal.resize.response': {
+        terminalBroker?.handleResizeResponse(msg);
+        break;
+      }
+
+      case 'terminal.close.response': {
+        terminalBroker?.handleCloseResponse(msg);
+        break;
+      }
+
+      case 'terminal.output.event': {
+        terminalBroker?.handleOutputEvent(msg);
+        break;
+      }
+
+      case 'terminal.exit.event': {
+        terminalBroker?.handleExitEvent(msg);
         break;
       }
 
@@ -985,7 +1035,9 @@ export function handleNodeWebSocket(
   socket.on('close', () => {
     if (nodeId) {
       const disconnectMessage = `Agent node disconnected: ${nodeId}`;
+      inspectBroker?.rejectPendingForNode(nodeId);
       workspaceBroker?.rejectPendingForNode(nodeId);
+      terminalBroker?.handleNodeDisconnect(nodeId);
       skillsBroker?.rejectPendingForNode(nodeId);
       codexTranscriptBroker?.rejectPendingForNode(nodeId);
       claudeTranscriptBroker?.rejectPendingForNode(nodeId);

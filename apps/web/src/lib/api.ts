@@ -20,7 +20,14 @@ import type {
   ResourceTreeResult,
   ResourceFileResult,
   AnalyzeResourceResult,
+  CreateWorkbenchTerminalRequest,
   RecentMessageSourceItem,
+  WorkbenchFileResult,
+  WorkbenchProjectsResult,
+  WorkbenchRootInfo,
+  WorkbenchTerminalInfo,
+  WorkbenchTerminalListResult,
+  WorkbenchTreeResult,
 } from "@agent-collab/protocol";
 
 const API_BASE = "/api";
@@ -284,6 +291,101 @@ export async function deleteResourceSpace(resourceSpaceId: string): Promise<void
   if (!res.ok) {
     const body = await safeReadErrorBody(res);
     throw new Error(body ?? `Failed to delete resource space: ${res.statusText}`);
+  }
+}
+
+export async function listWorkbenchRoots(): Promise<WorkbenchRootInfo[]> {
+  const res = await fetch(`${API_BASE}/workbench/roots`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to list workbench roots: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function listWorkbenchProjects(): Promise<WorkbenchProjectsResult> {
+  const res = await fetch(`${API_BASE}/workbench/projects`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to list workbench projects: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function listWorkbenchTree(
+  rootId: string,
+  resourcePath = "",
+): Promise<WorkbenchTreeResult> {
+  const params = new URLSearchParams();
+  if (resourcePath) params.set("path", resourcePath);
+  const suffix = params.toString() ? `?${params.toString()}` : "";
+  const res = await fetch(`${API_BASE}/workbench/roots/${encodeURIComponent(rootId)}/tree${suffix}`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to list workbench tree: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function readWorkbenchFile(
+  rootId: string,
+  resourcePath: string,
+): Promise<WorkbenchFileResult> {
+  const params = new URLSearchParams();
+  params.set("path", resourcePath);
+  const res = await fetch(`${API_BASE}/workbench/roots/${encodeURIComponent(rootId)}/file?${params.toString()}`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(formatHttpError("Failed to read workbench file", res, body));
+  }
+  return res.json();
+}
+
+export async function listWorkbenchTerminals(rootId: string): Promise<WorkbenchTerminalListResult> {
+  const res = await fetch(`${API_BASE}/workbench/roots/${encodeURIComponent(rootId)}/terminals`, {
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to list workbench terminals: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function createWorkbenchTerminal(
+  rootId: string,
+  req: CreateWorkbenchTerminalRequest,
+): Promise<WorkbenchTerminalInfo> {
+  const res = await fetch(`${API_BASE}/workbench/roots/${encodeURIComponent(rootId)}/terminals`, {
+    method: "POST",
+    headers: withAuthHeaders({ "Content-Type": "application/json" }),
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to create workbench terminal: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function deleteWorkbenchTerminal(rootId: string, terminalId: string): Promise<void> {
+  const params = new URLSearchParams();
+  params.set("rootId", rootId);
+  const res = await fetch(`${API_BASE}/workbench/terminals/${encodeURIComponent(terminalId)}?${params.toString()}`, {
+    method: "DELETE",
+    headers: withAuthHeaders(),
+  });
+  if (!res.ok) {
+    const body = await safeReadErrorBody(res);
+    throw new Error(body ?? `Failed to close workbench terminal: ${res.statusText}`);
   }
 }
 

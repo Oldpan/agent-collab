@@ -242,12 +242,23 @@ function toRelativeWorkspacePath(workspaceRoot: string, absolutePath: string): s
 
 function getPreviewMimeType(filePath: string): WorkspacePreviewMimeType {
   const normalized = filePath.toLowerCase();
-  if (normalized.endsWith('.md')) return 'text/markdown';
+  if (
+    normalized.endsWith('.md')
+    || normalized.endsWith('.mdx')
+    || normalized.endsWith('.markdown')
+    || normalized.endsWith('.mdown')
+    || normalized.endsWith('.mkd')
+  ) {
+    return 'text/markdown';
+  }
   if (normalized.endsWith('.png')) return 'image/png';
   if (normalized.endsWith('.jpg') || normalized.endsWith('.jpeg')) return 'image/jpeg';
   if (normalized.endsWith('.webp')) return 'image/webp';
   if (normalized.endsWith('.gif')) return 'image/gif';
   if (normalized.endsWith('.svg')) return 'image/svg+xml';
+  if (normalized.endsWith('.avif')) return 'image/avif';
+  if (normalized.endsWith('.bmp')) return 'image/bmp';
+  if (normalized.endsWith('.ico')) return 'image/x-icon';
   return 'text/plain';
 }
 

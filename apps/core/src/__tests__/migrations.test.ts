@@ -29,7 +29,7 @@ describe('migrations', () => {
   it('schema_version 应为最新版本', () => {
     const db = createTestDb();
     const row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
-    expect(row.version).toBeGreaterThanOrEqual(59);
+    expect(row.version).toBeGreaterThanOrEqual(64);
     db.close();
   });
 
@@ -93,12 +93,25 @@ describe('migrations', () => {
     db.close();
   });
 
-  it('agents 表应包含 description、disabled_tool_kinds、skill_roots 列', () => {
+  it('agents 表应包含 description、disabled_tool_kinds、skill_roots、project_path 列', () => {
     const db = createTestDb();
     const agentCols = db.prepare("PRAGMA table_info('agents')").all() as Array<{ name: string }>;
     expect(agentCols.map((c) => c.name)).toContain('description');
     expect(agentCols.map((c) => c.name)).toContain('disabled_tool_kinds');
     expect(agentCols.map((c) => c.name)).toContain('skill_roots');
+    expect(agentCols.map((c) => c.name)).toContain('project_path');
+    db.close();
+  });
+
+  it('workbench registry 表与 workspace-agent 关联表应存在', () => {
+    const db = createTestDb();
+    const tables = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='table'")
+      .all() as Array<{ name: string }>;
+    const tableNames = tables.map((t) => t.name);
+    expect(tableNames).toContain('workbench_projects');
+    expect(tableNames).toContain('workbench_workspaces');
+    expect(tableNames).toContain('workbench_workspace_agents');
     db.close();
   });
 

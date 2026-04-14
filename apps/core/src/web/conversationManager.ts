@@ -68,6 +68,7 @@ type AgentRow = {
   disabledToolKindsJson: string | null;
   nodeId: string | null;
   workspacePath: string | null;
+  projectPath: string | null;
   skillRootsJson: string | null;
   createdAt: number;
   updatedAt: number;
@@ -130,16 +131,17 @@ export class ConversationManager {
     const workspacePath = params.workspacePath
       ?? path.join(os.homedir(), '.agent-collab', 'agents', `${agentId}-${slugifyAgentName(params.name)}`);
     fs.mkdirSync(workspacePath, { recursive: true });
+    const projectPath = params.projectPath?.trim() || null;
 
     const description = params.description?.trim() || null;
 
     this.db.prepare(
-      `INSERT INTO agents(agent_id, name, agent_type, model, reasoning_effort, channel_id, system_prompt, description, memory, env_vars, disabled_tool_kinds, node_id, workspace_path, skill_roots, created_at, updated_at)
-       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT INTO agents(agent_id, name, agent_type, model, reasoning_effort, channel_id, system_prompt, description, memory, env_vars, disabled_tool_kinds, node_id, workspace_path, project_path, skill_roots, created_at, updated_at)
+       VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       agentId, params.name, agentType, model, reasoningEffort, channelId,
       params.systemPrompt ?? '', description, '',
-      envVarsJson, disabledToolKindsJson, params.nodeId ?? null, workspacePath, skillRootsJson,
+      envVarsJson, disabledToolKindsJson, params.nodeId ?? null, workspacePath, projectPath, skillRootsJson,
       now, now,
     );
     this.db.prepare(
@@ -152,7 +154,7 @@ export class ConversationManager {
       systemPrompt: params.systemPrompt ?? '',
       ...(description ? { description } : {}),
       envVars: params.envVars, disabledToolKinds: params.disabledToolKinds, nodeId: params.nodeId ?? null,
-      workspacePath, skillRoots: params.skillRoots, createdAt: now, updatedAt: now,
+      workspacePath, projectPath, skillRoots: params.skillRoots, createdAt: now, updatedAt: now,
     };
   }
 
@@ -161,7 +163,7 @@ export class ConversationManager {
       ? `SELECT a.agent_id as agentId, a.name, a.agent_type as agentType, a.model, a.reasoning_effort as reasoningEffort, a.channel_id as channelId,
                 a.system_prompt as systemPrompt, a.description,
                 a.env_vars as envVarsJson, a.disabled_tool_kinds as disabledToolKindsJson,
-                a.node_id as nodeId, a.workspace_path as workspacePath, a.skill_roots as skillRootsJson,
+                a.node_id as nodeId, a.workspace_path as workspacePath, a.project_path as projectPath, a.skill_roots as skillRootsJson,
                 a.created_at as createdAt, a.updated_at as updatedAt
          FROM agents a
          JOIN agent_channel_memberships m ON m.agent_id = a.agent_id
@@ -169,7 +171,7 @@ export class ConversationManager {
       : `SELECT agent_id as agentId, name, agent_type as agentType, model, reasoning_effort as reasoningEffort, channel_id as channelId,
                 system_prompt as systemPrompt, description,
                 env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
-                node_id as nodeId, workspace_path as workspacePath, skill_roots as skillRootsJson,
+                node_id as nodeId, workspace_path as workspacePath, project_path as projectPath, skill_roots as skillRootsJson,
                 created_at as createdAt, updated_at as updatedAt
          FROM agents ORDER BY updated_at DESC`;
     const rows = channelId
@@ -183,7 +185,7 @@ export class ConversationManager {
       `SELECT agent_id as agentId, name, agent_type as agentType, model, reasoning_effort as reasoningEffort, channel_id as channelId,
               system_prompt as systemPrompt, description,
               env_vars as envVarsJson, disabled_tool_kinds as disabledToolKindsJson,
-              node_id as nodeId, workspace_path as workspacePath, skill_roots as skillRootsJson,
+              node_id as nodeId, workspace_path as workspacePath, project_path as projectPath, skill_roots as skillRootsJson,
               created_at as createdAt, updated_at as updatedAt
        FROM agents WHERE agent_id = ?`
     ).get(agentId) as AgentRow | undefined;
@@ -204,6 +206,7 @@ export class ConversationManager {
     const disabledToolKinds = req.disabledToolKinds ?? existing.disabledToolKinds;
     const skillRoots = req.skillRoots ?? existing.skillRoots;
     const channelId = req.channelId ?? existing.channelId;
+    const projectPath = 'projectPath' in req ? (req.projectPath?.trim() || null) : (existing.projectPath ?? null);
     const envVarsJson = envVars && Object.keys(envVars).length > 0
       ? JSON.stringify(envVars)
       : null;
@@ -216,9 +219,9 @@ export class ConversationManager {
 
     this.db.prepare(
       `UPDATE agents
-       SET name = ?, system_prompt = ?, description = ?, model = ?, reasoning_effort = ?, env_vars = ?, disabled_tool_kinds = ?, channel_id = ?, skill_roots = ?, updated_at = ?
+       SET name = ?, system_prompt = ?, description = ?, model = ?, reasoning_effort = ?, env_vars = ?, disabled_tool_kinds = ?, channel_id = ?, project_path = ?, skill_roots = ?, updated_at = ?
        WHERE agent_id = ?`
-    ).run(name, systemPrompt, description, model, reasoningEffort, envVarsJson, disabledToolKindsJson, channelId, skillRootsJson, now, agentId);
+    ).run(name, systemPrompt, description, model, reasoningEffort, envVarsJson, disabledToolKindsJson, channelId, projectPath, skillRootsJson, now, agentId);
 
     // Migrate home channel membership if channelId changed
     if (req.channelId && req.channelId !== existing.channelId) {
@@ -241,6 +244,7 @@ export class ConversationManager {
       reasoningEffort: reasoningEffort ?? undefined,
       envVars,
       disabledToolKinds,
+      projectPath: projectPath ?? undefined,
       skillRoots,
       channelId,
       updatedAt: now,
@@ -1389,6 +1393,7 @@ export class ConversationManager {
       disabledToolKinds: parseDisabledToolKinds(row.disabledToolKindsJson),
       nodeId: row.nodeId,
       workspacePath: row.workspacePath,
+      projectPath: row.projectPath,
       skillRoots: parseStringArray(row.skillRootsJson),
       createdAt: row.createdAt,
       updatedAt: row.updatedAt,

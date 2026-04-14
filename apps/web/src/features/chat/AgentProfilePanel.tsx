@@ -53,6 +53,7 @@ export function AgentProfilePanel({ agent }: AgentProfilePanelProps) {
         <ProfileSection title="Runtime Host">
           <InfoRow label="Node" value={agent.nodeId ?? "Unassigned"} mono />
           <InfoRow label="Workspace" value={agent.workspacePath ?? "Not configured"} mono />
+          <InfoRow label="Project Directory" value={agent.projectPath ?? "Not configured"} mono />
           <InfoRow label="Local Memory" value={memoryPath ?? "Not configured"} mono />
           <InfoRow label="Skill Roots" value={skillRoots.length > 0 ? skillRoots.join("\n") : "Not configured"} mono />
           {nativeSkillMountDir ? <InfoRow label="Native Skill Mount" value={nativeSkillMountDir} mono /> : null}

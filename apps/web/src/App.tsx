@@ -67,7 +67,6 @@ export function App() {
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [viewMode, setViewMode] = useState<"chat" | "recent" | "sessions" | "search" | "resources">("chat");
   const [lastNonResourceView, setLastNonResourceView] = useState<"chat" | "recent" | "sessions" | "search">("chat");
-  const [resourcesSidebarCollapsed, setResourcesSidebarCollapsed] = useState(false);
   const { user, isAuthenticated, isLoading, hasAdmin, checkAuth, checkSetupStatus, doLogout } = useAuth();
 
   // On mount: check setup status and auth token
@@ -192,6 +191,16 @@ export function App() {
     [conversations, openAgentThread, selectConversation],
   );
 
+  const handleEnsureAgentConversation = useCallback(
+    async (agentId: string) => {
+      const previousSelectedId = selectedId;
+      const conversation = await openAgentThread(agentId);
+      selectConversation(previousSelectedId);
+      return conversation;
+    },
+    [openAgentThread, selectConversation, selectedId],
+  );
+
   const handleOpenAgentChannelSession = useCallback(
     async (agentId: string, channelId: string, threadRootId?: string | null) => {
       const previousSelectedId = selectedId;
@@ -247,10 +256,6 @@ export function App() {
     setViewMode(lastNonResourceView);
     setMobileSidebarOpen(false);
   }, [lastNonResourceView]);
-
-  const handleToggleResourcesSidebar = useCallback(() => {
-    setResourcesSidebarCollapsed((current) => !current);
-  }, []);
 
   const handleOpenSessions = useCallback(() => {
     setViewMode("sessions");
@@ -471,13 +476,15 @@ export function App() {
       resourceSpaces={resourceSpaces}
       channels={channels}
       agents={agents}
+      conversations={visibleConversations}
       machines={machines}
       isAdmin={user?.isAdmin ?? false}
-      onToggleSidebar={isMobile ? () => setMobileSidebarOpen(true) : handleToggleResourcesSidebar}
-      sidebarCollapsed={!isMobile ? resourcesSidebarCollapsed : undefined}
+      onToggleSidebar={isMobile ? () => setMobileSidebarOpen(true) : undefined}
       onExitResources={handleExitResources}
       onCreateResourceSpace={createResourceSpace}
       onDeleteResourceSpace={deleteResourceSpace}
+      onOpenAgentThread={handleOpenAgentThread}
+      onEnsureAgentConversation={handleEnsureAgentConversation}
       onOpenConversation={(conversation) => {
         upsertConversation(conversation, { select: true });
         setSelectedChannelId(null);
@@ -535,7 +542,7 @@ export function App() {
     </div>
   );
 
-  const showDesktopSidebar = !isMobile && !(viewMode === "resources" && resourcesSidebarCollapsed);
+  const showDesktopSidebar = !isMobile && viewMode !== "resources";
 
   return (
     <div className="flex h-full bg-[#e8dcc8] text-foreground">

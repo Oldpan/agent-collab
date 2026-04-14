@@ -1,13 +1,15 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { MessageResponse } from "@/components/ai-elements/message";
+import { FileMarkdownResponse } from "@/components/ai-elements/message";
+import { CodeBlock } from "@/components/ai-elements/code-block";
 import type {
   AgentInfo,
   AgentWorkspaceEntry,
   AgentWorkspaceFileResult,
 } from "@agent-collab/protocol";
 import { listAgentWorkspace, readAgentWorkspaceFile } from "@/lib/api";
+import { inferCodeLanguageFromPath, shouldRenderMarkdownPreview } from "@/lib/filePreview";
 import { cn } from "@/lib/utils";
 import {
   AlertCircleIcon,
@@ -233,21 +235,10 @@ export function AgentWorkspacePanel({ agent }: AgentWorkspacePanelProps) {
               {loadingFilePath ? (
                 <div className="text-sm text-muted-foreground">Loading file...</div>
               ) : selectedFile ? (
-                selectedFile.mimeType === "text/markdown" ? (
-                  <MessageResponse>{selectedFile.content}</MessageResponse>
-                ) : selectedFile.mimeType.startsWith("image/") ? (
-                  <div className="flex justify-center rounded-md border border-border bg-background p-3">
-                    <img
-                      src={selectedFile.content}
-                      alt={selectedFilePath ?? "workspace image"}
-                      className="max-h-[70vh] max-w-full rounded object-contain"
-                    />
-                  </div>
-                ) : (
-                  <pre className="overflow-x-auto rounded-md bg-muted/40 p-4 font-mono text-xs leading-6">
-                    {selectedFile.content}
-                  </pre>
-                )
+                <AgentWorkspaceFilePreview
+                  file={selectedFile}
+                  filePath={selectedFilePath ?? "workspace file"}
+                />
               ) : (
                 <div className="text-sm text-muted-foreground">
                   Select `MEMORY.md` or a note file to preview it here.
@@ -258,6 +249,38 @@ export function AgentWorkspacePanel({ agent }: AgentWorkspacePanelProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+function AgentWorkspaceFilePreview({
+  file,
+  filePath,
+}: {
+  file: AgentWorkspaceFileResult;
+  filePath: string;
+}) {
+  if (file.mimeType === "text/markdown" && shouldRenderMarkdownPreview(filePath)) {
+    return <FileMarkdownResponse>{file.content}</FileMarkdownResponse>;
+  }
+
+  if (file.mimeType.startsWith("image/")) {
+    return (
+      <div className="flex justify-center rounded-md border border-border bg-background p-3">
+        <img
+          src={file.content}
+          alt={filePath}
+          className="max-h-[70vh] max-w-full rounded object-contain"
+        />
+      </div>
+    );
+  }
+
+  return (
+    <CodeBlock
+      code={file.content}
+      language={inferCodeLanguageFromPath(filePath)}
+      showLineNumbers
+    />
   );
 }
 

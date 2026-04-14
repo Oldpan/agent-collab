@@ -19,6 +19,7 @@
     "@agent-collab/protocol": "workspace:*",
     "@agent-collab/runtime-acp": "workspace:*",
     "better-sqlite3": "^12.6.2",
+    "node-pty": "^1.0.0",
     "ws": "^8.18.1"
   },
   "devDependencies": {

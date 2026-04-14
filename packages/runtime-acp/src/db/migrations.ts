@@ -1,6 +1,6 @@
 import type { Db } from './db.js';
 
-const LATEST_VERSION = 61;
+const LATEST_VERSION = 64;
 
 function buildCanonicalThreadShortIdSql(column: string): string {
   return `SUBSTR(REPLACE(CASE
@@ -1418,5 +1418,122 @@ export function migrate(db: Db): void {
   const v61Row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
   if (v61Row.version < 61) {
     db.exec(`UPDATE schema_version SET version = 61;`);
+  }
+
+  const workbenchProjectsTableExists = !!db.prepare(
+    `SELECT 1
+     FROM sqlite_master
+     WHERE type = 'table' AND name = 'workbench_projects'
+     LIMIT 1`,
+  ).get();
+  const workbenchWorkspacesTableExists = !!db.prepare(
+    `SELECT 1
+     FROM sqlite_master
+     WHERE type = 'table' AND name = 'workbench_workspaces'
+     LIMIT 1`,
+  ).get();
+  const v62Row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
+  if (v62Row.version < 62 || !workbenchProjectsTableExists || !workbenchWorkspacesTableExists) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS workbench_projects (
+        project_id         TEXT PRIMARY KEY,
+        project_kind       TEXT NOT NULL,
+        display_name       TEXT NOT NULL,
+        primary_root_path  TEXT,
+        remote_url         TEXT,
+        created_at         INTEGER NOT NULL,
+        updated_at         INTEGER NOT NULL,
+        archived_at        INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS workbench_workspaces (
+        workspace_id       TEXT PRIMARY KEY,
+        workbench_root_id  TEXT NOT NULL,
+        project_id         TEXT NOT NULL,
+        agent_id           TEXT NOT NULL,
+        root_path          TEXT NOT NULL,
+        display_name       TEXT NOT NULL,
+        workspace_kind     TEXT NOT NULL,
+        branch_name        TEXT,
+        remote_url         TEXT,
+        created_at         INTEGER NOT NULL,
+        updated_at         INTEGER NOT NULL,
+        archived_at        INTEGER,
+        FOREIGN KEY(project_id) REFERENCES workbench_projects(project_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_workbench_projects_archived
+      ON workbench_projects(archived_at, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_workbench_workspaces_project
+      ON workbench_workspaces(project_id, archived_at, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_workbench_workspaces_agent
+      ON workbench_workspaces(agent_id, archived_at, updated_at DESC);
+
+      CREATE INDEX IF NOT EXISTS idx_workbench_workspaces_root
+      ON workbench_workspaces(workbench_root_id, archived_at, updated_at DESC);
+    `);
+
+    if (v62Row.version < 62) {
+      db.exec(`UPDATE schema_version SET version = 62;`);
+    }
+  }
+
+  const agentProjectPathColumnExists = !!db.prepare(
+    `SELECT 1
+       FROM pragma_table_info('agents')
+      WHERE name = 'project_path'
+      LIMIT 1`,
+  ).get();
+  const v63Row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
+  if (v63Row.version < 63 || !agentProjectPathColumnExists) {
+    if (!agentProjectPathColumnExists) {
+      db.exec(`ALTER TABLE agents ADD COLUMN project_path TEXT;`);
+    }
+
+    if (v63Row.version < 63) {
+      db.exec(`UPDATE schema_version SET version = 63;`);
+    }
+  }
+
+  const workbenchWorkspaceAgentsTableExists = !!db.prepare(
+    `SELECT 1
+       FROM sqlite_master
+      WHERE type = 'table' AND name = 'workbench_workspace_agents'
+      LIMIT 1`,
+  ).get();
+  const v64Row = db.prepare('SELECT version FROM schema_version').get() as { version: number };
+  if (v64Row.version < 64 || !workbenchWorkspaceAgentsTableExists) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS workbench_workspace_agents (
+        workspace_id       TEXT NOT NULL,
+        agent_id           TEXT NOT NULL,
+        created_at         INTEGER NOT NULL,
+        updated_at         INTEGER NOT NULL,
+        PRIMARY KEY(workspace_id, agent_id),
+        FOREIGN KEY(workspace_id) REFERENCES workbench_workspaces(workspace_id)
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_workbench_workspace_agents_agent
+      ON workbench_workspace_agents(agent_id, workspace_id);
+
+      INSERT OR IGNORE INTO workbench_workspace_agents(
+        workspace_id,
+        agent_id,
+        created_at,
+        updated_at
+      )
+      SELECT workspace_id,
+             agent_id,
+             created_at,
+             updated_at
+        FROM workbench_workspaces
+       WHERE trim(COALESCE(agent_id, '')) != '';
+    `);
+
+    if (v64Row.version < 64) {
+      db.exec(`UPDATE schema_version SET version = 64;`);
+    }
   }
 }

@@ -1,8 +1,9 @@
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import fs from 'node:fs';
 
 import { openDb, migrate, log, WorkspaceLockManager } from '@agent-collab/runtime-acp';
-import type { CoreToNode } from '@agent-collab/protocol';
+import type { CoreToNode, NodeToCore } from '@agent-collab/protocol';
 import { loadConfig } from './config.js';
 import { CoreConnection } from './connection.js';
 import { Executor } from './executor.js';
@@ -25,6 +26,8 @@ import {
   WorkspaceFsError,
 } from './workspaceFs.js';
 import { listSkills, readSkillFile } from './skillFs.js';
+import { TerminalManager, TerminalManagerError } from './terminalManager.js';
+import { inspectWorkspace, WorkspaceInspectError } from './workspaceInspect.js';
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -35,8 +38,31 @@ async function main(): Promise<void> {
   const db = openDb(config.dbPath);
   migrate(db);
   const workspaceLockManager = new WorkspaceLockManager();
+  const terminalManager = new TerminalManager();
+  const terminalBackendReason = terminalManager.getBackendUnavailableReason();
+  if (terminalBackendReason) {
+    log.warn('[agent-node] terminal backend unavailable', { reason: terminalBackendReason });
+  }
 
   let executor: Executor;
+  let connection!: CoreConnection;
+
+  terminalManager.onOutput(({ terminalId, data }) => {
+    connection.send({
+      type: 'terminal.output.event',
+      terminalId,
+      data,
+    });
+  });
+
+  terminalManager.onExit(({ terminalId, exitCode, signal }) => {
+    connection.send({
+      type: 'terminal.exit.event',
+      terminalId,
+      exitCode,
+      signal,
+    });
+  });
 
   const handleMessage = (msg: CoreToNode): void => {
     void (async () => {
@@ -103,6 +129,106 @@ async function main(): Promise<void> {
           });
         } catch (error) {
           connection.send(workspacePathErrorResponse('workspace.read.response', msg.requestId, msg.relativePath, error));
+        }
+        break;
+
+      case 'workspace.inspect.request':
+        try {
+          connection.send({
+            type: 'workspace.inspect.response',
+            requestId: msg.requestId,
+            inspect: inspectWorkspace(msg.workspaceRoot),
+          });
+        } catch (error) {
+          connection.send(workspaceInspectErrorResponse(msg.requestId, error));
+        }
+        break;
+
+      case 'terminal.list.request':
+        try {
+          connection.send({
+            type: 'terminal.list.response',
+            requestId: msg.requestId,
+            workspaceRoot: msg.workspaceRoot,
+            terminals: terminalManager.list(msg.workspaceRoot),
+          });
+        } catch (error) {
+          connection.send(terminalErrorResponse('terminal.list.response', msg.requestId, error, {
+            workspaceRoot: msg.workspaceRoot,
+          }));
+        }
+        break;
+
+      case 'terminal.create.request':
+        try {
+          const terminal = terminalManager.create({
+            terminalId: randomUUID(),
+            workspaceRoot: msg.workspaceRoot,
+            cwd: msg.cwd,
+            name: msg.name,
+            cols: msg.cols,
+            rows: msg.rows,
+          });
+          connection.send({
+            type: 'terminal.create.response',
+            requestId: msg.requestId,
+            terminal,
+          });
+        } catch (error) {
+          connection.send(terminalErrorResponse('terminal.create.response', msg.requestId, error));
+        }
+        break;
+
+      case 'terminal.snapshot.request':
+        try {
+          const snapshot = terminalManager.snapshot(msg.terminalId);
+          connection.send({
+            type: 'terminal.snapshot.response',
+            requestId: msg.requestId,
+            terminal: snapshot.terminal,
+            buffer: snapshot.buffer,
+          });
+        } catch (error) {
+          connection.send(terminalErrorResponse('terminal.snapshot.response', msg.requestId, error));
+        }
+        break;
+
+      case 'terminal.input.request':
+        try {
+          terminalManager.input(msg.terminalId, msg.data);
+          connection.send({
+            type: 'terminal.input.response',
+            requestId: msg.requestId,
+            ok: true,
+          });
+        } catch (error) {
+          connection.send(terminalErrorResponse('terminal.input.response', msg.requestId, error));
+        }
+        break;
+
+      case 'terminal.resize.request':
+        try {
+          terminalManager.resize(msg.terminalId, msg.cols, msg.rows);
+          connection.send({
+            type: 'terminal.resize.response',
+            requestId: msg.requestId,
+            ok: true,
+          });
+        } catch (error) {
+          connection.send(terminalErrorResponse('terminal.resize.response', msg.requestId, error));
+        }
+        break;
+
+      case 'terminal.close.request':
+        try {
+          terminalManager.close(msg.terminalId);
+          connection.send({
+            type: 'terminal.close.response',
+            requestId: msg.requestId,
+            ok: true,
+          });
+        } catch (error) {
+          connection.send(terminalErrorResponse('terminal.close.response', msg.requestId, error));
         }
         break;
 
@@ -257,7 +383,8 @@ async function main(): Promise<void> {
     });
   };
 
-  const connection = new CoreConnection(config, handleMessage, {
+  connection = new CoreConnection(config, handleMessage, {
+    getTerminalBackendAvailable: () => terminalManager.isBackendAvailable(),
     onConnected: () => {
       log.info(`[agent-node] connected to ${config.coreUrl} as ${config.nodeId}`);
       executor.resumePendingDispatches();
@@ -323,6 +450,60 @@ function workspacePathErrorResponse(
     error: String((error as Error)?.message ?? error),
     errorCode: 'io_error' as const,
   };
+}
+
+function workspaceInspectErrorResponse(
+  requestId: string,
+  error: unknown,
+) {
+  if (error instanceof WorkspaceInspectError) {
+    return {
+      type: 'workspace.inspect.response' as const,
+      requestId,
+      error: error.message,
+      errorCode: error.code,
+    };
+  }
+
+  return {
+    type: 'workspace.inspect.response' as const,
+    requestId,
+    error: String((error as Error)?.message ?? error),
+    errorCode: 'io_error' as const,
+  };
+}
+
+function terminalErrorResponse<
+  T extends
+    | 'terminal.list.response'
+    | 'terminal.create.response'
+    | 'terminal.snapshot.response'
+    | 'terminal.input.response'
+    | 'terminal.resize.response'
+    | 'terminal.close.response',
+>(
+  type: T,
+  requestId: string,
+  error: unknown,
+  extra?: Omit<Extract<NodeToCore, { type: T }>, 'type' | 'requestId' | 'error' | 'errorCode'>,
+): Extract<NodeToCore, { type: T }> {
+  if (error instanceof TerminalManagerError) {
+    return {
+      type,
+      requestId,
+      ...extra,
+      error: error.message,
+      errorCode: error.code,
+    } as Extract<NodeToCore, { type: T }>;
+  }
+
+  return {
+    type,
+    requestId,
+    ...extra,
+    error: String((error as Error)?.message ?? error),
+    errorCode: 'io_error' as const,
+  } as Extract<NodeToCore, { type: T }>;
 }
 
 function workspaceResetErrorResponse(

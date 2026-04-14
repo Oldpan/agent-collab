@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   escapeHtmlOutsideCodeBlocks,
+  previewHtmlRehypePlugins,
   safeRehypePlugins,
   safeRemarkPlugins,
   streamdownComponents,
@@ -164,3 +165,24 @@ export const MessageResponse = memo(
 );
 
 MessageResponse.displayName = "MessageResponse";
+
+export const FileMarkdownResponse = memo(
+  ({ className, children, ...props }: MessageResponseProps) => (
+    <Streamdown
+      className={cn(
+        "size-full [&>*:first-child]:mt-0 [&>*:last-child]:mb-0",
+        streamdownRootClass,
+        className,
+      )}
+      components={streamdownComponents}
+      rehypePlugins={previewHtmlRehypePlugins}
+      remarkPlugins={safeRemarkPlugins}
+      {...props}
+    >
+      {children}
+    </Streamdown>
+  ),
+  (prevProps, nextProps) => prevProps.children === nextProps.children,
+);
+
+FileMarkdownResponse.displayName = "FileMarkdownResponse";

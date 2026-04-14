@@ -508,6 +508,7 @@ export type NodeRegisterMsg = {
   hostname: string;
   agentTypes: string[];
   version: string;
+  terminalBackendAvailable: boolean;
 };
 
 export type NodeHeartbeatMsg = {
@@ -597,7 +598,10 @@ export type WorkspacePreviewMimeType =
   | 'image/jpeg'
   | 'image/webp'
   | 'image/gif'
-  | 'image/svg+xml';
+  | 'image/svg+xml'
+  | 'image/avif'
+  | 'image/bmp'
+  | 'image/x-icon';
 
 export type WorkspaceReadResponseMsg = {
   type: 'workspace.read.response';
@@ -634,6 +638,151 @@ export type WorkspaceResetResponseMsg = {
   ok?: boolean;
   error?: string;
   errorCode?: WorkspaceErrorCode;
+};
+
+export type WorkbenchWorkspaceKind = 'local_checkout' | 'worktree' | 'directory';
+
+export type WorkspaceInspectResult = {
+  workspaceRoot: string;
+  isGit: boolean;
+  repoRoot: string | null;
+  workspaceKind: WorkbenchWorkspaceKind;
+  branchName: string | null;
+  remoteUrl: string | null;
+};
+
+export type WorkspaceInspectRequestMsg = {
+  type: 'workspace.inspect.request';
+  requestId: string;
+  workspaceRoot: string;
+};
+
+export type WorkspaceInspectResponseMsg = {
+  type: 'workspace.inspect.response';
+  requestId: string;
+  inspect?: WorkspaceInspectResult;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
+export type WorkbenchTerminalInfo = {
+  terminalId: string;
+  workspaceRoot: string;
+  cwd: string;
+  name: string;
+  cols: number;
+  rows: number;
+  createdAt: number;
+  lastActivityAt: number;
+  exited: boolean;
+  exitCode?: number | null;
+  signal?: string | null;
+};
+
+export type TerminalListRequestMsg = {
+  type: 'terminal.list.request';
+  requestId: string;
+  workspaceRoot: string;
+};
+
+export type TerminalListResponseMsg = {
+  type: 'terminal.list.response';
+  requestId: string;
+  workspaceRoot: string;
+  terminals?: WorkbenchTerminalInfo[];
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
+export type TerminalCreateRequestMsg = {
+  type: 'terminal.create.request';
+  requestId: string;
+  workspaceRoot: string;
+  cwd?: string;
+  name?: string;
+  cols?: number;
+  rows?: number;
+};
+
+export type TerminalCreateResponseMsg = {
+  type: 'terminal.create.response';
+  requestId: string;
+  terminal?: WorkbenchTerminalInfo;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
+export type TerminalSnapshotRequestMsg = {
+  type: 'terminal.snapshot.request';
+  requestId: string;
+  terminalId: string;
+};
+
+export type TerminalSnapshotResponseMsg = {
+  type: 'terminal.snapshot.response';
+  requestId: string;
+  terminal?: WorkbenchTerminalInfo;
+  buffer?: string;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
+export type TerminalInputRequestMsg = {
+  type: 'terminal.input.request';
+  requestId: string;
+  terminalId: string;
+  data: string;
+};
+
+export type TerminalInputResponseMsg = {
+  type: 'terminal.input.response';
+  requestId: string;
+  ok?: boolean;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
+export type TerminalResizeRequestMsg = {
+  type: 'terminal.resize.request';
+  requestId: string;
+  terminalId: string;
+  cols: number;
+  rows: number;
+};
+
+export type TerminalResizeResponseMsg = {
+  type: 'terminal.resize.response';
+  requestId: string;
+  ok?: boolean;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
+export type TerminalCloseRequestMsg = {
+  type: 'terminal.close.request';
+  requestId: string;
+  terminalId: string;
+};
+
+export type TerminalCloseResponseMsg = {
+  type: 'terminal.close.response';
+  requestId: string;
+  ok?: boolean;
+  error?: string;
+  errorCode?: WorkspaceErrorCode;
+};
+
+export type TerminalOutputEventMsg = {
+  type: 'terminal.output.event';
+  terminalId: string;
+  data: string;
+};
+
+export type TerminalExitEventMsg = {
+  type: 'terminal.exit.event';
+  terminalId: string;
+  exitCode?: number | null;
+  signal?: string | null;
 };
 
 export type SkillsListRequestMsg = {
@@ -772,10 +921,19 @@ export type NodeToCore =
   | RunEventMsg
   | RunEndMsg
   | NodePermissionRequestMsg
+  | WorkspaceInspectResponseMsg
   | WorkspaceListResponseMsg
   | WorkspaceReadResponseMsg
   | WorkspaceWriteResponseMsg
   | WorkspaceResetResponseMsg
+  | TerminalListResponseMsg
+  | TerminalCreateResponseMsg
+  | TerminalSnapshotResponseMsg
+  | TerminalInputResponseMsg
+  | TerminalResizeResponseMsg
+  | TerminalCloseResponseMsg
+  | TerminalOutputEventMsg
+  | TerminalExitEventMsg
   | SkillsListResponseMsg
   | SkillsReadResponseMsg
   | CodexTranscriptListResponseMsg
@@ -853,6 +1011,20 @@ export type WorkspaceWriteRequestMsg = {
   mode: WorkspaceWriteMode;
 };
 
+export type WorkspaceInspectCoreRequestMsg = WorkspaceInspectRequestMsg;
+
+export type TerminalListCoreRequestMsg = TerminalListRequestMsg;
+
+export type TerminalCreateCoreRequestMsg = TerminalCreateRequestMsg;
+
+export type TerminalSnapshotCoreRequestMsg = TerminalSnapshotRequestMsg;
+
+export type TerminalInputCoreRequestMsg = TerminalInputRequestMsg;
+
+export type TerminalResizeCoreRequestMsg = TerminalResizeRequestMsg;
+
+export type TerminalCloseCoreRequestMsg = TerminalCloseRequestMsg;
+
 export type SkillsListCoreRequestMsg = SkillsListRequestMsg;
 
 export type SkillsReadCoreRequestMsg = SkillsReadRequestMsg;
@@ -867,10 +1039,17 @@ export type CoreToNode =
   | RunDispatchMsg
   | RunCancelMsg
   | NodePermissionResponseMsg
+  | WorkspaceInspectCoreRequestMsg
   | WorkspaceListRequestMsg
   | WorkspaceReadRequestMsg
   | WorkspaceWriteRequestMsg
   | WorkspaceResetRequestMsg
+  | TerminalListCoreRequestMsg
+  | TerminalCreateCoreRequestMsg
+  | TerminalSnapshotCoreRequestMsg
+  | TerminalInputCoreRequestMsg
+  | TerminalResizeCoreRequestMsg
+  | TerminalCloseCoreRequestMsg
   | SkillsListCoreRequestMsg
   | SkillsReadCoreRequestMsg
   | CodexTranscriptListRequestMsg
@@ -957,6 +1136,89 @@ export type ResourceSpaceInfo = {
   updatedAt: number;
 };
 
+export type WorkbenchRootKind = 'agent_workspace' | 'project_space' | 'resource_space';
+
+export type WorkbenchRootInfo = {
+  workbenchRootId: string;
+  kind: WorkbenchRootKind;
+  displayName: string;
+  rootPath: string;
+  nodeId: string | null;
+  agentId?: string;
+  agentIds?: string[];
+  resourceSpaceId?: string;
+  resourceType?: ResourceSpaceType;
+  backendType?: ResourceSpaceBackendType;
+  writable: boolean;
+  terminalSupported: boolean;
+  terminalDisabledReason?: string | null;
+  sourceLabel: string;
+};
+
+export type WorkbenchProjectKind = 'git' | 'directory';
+
+export type WorkbenchWorkspaceInfo = {
+  workspaceId: string;
+  workbenchRootId: string;
+  displayName: string;
+  rootPath: string;
+  workspaceKind: WorkbenchWorkspaceKind;
+  branchName: string | null;
+  remoteUrl: string | null;
+  nodeId: string | null;
+  agentId?: string;
+  agentIds?: string[];
+  writable: boolean;
+  terminalSupported: boolean;
+  terminalDisabledReason?: string | null;
+};
+
+export type WorkbenchProjectInfo = {
+  projectId: string;
+  displayName: string;
+  projectKind: WorkbenchProjectKind;
+  primaryRootPath: string | null;
+  remoteUrl: string | null;
+  workspaces: WorkbenchWorkspaceInfo[];
+};
+
+export type WorkbenchProjectsResult = {
+  projects: WorkbenchProjectInfo[];
+};
+
+export type WorkbenchTreeResult = AgentWorkspaceListResult;
+
+export type WorkbenchFileResult = AgentWorkspaceFileResult;
+
+export type CreateWorkbenchTerminalRequest = {
+  cwd?: string;
+  name?: string;
+  cols?: number;
+  rows?: number;
+};
+
+export type WorkbenchTerminalListResult = {
+  workbenchRootId: string;
+  terminals: WorkbenchTerminalInfo[];
+};
+
+export type WorkbenchTerminalSnapshotResult = {
+  terminal: WorkbenchTerminalInfo;
+  buffer: string;
+};
+
+export type WorkbenchTerminalWsClientEvent =
+  | { type: 'input'; data: string }
+  | { type: 'resize'; cols: number; rows: number }
+  | { type: 'ping' };
+
+export type WorkbenchTerminalWsServerEvent =
+  | { type: 'snapshot'; terminal: WorkbenchTerminalInfo; buffer: string }
+  | { type: 'output'; terminalId: string; data: string }
+  | { type: 'exit'; terminalId: string; exitCode?: number | null; signal?: string | null }
+  | { type: 'pong' }
+  | { type: 'error'; message: string };
+
 export type CreateResourceSpaceRequest = {
   name: string;
   resourceType: ResourceSpaceType;
@@ -1018,6 +1280,7 @@ export type AgentInfo = {
   disabledToolKinds?: AgentPermissionKind[];
   nodeId?: string | null;
   workspacePath?: string | null;
+  projectPath?: string | null;
   skillRoots?: string[];
   createdAt: number;
   updatedAt: number;
@@ -1035,6 +1298,7 @@ export type CreateAgentRequest = {
   disabledToolKinds?: AgentPermissionKind[];
   nodeId?: string;
   workspacePath?: string;
+  projectPath?: string;
   skillRoots?: string[];
 };
 
@@ -1047,6 +1311,7 @@ export type UpdateAgentRequest = {
   envVars?: Record<string, string>;
   disabledToolKinds?: AgentPermissionKind[];
   channelId?: string;
+  projectPath?: string | null;
   skillRoots?: string[];
 };
 
@@ -1104,6 +1369,7 @@ export type NodeInfoRest = {
   agentTypes: string[];
   version: string;
   lastSeen: number;
+  terminalBackendAvailable: boolean;
 };
 
 export type MachineInfo = {

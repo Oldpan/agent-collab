@@ -284,7 +284,7 @@ export function Sidebar({
                 ? "bg-[#ffd54a] text-zinc-950 hover:bg-[#f7ca2e]"
                 : "bg-[#fff9d8] text-zinc-700 hover:bg-[#fff1a9]",
             )}
-            title="Open resources"
+            title="Open workspace"
             onClick={onOpenResources}
           >
             <FolderSearchIcon className="size-3" />

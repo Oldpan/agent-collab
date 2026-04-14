@@ -10,6 +10,12 @@ export const safeRehypePlugins: StreamdownProps["rehypePlugins"] = [
   defaultRehypePlugins.sanitize,
 ].filter(Boolean) as NonNullable<StreamdownProps["rehypePlugins"]>;
 
+export const previewHtmlRehypePlugins: StreamdownProps["rehypePlugins"] = [
+  defaultRehypePlugins.raw,
+  defaultRehypePlugins.sanitize,
+  defaultRehypePlugins.harden,
+].filter(Boolean) as NonNullable<StreamdownProps["rehypePlugins"]>;
+
 // Remark plugins
 export const safeRemarkPlugins: StreamdownProps["remarkPlugins"] = [
   defaultRemarkPlugins.gfm,
